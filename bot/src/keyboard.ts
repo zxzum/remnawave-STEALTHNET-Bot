@@ -98,6 +98,7 @@ function resolveStyle(configured: ButtonStyle | undefined | null, fallback: Butt
 }
 
 const MENU_IDS: Record<string, string> = {
+  bot_menu: "menu:bot",
   tariffs: "menu:tariffs",
   proxy: "menu:proxy",
   my_proxy: "menu:my_proxy",
@@ -120,24 +121,26 @@ const MENU_IDS: Record<string, string> = {
 };
 
 const DEFAULT_BUTTONS: BotButtonConfig[] = [
-  { id: "tariffs", visible: true, label: "📦 Тарифы", order: 0, style: "success" },
+  { id: "cabinet", visible: true, label: "🚀 Открыть кабинет", order: 1, style: "primary", onePerRow: true },
+  { id: "my_subs", visible: true, label: "📋 Мои подписки", order: 2, style: "primary" },
+  { id: "devices", visible: true, label: "📱 Устройства", order: 3, style: "primary" },
+  { id: "trial", visible: true, label: "🎁 Попробовать бесплатно", order: 4, style: "success" },
+  { id: "referral", visible: true, label: "💸 Пригласить и заработать", order: 5, style: "success" },
+  { id: "bot_menu", visible: true, label: "☰ Меню бота", order: 6, style: "primary", onePerRow: true },
+  { id: "support", visible: true, label: "🆘 Поддержка", order: 7, style: "primary" },
+  { id: "site", visible: true, label: "🌐 Сайт", order: 8, style: "" },
+  { id: "tariffs", visible: true, label: "💳 Купить доступ / Продлить", order: 10, style: "" },
   // «Мои подписки» — order 0.05, чтобы стояло сразу после «Тарифы» и перед прокси/singbox.
-  { id: "my_subs", visible: true, label: "📋 Мои подписки", order: 0.05, style: "primary" },
   { id: "proxy", visible: true, label: "🌐 Прокси", order: 0.5, style: "primary" },
   { id: "my_proxy", visible: true, label: "📋 Мои прокси", order: 0.6, style: "primary" },
   { id: "singbox", visible: true, label: "🔑 Доступы", order: 0.55, style: "primary" },
   { id: "my_singbox", visible: true, label: "📋 Мои доступы", order: 0.65, style: "primary" },
-  { id: "profile", visible: true, label: "👤 Профиль", order: 1, style: "" },
-  { id: "devices", visible: true, label: "📱 Устройства", order: 1.5, style: "primary" },
-  { id: "topup", visible: true, label: "💳 Пополнить баланс", order: 2, style: "success" },
+  { id: "profile", visible: true, label: "🧩 Профиль", order: 9, style: "" },
+  { id: "topup", visible: true, label: "💰 Пополнить баланс", order: 11, style: "success" },
   // T11 (11.05.2026): эмодзи ↔️ → 👥 по эталону скрина 1.
-  { id: "referral", visible: true, label: "👥 Реферальная программа", order: 3, style: "primary" },
-  { id: "trial", visible: true, label: "🎁 Бесплатный Тест", order: 4, style: "success" },
   { id: "vpn", visible: true, label: "🌐 Подключиться к VPN", order: 5, style: "danger", onePerRow: true },
-  { id: "cabinet", visible: true, label: "🌐 Web Кабинет", order: 6, style: "primary" },
   { id: "tickets", visible: true, label: "🎫 Тикеты", order: 6.5, style: "primary" },
   // T11 (11.05.2026): «🆘 Поддержка» → «⭕ Помощь» по эталону скрина 1.
-  { id: "support", visible: true, label: "⭕ Помощь", order: 7, style: "primary" },
   { id: "promocode", visible: true, label: "🎟️ Промокод", order: 8, style: "primary" },
   { id: "gift", visible: true, label: "🎁 Подарки", order: 8.5, style: "primary" },
   { id: "extra_options", visible: true, label: "➕ Доп. опции", order: 9, style: "primary" },
@@ -171,8 +174,7 @@ export type InnerEmojiIds = {
   connect?: string;
 };
 
-/** Главное меню: кнопки из конфига. Эмодзи в label (Unicode) и/или icon_custom_emoji_id (премиум). Поддержка показывается только если задана хотя бы одна ссылка. Тикеты — Web App при включённой тикет-системе. buttonsPerRow: 1 или 2. */
-export function mainMenu(opts: {
+export type MenuOptions = {
   showTrial: boolean;
   showVpn: boolean;
   showProxy?: boolean;
@@ -188,7 +190,9 @@ export function mainMenu(opts: {
   buttonsPerRow?: 1 | 2;
   /** URL страницы подписки Remna (если задан — кнопка VPN ведёт туда) */
   remnaSubscriptionUrl?: string | null;
-}): InlineMarkup {
+};
+
+function resolveMenuButtons(opts: MenuOptions): BotButtonConfig[] {
   const configButtons = opts.botButtons ?? [];
   const fromConfig = configButtons.length > 0;
   let list = fromConfig ? [...configButtons] : [...DEFAULT_BUTTONS];
@@ -198,7 +202,10 @@ export function mainMenu(opts: {
   // Auto-add «Мои подписки» если её нет в админ-конфиге (новая кнопка,
   // в существующих инсталляциях её ещё не было — fallback не даёт её потерять).
   if (fromConfig && !list.some((b) => b.id === "my_subs")) {
-    list.push({ id: "my_subs", visible: true, label: "📋 Мои подписки", order: 0.05, style: "primary" });
+    list.push({ id: "my_subs", visible: true, label: "📋 Мои подписки", order: 2, style: "primary" });
+  }
+  if (fromConfig && !list.some((b) => b.id === "bot_menu")) {
+    list.push({ id: "bot_menu", visible: true, label: "☰ Меню бота", order: 6, style: "primary", onePerRow: true });
   }
   // T14 (11.05.2026): auto-add «🛡 Бесплатный Прокси для Telegram» — новая кнопка по эталону.
   // В существующих инсталляциях её не было; fallback подставляет с дефолтным лейблом и order=6.8.
@@ -213,7 +220,7 @@ export function mainMenu(opts: {
   if (fromConfig && !!opts.appUrl?.trim() && !list.some((b) => b.id === "site")) {
     list.push({ id: "site", visible: true, label: "🌐 Сайт", order: 10, style: "primary", onePerRow: true });
   }
-  list = list
+  return list
     .filter((b) => b.visible)
     .filter((b) => {
       if (b.id === "trial") return opts.showTrial;
@@ -228,67 +235,93 @@ export function mainMenu(opts: {
       return true;
     })
     .sort((a, b) => a.order - b.order);
+}
+
+function menuButtonNode(b: BotButtonConfig, opts: MenuOptions): InlineButton | WebAppButton | UrlButton | null {
   const base = opts.appUrl?.replace(/\/$/, "") ?? "";
-  const perRow = opts.buttonsPerRow === 2 ? 2 : 1;
-  const items: { node: InlineButton | WebAppButton | UrlButton; onePerRow: boolean }[] = [];
-  for (const b of list) {
-    const iconId = b.iconCustomEmojiId;
-    const onePerRow = b.onePerRow === true;
-    const labelForIcon = iconId ? stripLeadingEmoji(b.label) : b.label;
-    // Стиль (primary/success/danger) для всех типов кнопок — в т.ч. web_app/url.
-    // Telegram Bot API игнорирует поле для не-callback кнопок, но мы передаём
-    // его на случай поддержки в будущих версиях клиента.
-    const styleForBtn = toStyle(b.style);
-    if (b.id === "cabinet") {
-      if (base) {
-        const w: WebAppButton = { text: labelForIcon, web_app: { url: `${base}/cabinet` } };
-        if (iconId) w.icon_custom_emoji_id = iconId;
-        if (styleForBtn) w.style = styleForBtn;
-        items.push({ node: w, onePerRow });
-      }
-    } else if (b.id === "site") {
-      // новая кнопка «🌐 Сайт» — URL-кнопка на главный сайт.
-      // URL берётся из system_settings.publicAppUrl. Без URL — кнопка скрывается.
-      const siteUrl = opts.appUrl?.replace(/\/$/, "") || null;
-      if (siteUrl) {
-        const u: UrlButton = { text: labelForIcon, url: siteUrl };
-        if (iconId) u.icon_custom_emoji_id = iconId;
-        if (styleForBtn) u.style = styleForBtn;
-        items.push({ node: u, onePerRow });
-      }
-    } else if (b.id === "vpn") {
-      // кнопка «🔌 Подключиться» теперь ВСЕГДА callback `menu:vpn`,
-      // а не прямой URL/WebApp. Внутри handler решает: 1 подписка → выдача ссылки,
-      // 2+ подписок → picker. Раньше была URL/WebApp напрямую → handler не отрабатывал →
-      // у юзеров с несколькими подписками не было выбора.
-      items.push({ node: btn(b.label, MENU_IDS[b.id], styleForBtn, iconId), onePerRow });
-    } else if (b.id === "tickets" && base) {
-      const w: WebAppButton = { text: labelForIcon, web_app: { url: `${base}/cabinet/tickets` } };
-      if (iconId) w.icon_custom_emoji_id = iconId;
-      if (styleForBtn) w.style = styleForBtn;
-      items.push({ node: w, onePerRow });
-    } else if (MENU_IDS[b.id]) {
-      items.push({ node: btn(b.label, MENU_IDS[b.id], styleForBtn, iconId), onePerRow });
-    }
+  const iconId = b.iconCustomEmojiId;
+  const labelForIcon = iconId ? stripLeadingEmoji(b.label) : b.label;
+  const styleForBtn = toStyle(b.style);
+  if (b.id === "cabinet" && base) {
+    const node: WebAppButton = { text: labelForIcon, web_app: { url: `${base}/cabinet` } };
+    if (iconId) node.icon_custom_emoji_id = iconId;
+    if (styleForBtn) node.style = styleForBtn;
+    return node;
   }
-  const rows: (InlineButton | WebAppButton | UrlButton)[][] = [];
-  let currentRow: (InlineButton | WebAppButton | UrlButton)[] = [];
-  for (const { node, onePerRow } of items) {
-    if (onePerRow) {
-      if (currentRow.length > 0) {
-        rows.push(currentRow);
-        currentRow = [];
-      }
-      rows.push([node]);
-    } else {
-      currentRow.push(node);
-      if (currentRow.length >= perRow) {
-        rows.push(currentRow);
-        currentRow = [];
-      }
-    }
+  if (b.id === "site" && base) {
+    const node: UrlButton = { text: labelForIcon, url: base };
+    if (iconId) node.icon_custom_emoji_id = iconId;
+    if (styleForBtn) node.style = styleForBtn;
+    return node;
   }
-  if (currentRow.length > 0) rows.push(currentRow);
+  if (b.id === "tickets" && base) {
+    const node: WebAppButton = { text: labelForIcon, web_app: { url: `${base}/cabinet/tickets` } };
+    if (iconId) node.icon_custom_emoji_id = iconId;
+    if (styleForBtn) node.style = styleForBtn;
+    return node;
+  }
+  const callback = MENU_IDS[b.id];
+  return callback ? btn(b.label, callback, styleForBtn, iconId) : null;
+}
+
+/** Главное меню с фиксированными смысловыми рядами. Настройки названия, видимости,
+ * цвета и эмодзи продолжают браться из botButtons. */
+export function mainMenu(opts: MenuOptions): InlineMarkup {
+  const buttons = resolveMenuButtons(opts);
+  const byId = new Map(buttons.map((button) => [button.id, button]));
+  const layout = [
+    ["cabinet"],
+    ["my_subs", "devices"],
+    ["trial", "referral"],
+    ["bot_menu"],
+    ["support", "site"],
+  ];
+  const rows = layout
+    .map((ids) => ids.map((id) => byId.get(id)).filter((button): button is BotButtonConfig => Boolean(button)))
+    .map((row) => row.map((button) => menuButtonNode(button, opts)).filter((node): node is InlineButton | WebAppButton | UrlButton => Boolean(node)))
+    .filter((row) => row.length > 0);
+  return { inline_keyboard: rows };
+}
+
+export type BotMenuSection = "account" | "payment" | "connection" | "bonuses";
+
+const SECTION_BUTTON_IDS: Record<BotMenuSection, string[]> = {
+  account: ["profile", "my_subs", "devices"],
+  payment: ["tariffs", "topup", "promocode", "extra_options"],
+  connection: ["vpn", "proxy", "my_proxy", "singbox", "my_singbox", "tg_proxy"],
+  bonuses: ["referral", "trial", "gift"],
+};
+
+const SECTION_META: Array<{ id: BotMenuSection; label: string; style: ButtonStyle }> = [
+  { id: "account", label: "👤 Аккаунт", style: "primary" },
+  { id: "payment", label: "💳 Оплата и доступ", style: "success" },
+  { id: "connection", label: "🔌 Подключение", style: "primary" },
+  { id: "bonuses", label: "🎁 Бонусы", style: "success" },
+];
+
+/** Первый уровень «Меню бота». Пустые разделы не показываются. */
+export function botSectionsMenu(opts: MenuOptions): InlineMarkup {
+  const availableIds = new Set(resolveMenuButtons(opts).map((button) => button.id));
+  const sections = SECTION_META.filter((section) => SECTION_BUTTON_IDS[section.id].some((id) => availableIds.has(id)));
+  const rows: InlineButton[][] = [];
+  for (let index = 0; index < sections.length; index += 2) {
+    rows.push(sections.slice(index, index + 2).map((section) => btn(section.label, `menu:section:${section.id}`, section.style)));
+  }
+  const backLabel = opts.botBackLabel?.trim() || "◀️ В меню";
+  rows.push([btn(backLabel, "menu:main", "danger")]);
+  return { inline_keyboard: rows };
+}
+
+/** Действия одного раздела. Названия, видимость, цвет и эмодзи берутся из botButtons. */
+export function botSectionMenu(section: BotMenuSection, opts: MenuOptions): InlineMarkup {
+  const available = new Map(resolveMenuButtons(opts).map((button) => [button.id, button]));
+  const rows = SECTION_BUTTON_IDS[section]
+    .map((id) => available.get(id))
+    .filter((button): button is BotButtonConfig => Boolean(button))
+    .map((button) => menuButtonNode(button, opts))
+    .filter((node): node is InlineButton | WebAppButton | UrlButton => Boolean(node))
+    .map((node) => [node]);
+  rows.push([btn("◀️ Назад", "menu:bot", "danger")]);
   return { inline_keyboard: rows };
 }
 
