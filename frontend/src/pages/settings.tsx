@@ -57,12 +57,12 @@ const DEFAULT_PLATEGA_METHODS: { id: number; enabled: boolean; label: string }[]
 
 type BotButtonItem = { id: string; visible: boolean; label: string; order: number; style?: string; emojiKey?: string; onePerRow?: boolean };
 const DEFAULT_BOT_BUTTONS: BotButtonItem[] = [
-  { id: "cabinet", visible: true, label: "🚀 Открыть кабинет", order: 1, style: "primary", emojiKey: "SERVERS", onePerRow: true },
+  { id: "cabinet", visible: true, label: "🚀 Открыть кабинет", order: 1, style: "primary", emojiKey: "", onePerRow: true },
   { id: "my_subs", visible: true, label: "📋 Мои подписки", order: 2, style: "primary" },
   { id: "devices", visible: true, label: "📱 Устройства", order: 3, style: "primary", emojiKey: "DEVICES" },
   { id: "trial", visible: true, label: "🎁 Попробовать бесплатно", order: 4, style: "success", emojiKey: "TRIAL" },
-  { id: "referral", visible: true, label: "💸 Пригласить и заработать", order: 5, style: "success", emojiKey: "LINK" },
-  { id: "bot_menu", visible: true, label: "☰ Меню бота", order: 6, style: "primary", emojiKey: "PACKAGE", onePerRow: true },
+  { id: "referral", visible: true, label: "💸 Пригласить и заработать", order: 5, style: "success", emojiKey: "" },
+  { id: "bot_menu", visible: true, label: "☰ Меню бота", order: 6, style: "primary", emojiKey: "", onePerRow: true },
   { id: "support", visible: true, label: "🆘 Поддержка", order: 7, style: "primary", emojiKey: "NOTE" },
   { id: "site", visible: true, label: "🌐 Сайт", order: 8, style: "" },
   { id: "tariffs", visible: true, label: "💳 Купить доступ / Продлить", order: 1, style: "" },
