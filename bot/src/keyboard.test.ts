@@ -24,6 +24,7 @@ const buttons: BotButtonConfig[] = [
   { id: "singbox", visible: true, label: "🔑 Доступы", order: 18, style: "primary" },
   { id: "my_singbox", visible: true, label: "📋 Мои доступы", order: 19, style: "primary" },
   { id: "tg_proxy", visible: true, label: "🛡 Прокси для Telegram", order: 20, style: "primary" },
+  { id: "tickets", visible: true, label: "🎫 Мои обращения", order: 21, style: "primary" },
 ];
 
 function labels(markup: ReturnType<typeof mainMenu>): string[][] {
@@ -92,8 +93,11 @@ test("каждый раздел сохраняет согласованные д
   const factory = (keyboard as unknown as { botSectionMenu?: SectionFactory }).botSectionMenu;
   assert.equal(typeof factory, "function");
   const options = buildOptions(true);
+  assert.deepEqual(labels(factory!("account", options)), [
+    ["🧩 Профиль"], ["📋 Мои подписки"], ["📱 Устройства"], ["🎫 Мои обращения"], ["◀️ Назад"],
+  ]);
   assert.deepEqual(callbacks(factory!("account", options)), [
-    ["menu:profile"], ["menu:my_subs"], ["menu:devices"], ["menu:bot"],
+    ["menu:profile"], ["menu:my_subs"], ["menu:devices"], [null], ["menu:bot"],
   ]);
   assert.deepEqual(callbacks(factory!("payment", options)), [
     ["menu:tariffs"], ["menu:topup"], ["menu:promocode"], ["menu:extra_options"], ["menu:bot"],
@@ -118,6 +122,7 @@ function buildOptions(showTrial: boolean): Parameters<typeof mainMenu>[0] {
     botButtons: buttons,
     botBackLabel: "◀️ В меню",
     hasSupportLinks: true,
+    showTickets: true,
     buttonsPerRow: 1,
   };
 }

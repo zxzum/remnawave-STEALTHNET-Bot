@@ -274,27 +274,29 @@ export type BotButtonConfig = { id: string; visible: boolean; label: string; ord
 export type BotEmojiEntry = { unicode?: string; tgEmojiId?: string };
 export type BotEmojisConfig = Record<string, BotEmojiEntry>;
 const DEFAULT_BOT_BUTTONS: BotButtonConfig[] = [
-  { id: "tariffs", visible: true, label: "💳 Купить доступ / Продлить", order: 2, style: "" },
+  { id: "cabinet", visible: true, label: "🚀 Открыть кабинет", order: 1, style: "primary", emojiKey: "SERVERS", onePerRow: true },
+  { id: "my_subs", visible: true, label: "📋 Мои подписки", order: 2, style: "primary" },
+  { id: "devices", visible: true, label: "📱 Устройства", order: 3, style: "primary", emojiKey: "DEVICES" },
+  { id: "trial", visible: true, label: "🎁 Попробовать бесплатно", order: 4, style: "success", emojiKey: "TRIAL" },
+  { id: "referral", visible: true, label: "💸 Пригласить и заработать", order: 5, style: "success", emojiKey: "LINK" },
+  { id: "bot_menu", visible: true, label: "☰ Меню бота", order: 6, style: "primary", emojiKey: "PACKAGE", onePerRow: true },
+  { id: "support", visible: true, label: "🆘 Поддержка", order: 7, style: "primary", emojiKey: "NOTE" },
+  { id: "site", visible: true, label: "🌐 Сайт", order: 8, style: "" },
+  { id: "tariffs", visible: true, label: "💳 Купить доступ / Продлить", order: 1, style: "" },
   { id: "proxy", visible: true, label: "🌐 Прокси", order: 0.5, style: "primary", emojiKey: "SERVERS" },
   { id: "my_proxy", visible: true, label: "📋 Мои прокси", order: 0.6, style: "primary", emojiKey: "SERVERS" },
   { id: "singbox", visible: true, label: "🔑 Доступы", order: 0.55, style: "primary", emojiKey: "SERVERS" },
   { id: "my_singbox", visible: true, label: "📋 Мои доступы", order: 0.65, style: "primary", emojiKey: "SERVERS" },
-  { id: "profile", visible: true, label: "👤 Профиль", order: 1, style: "", emojiKey: "PUZZLE" },
-  { id: "devices", visible: true, label: "📱 Устройства", order: 1.5, style: "primary", emojiKey: "DEVICES" },
+  { id: "profile", visible: true, label: "🧩 Профиль", order: 1, style: "", emojiKey: "PUZZLE" },
   { id: "topup", visible: true, label: "💳 Пополнить баланс", order: 2, style: "success", emojiKey: "CARD" },
-  { id: "referral", visible: true, label: "🔗 Реферальная программа", order: 3, style: "primary", emojiKey: "LINK" },
-  { id: "trial", visible: true, label: "🎁 Попробовать бесплатно", order: 4, style: "success", emojiKey: "TRIAL" },
   { id: "vpn", visible: true, label: "🌐 Подключиться к VPN", order: 5, style: "danger", emojiKey: "SERVERS", onePerRow: true },
-  { id: "cabinet", visible: true, label: "🌐 Web Кабинет", order: 6, style: "primary", emojiKey: "SERVERS" },
   { id: "tickets", visible: true, label: "🎫 Тикеты", order: 6.5, style: "primary", emojiKey: "NOTE" },
-  { id: "support", visible: true, label: "🆘 Поддержка", order: 7, style: "primary", emojiKey: "NOTE" },
   { id: "promocode", visible: true, label: "🎟️ Промокод", order: 8, style: "primary", emojiKey: "STAR" },
   { id: "extra_options", visible: true, label: "➕ Доп. опции", order: 9, style: "primary", emojiKey: "PACKAGE" },
+  { id: "gift", visible: true, label: "🎁 Подарки", order: 3, style: "primary", emojiKey: "TRIAL" },
   // Кастомные кнопки. Раньше добавлялись автоматом в keyboard.ts —
   // теперь явно в DEFAULT, чтобы они отображались в UI настроек админки.
-  { id: "my_subs", visible: true, label: "📋 Мои подписки", order: 3, style: "", onePerRow: true },
   { id: "tg_proxy", visible: true, label: "🛡 Бесплатный Прокси для Telegram", order: 8, style: "", onePerRow: true },
-  { id: "site", visible: true, label: "🌐 Сайт", order: 10, style: "", onePerRow: true },
 ];
 
 export type BotMenuTexts = {

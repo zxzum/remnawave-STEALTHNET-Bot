@@ -286,7 +286,7 @@ export function mainMenu(opts: MenuOptions): InlineMarkup {
 export type BotMenuSection = "account" | "payment" | "connection" | "bonuses";
 
 const SECTION_BUTTON_IDS: Record<BotMenuSection, string[]> = {
-  account: ["profile", "my_subs", "devices"],
+  account: ["profile", "my_subs", "devices", "tickets"],
   payment: ["tariffs", "topup", "promocode", "extra_options"],
   connection: ["vpn", "proxy", "my_proxy", "singbox", "my_singbox", "tg_proxy"],
   bonuses: ["referral", "trial", "gift"],

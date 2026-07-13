@@ -57,27 +57,28 @@ const DEFAULT_PLATEGA_METHODS: { id: number; enabled: boolean; label: string }[]
 
 type BotButtonItem = { id: string; visible: boolean; label: string; order: number; style?: string; emojiKey?: string; onePerRow?: boolean };
 const DEFAULT_BOT_BUTTONS: BotButtonItem[] = [
-  { id: "tariffs", visible: true, label: "💳 Купить доступ / Продлить", order: 2, style: "" },
+  { id: "cabinet", visible: true, label: "🚀 Открыть кабинет", order: 1, style: "primary", emojiKey: "SERVERS", onePerRow: true },
+  { id: "my_subs", visible: true, label: "📋 Мои подписки", order: 2, style: "primary" },
+  { id: "devices", visible: true, label: "📱 Устройства", order: 3, style: "primary", emojiKey: "DEVICES" },
+  { id: "trial", visible: true, label: "🎁 Попробовать бесплатно", order: 4, style: "success", emojiKey: "TRIAL" },
+  { id: "referral", visible: true, label: "💸 Пригласить и заработать", order: 5, style: "success", emojiKey: "LINK" },
+  { id: "bot_menu", visible: true, label: "☰ Меню бота", order: 6, style: "primary", emojiKey: "PACKAGE", onePerRow: true },
+  { id: "support", visible: true, label: "🆘 Поддержка", order: 7, style: "primary", emojiKey: "NOTE" },
+  { id: "site", visible: true, label: "🌐 Сайт", order: 8, style: "" },
+  { id: "tariffs", visible: true, label: "💳 Купить доступ / Продлить", order: 1, style: "" },
   { id: "proxy", visible: true, label: "🌐 Прокси", order: 0.5, style: "primary", emojiKey: "SERVERS" },
   { id: "my_proxy", visible: true, label: "📋 Мои прокси", order: 0.6, style: "primary", emojiKey: "SERVERS" },
   { id: "singbox", visible: true, label: "🔑 Доступы", order: 0.55, style: "primary", emojiKey: "SERVERS" },
   { id: "my_singbox", visible: true, label: "📋 Мои доступы", order: 0.65, style: "primary", emojiKey: "SERVERS" },
-  { id: "profile", visible: true, label: "👤 Профиль", order: 1, style: "", emojiKey: "PUZZLE" },
-  { id: "devices", visible: true, label: "📱 Устройства", order: 1.5, style: "primary", emojiKey: "DEVICES" },
+  { id: "profile", visible: true, label: "🧩 Профиль", order: 1, style: "", emojiKey: "PUZZLE" },
   { id: "topup", visible: true, label: "💳 Пополнить баланс", order: 2, style: "success", emojiKey: "CARD" },
-  { id: "referral", visible: true, label: "🔗 Реферальная программа", order: 3, style: "primary", emojiKey: "LINK" },
-  { id: "trial", visible: true, label: "🎁 Попробовать бесплатно", order: 4, style: "success", emojiKey: "TRIAL" },
   { id: "vpn", visible: true, label: "🌐 Подключиться к VPN", order: 5, style: "danger", emojiKey: "SERVERS", onePerRow: true },
-  { id: "cabinet", visible: true, label: "🌐 Web Кабинет", order: 6, style: "primary", emojiKey: "SERVERS" },
   { id: "tickets", visible: true, label: "🎫 Тикеты", order: 6.5, style: "primary", emojiKey: "NOTE" },
-  { id: "support", visible: true, label: "🆘 Поддержка", order: 7, style: "primary", emojiKey: "NOTE" },
   { id: "promocode", visible: true, label: "🎟️ Промокод", order: 8, style: "primary", emojiKey: "STAR" },
   { id: "gift", visible: true, label: "🎁 Подарки", order: 8.5, style: "primary", emojiKey: "TRIAL" },
   { id: "extra_options", visible: true, label: "➕ Доп. опции", order: 9, style: "primary", emojiKey: "PACKAGE" },
   // Кастомные кнопки. Используются в главном меню.
-  { id: "my_subs", visible: true, label: "📋 Мои подписки", order: 3, style: "", onePerRow: true },
   { id: "tg_proxy", visible: true, label: "🛡 Бесплатный Прокси для Telegram", order: 8, style: "", onePerRow: true },
-  { id: "site", visible: true, label: "🌐 Сайт", order: 10, style: "", onePerRow: true },
 ];
 
 const BOT_EMOJI_KEYS = ["HEADER", "MAIN_MENU", "STATUS", "BALANCE", "TARIFFS", "PACKAGE", "PROFILE", "CARD", "TRIAL", "LINK", "SERVERS", "BACK", "BACK_TO_SUB", "BACK_TO_SUBS_LIST", "PUZZLE", "DATE", "TIME", "TRAFFIC", "ACTIVE_GREEN", "ACTIVE_YELLOW", "INACTIVE", "CONNECT", "NOTE", "STAR", "CROWN", "DURATION", "DEVICES", "LOCATION", "CUSTOM_1", "CUSTOM_2", "CUSTOM_3", "CUSTOM_4", "CUSTOM_5"] as const;
@@ -233,6 +234,7 @@ const BOT_STYLE_OPTIONS: { value: string; label: string; swatch: string }[] = [
 
 /** Человеко-читаемые имена кнопок главного меню по их id (для подсказок справа от ввода). */
 const BOT_BUTTON_HUMAN_NAMES: Record<string, string> = {
+  bot_menu: "Открыть разделы меню бота",
   tariffs: "Список тарифов VPN",
   proxy: "Прокси-тарифы",
   my_proxy: "Мои прокси-доступы",
@@ -250,7 +252,48 @@ const BOT_BUTTON_HUMAN_NAMES: Record<string, string> = {
   promocode: "Ввод промокода",
   gift: "Подарочные коды",
   extra_options: "Доп. опции (трафик, устройства)",
+  my_subs: "Мои подписки",
+  tg_proxy: "Бесплатный прокси для Telegram",
+  site: "Открыть сайт",
 };
+
+const BOT_BUTTON_GROUPS = [
+  {
+    id: "main",
+    title: "Главная",
+    description: "Кабинет, подписки, устройства, пробник, приглашение друзей, меню, поддержка и сайт.",
+    ids: ["cabinet", "my_subs", "devices", "trial", "referral", "bot_menu", "support", "site"],
+    sortable: false,
+  },
+  {
+    id: "account",
+    title: "Аккаунт",
+    description: "Профиль и обращения. Подписки и устройства также дублируются здесь автоматически.",
+    ids: ["profile", "tickets"],
+    sortable: false,
+  },
+  {
+    id: "payment",
+    title: "Оплата и доступ",
+    description: "Покупка, пополнение, промокоды и дополнительные опции.",
+    ids: ["tariffs", "topup", "promocode", "extra_options"],
+    sortable: false,
+  },
+  {
+    id: "connection",
+    title: "Подключение",
+    description: "VPN, прокси и отдельные доступы.",
+    ids: ["vpn", "proxy", "my_proxy", "singbox", "my_singbox", "tg_proxy"],
+    sortable: false,
+  },
+  {
+    id: "bonuses",
+    title: "Бонусы",
+    description: "Подарки. Пробник и приглашение друзей также дублируются здесь автоматически.",
+    ids: ["gift"],
+    sortable: false,
+  },
+] as const;
 
 /** Подсказки к текстам экранов бота: где это используется и какие переменные доступны. */
 const BOT_INNER_STYLE_LABELS: Record<string, { label: string; desc: string }> = {
@@ -1812,31 +1855,43 @@ export function SettingsPage() {
                     <div className="rounded-2xl border border-sky-500/20 bg-gradient-to-br from-sky-500/5 via-blue-500/5 to-indigo-500/5 p-5 space-y-4">
                       <div className="flex items-center gap-2.5">
                         <div className="h-8 w-8 rounded-xl bg-blue-500/20 flex items-center justify-center"><Layers className="h-4 w-4 text-blue-500" /></div>
-                        <h3 className="text-base font-semibold">Кнопки главного меню</h3>
+                        <h3 className="text-base font-semibold">Структура меню бота</h3>
                       </div>
-                      <p className="text-xs text-muted-foreground">Переименуй, скрой или поменяй порядок кнопок главного меню. Каждой кнопке можно задать иконку (эмодзи), цвет и режим «во всю ширину».</p>
-                      <div className="flex flex-wrap items-center gap-3 p-3 rounded-xl bg-background/40 border border-white/5">
-                        <Label htmlFor="bot-buttons-per-row" className="text-sm font-medium">Кнопок в ряд:</Label>
-                        <select
-                          id="bot-buttons-per-row"
-                          className="flex h-9 rounded-lg border border-input bg-background px-3 py-1 text-sm"
-                          value={settings.botButtonsPerRow ?? 1}
-                          onChange={(e) =>
-                            setSettings((s) => (s ? { ...s, botButtonsPerRow: e.target.value === "2" ? 2 : 1 } : s))
-                          }
-                        >
-                          <option value={1}>1 — по одной</option>
-                          <option value={2}>2 — парами</option>
-                        </select>
-                        <span className="text-xs text-muted-foreground">Глобально для всего меню (отдельные кнопки можно вытолкнуть в свою строку флагом ниже)</span>
+                      <p className="text-xs text-muted-foreground">Кнопки сгруппированы так же, как их видит клиент. Название, видимость, цвет и эмодзи продолжают настраиваться здесь; смысловые ряды главной зафиксированы, чтобы меню всегда оставалось компактным.</p>
+                      <div className="space-y-5">
+                        {BOT_BUTTON_GROUPS.map((group) => {
+                          const allButtons = settings.botButtons ?? DEFAULT_BOT_BUTTONS;
+                          const groupButtons = group.ids
+                            .map((id) => allButtons.find((button) => button.id === id))
+                            .filter((button): button is BotButtonItem => Boolean(button));
+                          if (groupButtons.length === 0) return null;
+                          return (
+                            <div key={group.id} className="rounded-2xl border border-white/10 bg-background/30 p-3 sm:p-4 space-y-3">
+                              <div>
+                                <h4 className="text-sm font-semibold">{group.title}</h4>
+                                <p className="text-[11px] text-muted-foreground mt-0.5">{group.description}</p>
+                              </div>
+                              <BotButtonsList
+                                buttons={groupButtons}
+                                sortable={group.sortable}
+                                onChange={(updated) =>
+                                  setSettings((current) => {
+                                    if (!current) return current;
+                                    const changed = new Map(updated.map((button) => [button.id, button]));
+                                    return {
+                                      ...current,
+                                      botButtons: (current.botButtons ?? DEFAULT_BOT_BUTTONS).map((button) => changed.get(button.id) ?? button),
+                                    };
+                                  })
+                                }
+                              />
+                            </div>
+                          );
+                        })}
                       </div>
-                      <BotButtonsList
-                        buttons={[...(settings.botButtons ?? DEFAULT_BOT_BUTTONS)].sort((a, b) => a.order - b.order)}
-                        onChange={(updated) => setSettings((s) => (s ? { ...s, botButtons: updated } : s))}
-                      />
                       <p className="text-xs text-muted-foreground rounded-lg bg-background/40 border border-white/5 p-2.5 flex items-start gap-2">
                         <span className="text-base">💡</span>
-                        <span>Перетаскивайте кнопки за ⋮⋮ ручку слева, чтобы менять порядок. «Во всю ширину» вытолкнет кнопку на отдельную строку даже в режиме 2-колоночного меню.</span>
+                        <span>Порядок задан картой навигации, поэтому случайно переместить действие в неподходящий раздел нельзя. Условные функции появятся только когда они включены и доступны пользователю.</span>
                       </p>
                     </div>
                   </TabsContent>
@@ -5581,15 +5636,17 @@ export function SettingsPage() {
 function BotButtonsList({
   buttons,
   onChange,
+  sortable = true,
 }: {
   buttons: BotButtonItem[];
   onChange: (updated: BotButtonItem[]) => void;
+  sortable?: boolean;
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   const handleDragEnd = (e: DragEndEvent) => {
     const { active, over } = e;
-    if (!over || active.id === over.id) return;
+    if (!sortable || !over || active.id === over.id) return;
     const oldIdx = buttons.findIndex((b) => b.id === active.id);
     const newIdx = buttons.findIndex((b) => b.id === over.id);
     if (oldIdx < 0 || newIdx < 0) return;
@@ -5612,6 +5669,7 @@ function BotButtonsList({
               key={btn.id}
               btn={btn}
               idx={idx}
+              sortable={sortable}
               onUpdate={(patch) => updateButton(btn.id, patch)}
             />
           ))}
@@ -5624,13 +5682,15 @@ function BotButtonsList({
 function SortableBotButtonCard({
   btn,
   idx,
+  sortable,
   onUpdate,
 }: {
   btn: BotButtonItem;
   idx: number;
+  sortable: boolean;
   onUpdate: (patch: Partial<BotButtonItem>) => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: btn.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: btn.id, disabled: !sortable });
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -5648,15 +5708,17 @@ function SortableBotButtonCard({
       } ${isDragging ? "shadow-2xl ring-2 ring-sky-500/40 z-10" : ""}`}
     >
       <div className="flex items-center gap-2 mb-2.5">
-        <button
-          type="button"
-          className="cursor-grab active:cursor-grabbing touch-none p-1 rounded-md hover:bg-white/10 transition-colors shrink-0"
-          {...attributes}
-          {...listeners}
-          title="Перетащите чтобы изменить порядок"
-        >
-          <GripVertical className="h-4 w-4 text-muted-foreground" />
-        </button>
+        {sortable ? (
+          <button
+            type="button"
+            className="cursor-grab active:cursor-grabbing touch-none p-1 rounded-md hover:bg-white/10 transition-colors shrink-0"
+            {...attributes}
+            {...listeners}
+            title="Перетащите чтобы изменить порядок"
+          >
+            <GripVertical className="h-4 w-4 text-muted-foreground" />
+          </button>
+        ) : null}
         <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-sky-500/30 to-blue-500/20 text-sky-200 text-xs font-bold border border-sky-500/30 shrink-0">
           {idx + 1}
         </span>
@@ -5689,7 +5751,7 @@ function SortableBotButtonCard({
         </div>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-[1fr_140px_140px_auto]">
+      <div className="grid gap-2 sm:grid-cols-[1fr_140px_140px]">
         <div className="space-y-1">
           <Label className="text-[10px] uppercase text-muted-foreground tracking-wider">Текст кнопки</Label>
           <Input className="h-9" value={btn.label} onChange={(e) => onUpdate({ label: e.target.value })} placeholder="🔌 Подключиться" />
@@ -5718,14 +5780,6 @@ function SortableBotButtonCard({
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
-        </div>
-        <div className="flex items-end gap-1.5 pb-1">
-          <Switch
-            id={`onePerRow-${btn.id}`}
-            checked={btn.onePerRow === true}
-            onCheckedChange={(checked: boolean) => onUpdate({ onePerRow: checked === true })}
-          />
-          <Label htmlFor={`onePerRow-${btn.id}`} className="text-xs cursor-pointer whitespace-nowrap">Во всю ширину</Label>
         </div>
       </div>
     </div>
