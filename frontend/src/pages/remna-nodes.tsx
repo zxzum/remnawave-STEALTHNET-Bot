@@ -867,7 +867,14 @@ export function RemnaNodesPage() {
             const iface = n.system?.stats?.interface;
             const live = !n.isDisabled && n.isConnected;
             return (
-              <motion.div key={n.uuid} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.03 }} whileHover={{ y: -2 }}>
+              <motion.div
+                key={n.uuid}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: idx * 0.03 }}
+                whileHover={{ y: -2 }}
+                className={cn("relative", menuFor === n.uuid && "z-[100]")}
+              >
                 <Card
                   className="relative bg-background/60 backdrop-blur-3xl border-white/10 rounded-[2rem] p-5 pl-6 shadow-xl cursor-pointer overflow-visible"
                   onClick={() => setDetailUuid(n.uuid)}

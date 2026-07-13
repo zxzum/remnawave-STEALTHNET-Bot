@@ -19,6 +19,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import { readPublicBootstrap } from "./public-bootstrap";
 
 export type CabinetDesign = "classic" | "stealth";
 
@@ -74,7 +75,13 @@ function writeCache(c: DesignCache): void {
  */
 export function useCabinetDesign(): CabinetDesign {
   const inMiniapp = isInsideTelegramMiniApp();
-  const cache = readCache();
+  const bootstrap = readPublicBootstrap();
+  const cache = bootstrap
+    ? {
+        design: bootstrap.cabinetDesign === "stealth" ? "stealth" as const : "classic" as const,
+        applyInBrowser: bootstrap.cabinetDesignApplyInBrowser === true,
+      }
+    : readCache();
   const initial: CabinetDesign = inMiniapp || cache.applyInBrowser ? cache.design : "classic";
   const [design, setDesign] = useState<CabinetDesign>(initial);
 

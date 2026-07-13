@@ -15,7 +15,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Laptop, Download, Key, Copy, Check, ArrowRight, Smartphone, MonitorSmartphone, Apple, Tv, ExternalLink, Plus } from "lucide-react";
+import { Laptop, Download, Key, Copy, Check, ArrowRight, Smartphone, MonitorSmartphone, Apple, Tv, ExternalLink, Plus, Loader2 } from "lucide-react";
 import { useClientAuth } from "@/contexts/client-auth";
 import { api, type SubscriptionPageConfig } from "@/lib/api";
 import { ConcentricRings } from "@/components/stealth/concentric-rings";
@@ -153,11 +153,20 @@ export function StealthSubscribe() {
     if (!state.token) return;
     let alive = true;
     setLoading(true);
-    Promise.all([
-      api.clientAllSubscriptions(state.token).catch((): { items: [] } => ({ items: [] })),
-      api.getPublicSubscriptionPageConfig().catch(() => null),
-      api.getPublicConfig().catch(() => null),
-    ]).then(([all, cfg, pub]) => {
+    const subscriptionsPromise = api.clientAllSubscriptions(state.token).catch((): { items: [] } => ({ items: [] }));
+    const pageConfigPromise = api.getPublicSubscriptionPageConfig().catch(() => null);
+    const publicConfigPromise = api.getPublicConfig().catch(() => null);
+
+    // Do not hold back the app cards while the authenticated subscription
+    // request is still running. The layout normally prefetched this value.
+    pageConfigPromise.then((cfg) => { if (alive) setPageConfig(cfg); });
+    publicConfigPromise.then((pub) => {
+      if (!alive) return;
+      const u = (pub as { publicAppUrl?: string | null } | null)?.publicAppUrl ?? "";
+      setPublicAppUrl(u || (typeof window !== "undefined" ? window.location.origin : ""));
+    });
+
+    Promise.all([subscriptionsPromise, pageConfigPromise, publicConfigPromise]).then(([all]) => {
       if (!alive) return;
       const list = (all.items ?? []).map((it) => {
         const raw = unwrapSubPayload(it.subscription);
@@ -179,9 +188,6 @@ export function StealthSubscribe() {
         || list[0]
         || null;
       setSelectedSubId(preselect?.id ?? null);
-      setPageConfig(cfg);
-      const u = (pub as { publicAppUrl?: string | null } | null)?.publicAppUrl ?? "";
-      setPublicAppUrl(u || (typeof window !== "undefined" ? window.location.origin : ""));
     }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -300,7 +306,12 @@ export function StealthSubscribe() {
 
           <div className="space-y-2.5">
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 text-center">Выберите клиент</p>
-            {apps.length === 0 ? (
+            {loading && !pageConfig ? (
+              <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-5 text-center text-xs text-zinc-400">
+                <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin text-saccent-400" />
+                Loading preview
+              </div>
+            ) : apps.length === 0 ? (
               <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-center text-xs text-amber-200">
                 Для платформы «{PLATFORM_LABELS[platform]}» приложения не настроены.
                 Выберите другую платформу ниже.

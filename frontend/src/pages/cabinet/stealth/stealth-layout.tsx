@@ -16,6 +16,7 @@
 import { Outlet } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { api, type PublicConfig } from "@/lib/api";
+import { readPublicBootstrap } from "@/lib/public-bootstrap";
 import { NetworkBg } from "@/components/stealth/network-bg";
 import { BottomTabs } from "@/components/stealth/bottom-tabs";
 
@@ -28,14 +29,19 @@ function hexToRgbTriple(hex: string | null | undefined, fallback = "255 35 87"):
 }
 
 export function StealthLayout() {
-  const [config, setConfig] = useState<PublicConfig | null>(null);
+  const [config, setConfig] = useState<Pick<PublicConfig, "serviceName" | "stealthAccent"> | null>(
+    () => readPublicBootstrap(),
+  );
 
   useEffect(() => {
     api.getPublicConfig().then(setConfig).catch(() => {});
+    // The install wizard is a primary dashboard action. Warm its immutable-ish
+    // application config while the user is still on the dashboard.
+    void api.getPublicSubscriptionPageConfig().catch(() => {});
   }, []);
 
   const brand = (config?.serviceName ?? "STEALTHNET").toUpperCase();
-  const accent = hexToRgbTriple((config as { stealthAccent?: string | null } | null)?.stealthAccent);
+  const accent = hexToRgbTriple(config?.stealthAccent);
 
   // Ставим акцент ГЛОБАЛЬНО на :root — контент кабинета рендерится в отдельном
   // поддереве (не внутри этого div), поэтому inline-style на div его не покрывает.

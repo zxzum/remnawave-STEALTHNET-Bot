@@ -14,6 +14,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Request, Response } from "express";
 import { getSystemConfig } from "../client/client.service.js";
+import { configuredAssetUrl } from "../client/bot-assets.routes.js";
 
 const DIST_PATH = process.env.FRONTEND_DIST_PATH || "/var/www/stealthnet";
 const INDEX_FILE = path.join(DIST_PATH, "index.html");
@@ -53,7 +54,13 @@ function escapeAttr(s: string): string {
 interface BrandValues {
   brand: string;
   description: string;
-  ogImage: string | null;
+  logo: string | null;
+  favicon: string | null;
+  stealthHeroImage: string | null;
+  stealthAccent: string;
+  cabinetDesign: "classic" | "stealth";
+  cabinetDesignApplyInBrowser: boolean;
+  publicAppUrl: string | null;
 }
 
 let brandCache: { at: number; value: BrandValues } | null = null;
@@ -68,9 +75,21 @@ async function resolveBrand(): Promise<BrandValues> {
       ? DEFAULT_DESC
       : `${brand} — личный кабинет и админка VPN на базе Remnawave`;
   const logo = (cfg?.logo ?? "").trim() || null;
+  const accentCandidate = (cfg?.stealthAccent ?? "").trim();
+  const stealthAccent = /^#[0-9a-f]{6}$/i.test(accentCandidate) ? accentCandidate.toUpperCase() : "#FF2357";
   brandCache = {
     at: Date.now(),
-    value: { brand, description, ogImage: logo },
+    value: {
+      brand,
+      description,
+      logo,
+      favicon: (cfg?.favicon ?? "").trim() || null,
+      stealthHeroImage: (cfg?.stealthHeroImage ?? "").trim() || null,
+      stealthAccent,
+      cabinetDesign: cfg?.cabinetDesign === "stealth" ? "stealth" : "classic",
+      cabinetDesignApplyInBrowser: cfg?.cabinetDesignApplyInBrowser ?? false,
+      publicAppUrl: (cfg?.publicAppUrl ?? "").trim() || null,
+    },
   };
   return brandCache.value;
 }
@@ -85,7 +104,21 @@ export function invalidateTemplateCache() {
   templateCache = null;
 }
 
-function renderHtml(tpl: string, b: BrandValues): string {
+function safeInlineJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
+function accentRgb(hex: string): string {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return `${(n >> 16) & 255} ${(n >> 8) & 255} ${n & 255}`;
+}
+
+function renderHtml(tpl: string, b: BrandValues, origin: string): string {
   // Заменяем все вхождения "STEALTHNET" в шаблоне (это бренд-плейсхолдер
   // в meta/title/manifest-name и т. п. — никаких ложных срабатываний быть
   // не должно, так как имя редкое).
@@ -97,6 +130,23 @@ function renderHtml(tpl: string, b: BrandValues): string {
     `<meta name="description" content="${escapeAttr(b.description)}" />`
   );
 
+  const logoUrl = configuredAssetUrl(b.logo, "logo", origin);
+  const bootstrap = {
+    serviceName: b.brand,
+    logo: logoUrl,
+    favicon: configuredAssetUrl(b.favicon, "favicon", origin),
+    cabinetDesign: b.cabinetDesign,
+    cabinetDesignApplyInBrowser: b.cabinetDesignApplyInBrowser,
+    publicAppUrl: b.publicAppUrl,
+    stealthAccent: b.stealthAccent,
+    stealthHeroImage: configuredAssetUrl(b.stealthHeroImage, "stealth-hero", origin),
+  };
+  const criticalBootstrap = [
+    `<style id="stealth-critical-theme">:root{--stealth-accent:${accentRgb(b.stealthAccent)}}</style>`,
+    `<script>window.__STEALTH_BOOTSTRAP__=${safeInlineJson(bootstrap)};</script>`,
+  ].join("\n    ");
+  out = out.replace(/<\/head>/i, `    ${criticalBootstrap}\n  </head>`);
+
   // Дополняем head OG/Twitter тегами, если их ещё нет — для красивого превью
   // в мессенджерах. Делаем идемпотентно: если og:title уже есть, не дублируем.
   if (!/<meta\s+property=["']og:title["']/i.test(out)) {
@@ -104,11 +154,11 @@ function renderHtml(tpl: string, b: BrandValues): string {
       `<meta property="og:title" content="${escapeAttr(b.brand)}" />`,
       `<meta property="og:description" content="${escapeAttr(b.description)}" />`,
       `<meta property="og:type" content="website" />`,
-      ...(b.ogImage ? [`<meta property="og:image" content="${escapeAttr(b.ogImage)}" />`] : []),
-      `<meta name="twitter:card" content="summary${b.ogImage ? "_large_image" : ""}" />`,
+      ...(logoUrl ? [`<meta property="og:image" content="${escapeAttr(logoUrl)}" />`] : []),
+      `<meta name="twitter:card" content="summary${logoUrl ? "_large_image" : ""}" />`,
       `<meta name="twitter:title" content="${escapeAttr(b.brand)}" />`,
       `<meta name="twitter:description" content="${escapeAttr(b.description)}" />`,
-      ...(b.ogImage ? [`<meta name="twitter:image" content="${escapeAttr(b.ogImage)}" />`] : []),
+      ...(logoUrl ? [`<meta name="twitter:image" content="${escapeAttr(logoUrl)}" />`] : []),
     ].join("\n    ");
     out = out.replace(/<\/head>/i, `    ${ogBlock}\n  </head>`);
   }
@@ -116,10 +166,15 @@ function renderHtml(tpl: string, b: BrandValues): string {
   return out;
 }
 
-export async function renderSpaIndex(_req: Request, res: Response) {
+export async function renderSpaIndex(req: Request, res: Response) {
   try {
     const [tpl, brand] = await Promise.all([loadTemplate(), resolveBrand()]);
-    const html = renderHtml(tpl, brand);
+    const forwardedProto = req.get("x-forwarded-proto")?.split(",")[0]?.trim();
+    const proto = forwardedProto === "https" ? "https" : req.protocol === "https" ? "https" : "http";
+    const host = req.get("host") ?? "";
+    let origin = "";
+    try { origin = new URL(`${proto}://${host}`).origin; } catch { /* relative asset URLs remain valid */ }
+    const html = renderHtml(tpl, brand, origin);
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     res.setHeader("X-Brand", encodeURIComponent(brand.brand));

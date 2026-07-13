@@ -322,6 +322,47 @@ async function request<T>(
   return data as T;
 }
 
+const PUBLIC_READ_CACHE_TTL_MS = 30_000;
+let publicConfigCache: { expiresAt: number; value: PublicConfig } | null = null;
+let publicConfigInFlight: Promise<PublicConfig> | null = null;
+let subscriptionPageConfigCache: { expiresAt: number; value: SubscriptionPageConfig | null } | null = null;
+let subscriptionPageConfigInFlight: Promise<SubscriptionPageConfig | null> | null = null;
+
+function getPublicConfigCached(): Promise<PublicConfig> {
+  const now = Date.now();
+  if (publicConfigCache && publicConfigCache.expiresAt > now) {
+    return Promise.resolve(publicConfigCache.value);
+  }
+  if (publicConfigInFlight) return publicConfigInFlight;
+  publicConfigInFlight = request<PublicConfig>("/public/config?target=web")
+    .then((value) => {
+      publicConfigCache = { value, expiresAt: Date.now() + PUBLIC_READ_CACHE_TTL_MS };
+      return value;
+    })
+    .finally(() => { publicConfigInFlight = null; });
+  return publicConfigInFlight;
+}
+
+function getSubscriptionPageConfigCached(): Promise<SubscriptionPageConfig | null> {
+  const now = Date.now();
+  if (subscriptionPageConfigCache && subscriptionPageConfigCache.expiresAt > now) {
+    return Promise.resolve(subscriptionPageConfigCache.value);
+  }
+  if (subscriptionPageConfigInFlight) return subscriptionPageConfigInFlight;
+  subscriptionPageConfigInFlight = request<SubscriptionPageConfig | null>("/public/subscription-page")
+    .then((value) => {
+      subscriptionPageConfigCache = { value, expiresAt: Date.now() + PUBLIC_READ_CACHE_TTL_MS };
+      return value;
+    })
+    .finally(() => { subscriptionPageConfigInFlight = null; });
+  return subscriptionPageConfigInFlight;
+}
+
+function invalidatePublicReadCaches() {
+  publicConfigCache = null;
+  subscriptionPageConfigCache = null;
+}
+
 export const api = {
   async login(email: string, password: string): Promise<LoginResponse | AdminAuthRequires2FA> {
     return request<LoginResponse | AdminAuthRequires2FA>("/auth/login", {
@@ -1356,7 +1397,9 @@ export const api = {
   },
 
   async updateSettings(token: string, data: UpdateSettingsPayload): Promise<AdminSettings> {
-    return request("/admin/settings", { method: "PATCH", body: JSON.stringify(data), token });
+    const updated = await request<AdminSettings>("/admin/settings", { method: "PATCH", body: JSON.stringify(data), token });
+    invalidatePublicReadCaches();
+    return updated;
   },
 
   /** Админ: сброс текстов лендинга на исходные (из кода). Возвращает обновлённые настройки. */
@@ -2127,12 +2170,12 @@ export const api = {
   },
 
   async getPublicConfig(): Promise<PublicConfig> {
-    return request("/public/config");
+    return getPublicConfigCached();
   },
 
   /** Конфиг страницы подписки (приложения по платформам) для /cabinet/subscribe */
   async getPublicSubscriptionPageConfig(): Promise<SubscriptionPageConfig | null> {
-    return request("/public/subscription-page");
+    return getSubscriptionPageConfigCached();
   },
 
   async clientPayByBalance(
@@ -5133,6 +5176,7 @@ export interface PublicConfig {
   logo?: string | null;
   favicon?: string | null;
   cabinetDesign?: "classic" | "stealth";
+  cabinetDesignApplyInBrowser?: boolean;
   remnaClientUrl?: string | null;
   publicAppUrl?: string | null;
   telegramBotUsername?: string | null;

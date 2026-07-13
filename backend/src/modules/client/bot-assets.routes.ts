@@ -9,10 +9,85 @@
  * Монтируется на /api/public (см. app.ts) → итоговый URL:
  *   https://<DOMAIN>/api/public/bot-asset/logo.png
  */
-import { Router } from "express";
+import { Router, type Response } from "express";
+import { createHash } from "node:crypto";
 import { getSystemConfig } from "./client.service.js";
 
 export const botAssetsRouter = Router();
+
+type PublicBrandAssetKey = "logo" | "favicon" | "stealth-hero";
+
+const ASSET_CONFIG_KEYS: Record<PublicBrandAssetKey, "logo" | "favicon" | "stealthHeroImage"> = {
+  logo: "logo",
+  favicon: "favicon",
+  "stealth-hero": "stealthHeroImage",
+};
+
+/**
+ * Converts database-backed image values to small, cache-busting public URLs.
+ * External URLs are already efficient and are preserved as-is.
+ */
+export function configuredAssetUrl(
+  value: string | null | undefined,
+  key: PublicBrandAssetKey,
+  origin = "",
+): string | null {
+  const normalized = (value ?? "").trim();
+  if (!normalized) return null;
+  if (/^https?:\/\//i.test(normalized)) return normalized;
+  const version = createHash("sha256").update(normalized).digest("hex").slice(0, 16);
+  return `${origin}/api/public/brand-asset/${key}?v=${version}`;
+}
+
+async function imagePayload(value: string): Promise<{ contentType: string; body: Buffer } | null> {
+  const normalized = value.trim();
+  const dataUrl = /^data:image\/([a-z0-9.+-]+);base64,(.+)$/i.exec(normalized);
+  if (dataUrl) {
+    const subtype = (dataUrl[1] || "png").toLowerCase();
+    const body = Buffer.from(dataUrl[2]!, "base64");
+    if (!body.length) return null;
+    return { contentType: `image/${subtype === "jpg" ? "jpeg" : subtype}`, body };
+  }
+
+  if (/^https?:\/\//i.test(normalized)) {
+    const upstream = await fetch(normalized);
+    if (!upstream.ok) return null;
+    return {
+      contentType: upstream.headers.get("content-type") || "image/png",
+      body: Buffer.from(await upstream.arrayBuffer()),
+    };
+  }
+
+  try {
+    const body = Buffer.from(normalized, "base64");
+    return body.length ? { contentType: "image/png", body } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function sendImageValue(value: string, res: Response, cacheControl = "public, max-age=300") {
+  const payload = await imagePayload(value);
+  if (!payload) return res.status(404).send("unsupported or empty image");
+  res.set("Content-Type", payload.contentType);
+  res.set("Cache-Control", cacheControl);
+  return res.send(payload.body);
+}
+
+botAssetsRouter.get("/brand-asset/:key", async (req, res) => {
+  try {
+    const key = req.params.key as PublicBrandAssetKey;
+    const configKey = ASSET_CONFIG_KEYS[key];
+    if (!configKey) return res.status(404).send("unknown asset");
+    const config = await getSystemConfig();
+    const value = String(config[configKey] ?? "").trim();
+    if (!value) return res.status(404).send("asset not configured");
+    return sendImageValue(value, res, "public, max-age=31536000, immutable");
+  } catch (e) {
+    console.error("[brand-asset] error:", e instanceof Error ? e.message : e);
+    return res.status(500).send("error");
+  }
+});
 
 botAssetsRouter.get("/bot-asset/logo.png", async (_req, res) => {
   try {
@@ -22,41 +97,7 @@ botAssetsRouter.get("/bot-asset/logo.png", async (_req, res) => {
     const logo = (config.logoBot || config.botWelcomeImage || "").trim();
     if (!logo) return res.status(404).send("no logo configured");
 
-    // data:image/<subtype>;base64,<payload>
-    const dataUrl = /^data:image\/([a-z0-9.+-]+);base64,(.+)$/i.exec(logo);
-    if (dataUrl) {
-      const subtype = (dataUrl[1] || "png").toLowerCase();
-      const buf = Buffer.from(dataUrl[2]!, "base64");
-      if (!buf.length) return res.status(404).send("empty logo");
-      res.set("Content-Type", `image/${subtype === "jpg" ? "jpeg" : subtype}`);
-      res.set("Cache-Control", "public, max-age=300");
-      return res.send(buf);
-    }
-
-    // http(s) URL → проксируем байты с нашего домена (Telegram фетчит отсюда)
-    if (/^https?:\/\//i.test(logo)) {
-      const upstream = await fetch(logo);
-      if (!upstream.ok) return res.status(404).send("logo fetch failed");
-      const ct = upstream.headers.get("content-type") || "image/png";
-      const buf = Buffer.from(await upstream.arrayBuffer());
-      res.set("Content-Type", ct);
-      res.set("Cache-Control", "public, max-age=300");
-      return res.send(buf);
-    }
-
-    // голый base64 без data-URL префикса
-    try {
-      const buf = Buffer.from(logo, "base64");
-      if (buf.length) {
-        res.set("Content-Type", "image/png");
-        res.set("Cache-Control", "public, max-age=300");
-        return res.send(buf);
-      }
-    } catch {
-      /* ignore */
-    }
-
-    return res.status(404).send("unsupported logo format");
+    return sendImageValue(logo, res);
   } catch (e) {
     console.error("[bot-asset/logo] error:", e instanceof Error ? e.message : e);
     return res.status(500).send("error");

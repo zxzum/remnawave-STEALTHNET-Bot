@@ -57,6 +57,7 @@ import {
   pickField,
 } from "../ticket/attachments.js";
 import { validateEmailForSignup } from "../signup-protection/email-blocklist.js";
+import { configuredAssetUrl } from "./bot-assets.routes.js";
 
 /** Извлекает реальный IP клиента (с учётом trust proxy). */
 function getRequestIp(req: Request): string | null {
@@ -7353,6 +7354,15 @@ publicConfigRouter.use(optionalBot);
 publicConfigRouter.get("/config", async (req, res) => {
   const bot = (req as Request & Partial<ReqWithBot>).bot;
   const config = await getPublicConfig(bot ?? null);
+  if (req.query.target === "web") {
+    const webConfig: Record<string, unknown> = { ...config };
+    delete webConfig.logoBot;
+    webConfig.logo = configuredAssetUrl(config.logo, "logo");
+    webConfig.favicon = configuredAssetUrl(config.favicon, "favicon");
+    webConfig.stealthHeroImage = configuredAssetUrl(config.stealthHeroImage, "stealth-hero");
+    res.setHeader("Cache-Control", "private, max-age=30");
+    return res.json(webConfig);
+  }
   return res.json(config);
 });
 
@@ -7687,6 +7697,5 @@ publicConfigRouter.get("/singbox-tariffs", async (req, res) => {
     return res.status(500).json({ message: "Ошибка загрузки тарифов Sing-box" });
   }
 });
-
 
 

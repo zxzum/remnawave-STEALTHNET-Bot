@@ -4164,6 +4164,7 @@ adminRouter.patch("/settings", async (req, res) => {
   }
   // invalidate cache до возврата свежего config'а.
   invalidateSystemConfigCache();
+  invalidateBrandCache();
   const config = await getSystemConfig();
   return res.json(config);
 });
