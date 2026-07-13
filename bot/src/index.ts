@@ -12,6 +12,8 @@ import { SocksProxyAgent } from "socks-proxy-agent";
 import * as api from "./api.js";
 import {
   mainMenu,
+  botSectionsMenu,
+  botSectionMenu,
   backToMenu,
   backToSubLabel,
   backToSubsListLabel,
@@ -55,6 +57,7 @@ import {
   tariffActionChoiceButtons,
   type InlineMarkup,
   type InnerEmojiIds,
+  type BotMenuSection,
 } from "./keyboard.js";
 import { t as _t, formatDays as _formatDays, setTranslations } from "./i18n.js";
 // 54-ФЗ-чек ЮКассы: prompt «нужен ли чек», ввод email, etc.
@@ -3248,6 +3251,56 @@ composer.on("callback_query:data", async (ctx) => {
       }
 
       await editMessageContent(ctx, text, backMarkup, entities);
+      return;
+    }
+
+    if (data === "menu:bot" || data.startsWith("menu:section:")) {
+      const [client, subRes, proxyRes, singboxRes, allSubsRes, trialAvail] = await Promise.all([
+        api.getMe(token),
+        api.getSubscription(token).catch(() => ({ subscription: null })),
+        api.getPublicProxyTariffs().catch(() => ({ items: [] })),
+        api.getPublicSingboxTariffs().catch(() => ({ items: [] })),
+        api.getAllSubscriptions(token).catch(() => ({ items: [] })),
+        api.getAvailableTrials(token).catch(() => ({ items: [], hasAnyEnabled: false })),
+      ]);
+      const showTrial = trialAvail.hasAnyEnabled
+        ? trialAvail.items.length > 0
+        : Boolean(config?.trialEnabled && !client?.trialUsed);
+      const showProxy = proxyRes.items?.some((category: { tariffs: unknown[] }) => category.tariffs?.length > 0) ?? false;
+      const showSingbox = singboxRes.items?.some((category: { tariffs: unknown[] }) => category.tariffs?.length > 0) ?? false;
+      const menuOptions = {
+        showTrial,
+        showVpn: Boolean(getSubscriptionUrl(subRes.subscription)) || (allSubsRes.items?.length ?? 0) > 0,
+        showProxy,
+        showSingbox,
+        showGift: config?.giftSubscriptionsEnabled === true,
+        showExtraOptions: config?.sellOptionsEnabled === true && (config?.sellOptions?.length ?? 0) > 0,
+        appUrl,
+        botButtons: config?.botButtons ?? null,
+        botBackLabel: config?.botBackLabel ?? null,
+        hasSupportLinks: Boolean(config?.supportLink || config?.agreementLink || config?.offerLink || config?.instructionsLink),
+        showTickets: config?.ticketsEnabled === true,
+        buttonsPerRow: config?.botButtonsPerRow ?? 1,
+        remnaSubscriptionUrl: config?.useRemnaSubscriptionPage ? getSubscriptionUrl(subRes.subscription) : null,
+      };
+
+      if (data === "menu:bot") {
+        await editMessageContent(ctx, "☰ Меню бота\n\nВыберите нужный раздел:", botSectionsMenu(menuOptions));
+        return;
+      }
+
+      const section = data.slice("menu:section:".length) as BotMenuSection;
+      const titles: Record<BotMenuSection, string> = {
+        account: "👤 Аккаунт",
+        payment: "💳 Оплата и доступ",
+        connection: "🔌 Подключение",
+        bonuses: "🎁 Бонусы",
+      };
+      if (!Object.prototype.hasOwnProperty.call(titles, section)) {
+        await editMessageContent(ctx, "☰ Меню бота\n\nВыберите нужный раздел:", botSectionsMenu(menuOptions));
+        return;
+      }
+      await editMessageContent(ctx, `${titles[section]}\n\nВыберите действие:`, botSectionMenu(section, menuOptions));
       return;
     }
 
