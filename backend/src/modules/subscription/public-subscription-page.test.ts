@@ -73,7 +73,7 @@ test("страница отображает квоты и все приложе�
 
   assert.match(html, /<!doctype html>/i);
   assert.match(html, /<title>[^<]+Лазейка ВПН<\/title>/);
-  assert.match(html, /src="data:image\/png;base64,iVBORw0KGgo="/);
+  assert.doesNotMatch(html, /data:image\/png;base64/);
   assert.doesNotMatch(html, /Не использовать/);
   assert.match(html, /color-scheme:dark/);
   assert.match(html, /Обычная подписка/);

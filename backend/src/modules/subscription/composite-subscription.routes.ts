@@ -23,6 +23,7 @@ import {
   extractRemnawaveComponentSnapshot,
 } from "./subscription-components.service.js";
 import { getSystemConfig } from "../client/client.service.js";
+import { configuredAssetUrl } from "../client/bot-assets.routes.js";
 import {
   availableHostNames,
   isBrowserSubscriptionRequest,
@@ -104,7 +105,7 @@ publicSubscriptionRouter.get("/:publicSubscriptionToken", async (req, res) => {
     return res.status(200).type("html").send(renderPublicSubscriptionPage({
       publicUrl,
       brandName: config.serviceName?.trim() || "STEALTHNET",
-      brandLogo: config.logo?.trim() || null,
+      brandLogo: configuredAssetUrl(config.logo, "logo"),
       hosts: availableHostNames(hostsResult.data, [...new Set(components.flatMap((component) => component.internalSquadUuids))]),
       title,
       status: mainSnapshot.status,

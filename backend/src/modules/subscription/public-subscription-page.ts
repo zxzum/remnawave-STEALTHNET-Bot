@@ -54,7 +54,7 @@ export type PublicSubscriptionPageModel = {
 
 const BROWSER_USER_AGENT = /(?:Mozilla\/|Chrome\/|Chromium\/|CriOS\/|Firefox\/|FxiOS\/|Safari\/|Edg(?:e|A|iOS)?\/)/i;
 const BLOCKED_LINK = /^(?:javascript|data|vbscript):/i;
-const SAFE_LOGO = /^(?:https:\/\/|\/|data:image\/(?:png|jpe?g|webp|gif);base64,)/i;
+const SAFE_LOGO = /^(?:https:\/\/|\/)/i;
 
 export function isBrowserSubscriptionRequest(userAgent: string, accept: string): boolean {
   return accept.toLowerCase().includes("text/html") && BROWSER_USER_AGENT.test(userAgent);
