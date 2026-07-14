@@ -46,6 +46,20 @@ test("синтезирует обязательный legacy-компонент 
   assert.equal(result[0]?.remnawaveUuid, "legacy-main");
 });
 
+test("подставляет legacy UUID в незавершённый backfill обязательного компонента", () => {
+  const resolve = helpers.resolveRemnawaveComponents as (subscription: unknown) => Array<{
+    required: boolean;
+    remnawaveUuid: string | null;
+  }>;
+  const result = resolve({
+    id: "sub-1",
+    remnawaveUuid: "legacy-main",
+    components: [{ key: "primary", required: true, mergeOrder: 0, remnawaveUuid: null }],
+  });
+
+  assert.equal(result[0]?.remnawaveUuid, "legacy-main");
+});
+
 test("не создаёт фиктивный компонент без Remnawave UUID", () => {
   assert.equal(typeof helpers.resolveRemnawaveComponents, "function");
 

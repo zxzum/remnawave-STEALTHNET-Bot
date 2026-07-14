@@ -406,5 +406,5 @@ giftRouter.get("/subscription-url/:id", async (req: Request, res: Response) => {
     return res.status(result.status).json({ message: result.error });
   }
 
-  return res.json({ uuid: result.data.uuid });
+  return res.json({ uuid: result.data.uuid, subscriptionUrl: result.data.subscriptionUrl });
 });

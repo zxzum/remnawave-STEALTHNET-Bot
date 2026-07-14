@@ -7,6 +7,7 @@ import { prisma } from "../../db.js";
 import { getSystemConfig } from "../client/client.service.js";
 import { proxyFetch } from "../proxy-util/proxy-fetch.js";
 import { getProxyUrl } from "../proxy-util/get-proxy-url.js";
+import { buildPublicSubscriptionUrl } from "../subscription/subscription.helpers.js";
 
 /** Inline keyboard with a single "Back to menu" button for client notifications. */
 function backToMenuMarkup(backLabel?: string | null): Record<string, unknown> {
@@ -321,11 +322,13 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
     // после успешной оплаты — выдаём ту же UX что после триала:
     // ссылка подписки + кнопки «📲 Инструкции по установке» и «🌐 Локации» (если есть).
     let subscriptionUrl: string | null = null;
+    let publicSubscriptionToken: string | null = null;
     if (payment?.subscriptionId) {
       const sub = await prisma.subscription.findUnique({
         where: { id: payment.subscriptionId },
-        select: { remnawaveUuid: true },
+        select: { remnawaveUuid: true, publicSubscriptionToken: true },
       });
+      publicSubscriptionToken = sub?.publicSubscriptionToken ?? null;
       if (sub?.remnawaveUuid) {
         try {
           const { remnaGetUser } = await import("../remna/remna.client.js");
@@ -338,6 +341,9 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
       }
     }
     const cfg = await getSystemConfig();
+    if (publicSubscriptionToken && cfg.publicAppUrl) {
+      subscriptionUrl = buildPublicSubscriptionUrl(cfg.publicAppUrl, publicSubscriptionToken);
+    }
     // подсказка «если инструкция не открылась»
     // (платная/админская подписка). Текст из настроек (Тексты бота) или дефолт.
     const instrFallback = ((cfg as { botInstructionFallbackText?: string | null }).botInstructionFallbackText ?? "").trim()

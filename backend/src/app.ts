@@ -54,6 +54,7 @@ import { botMessagesRouter } from "./modules/bot-messages/bot-messages.routes.js
 import { botConversationsRouter } from "./modules/bot-conversations/bot-conversations.routes.js";
 import { requireAuth } from "./modules/auth/middleware.js";
 import { renderSpaIndex } from "./modules/branding/spa-html.js";
+import { publicSubscriptionRouter } from "./modules/subscription/composite-subscription.routes.js";
 
 const app = express();
 
@@ -323,6 +324,7 @@ app.use("/api/admin/proxy", proxyAdminRouter);
 app.use("/api/admin/singbox", singboxAdminRouter);
 app.use("/api/proxy-nodes", proxyAgentRouter);
 app.use("/api/singbox-nodes", singboxAgentRouter);
+app.use("/api/sub", publicSubscriptionRouter);
 app.use("/api/client", clientRouter);
 app.use("/api/client/contests", contestClientRouter);
 app.use("/api/client/gift", giftRouter);

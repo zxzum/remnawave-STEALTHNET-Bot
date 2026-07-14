@@ -32,8 +32,9 @@ import { renderEmailTemplate } from "../email-templates/email-templates.service.
 import { signClientPasswordResetToken, verifyClientPasswordResetToken } from "../auth/auth.service.js";
 import { createPlategaTransaction, isPlategaConfigured } from "../platega/platega.service.js";
 import { activateTariffForClient, activateTariffByPaymentId, findConvertibleSubscription, computeConvertedDays } from "../tariff/tariff-activation.service.js";
-import { upsertSubscriptionByRemnaUuid } from "../subscription/subscription.helpers.js";
+import { buildPublicSubscriptionUrl, upsertSubscriptionByRemnaUuid } from "../subscription/subscription.helpers.js";
 import { synchronizeSubscriptionComponents } from "../subscription/subscription-components.service.js";
+import { replaceRemnaSubscriptionUrlInPlace } from "../subscription/composite-subscription.js";
 import { saveRedirectAndBuildUrl } from "../payment-redirect/payment-redirect.util.js";
 import { createProxySlotsByPaymentId } from "../proxy/proxy-slots-activation.service.js";
 import { createSingboxSlotsByPaymentId } from "../singbox/singbox-slots-activation.service.js";
@@ -1254,6 +1255,11 @@ clientAuthRouter.post("/telegram-login-confirm", async (req, res) => {
 export const clientRouter = Router();
 clientRouter.use("/auth", clientAuthRouter);
 
+function publicSubscriptionUrlForRequest(req: Request, token: string, configuredBaseUrl?: string | null): string {
+  const baseUrl = configuredBaseUrl?.trim() || `${req.protocol}://${req.get("host") ?? "localhost"}`;
+  return buildPublicSubscriptionUrl(baseUrl, token);
+}
+
 // ЮMoney OAuth callback — без авторизации клиента (редирект с ЮMoney)
 function yoomoneyStateSign(clientId: string): string {
   const payload = JSON.stringify({ clientId });
@@ -2420,18 +2426,12 @@ clientRouter.post("/trials/:id/activate", async (req, res) => {
   // чтобы бот мог сразу показать кнопку «📲 Инструкции по установке» с прямой ссылкой.
   const createdSub = await prisma.subscription.findUnique({
     where: { id: subResult.data.subscriptionId },
-    select: { remnawaveUuid: true },
+    select: { publicSubscriptionToken: true },
   });
-  let subscriptionUrl: string | null = null;
-  if (createdSub?.remnawaveUuid) {
-    try {
-      const r = await remnaGetUser(createdSub.remnawaveUuid);
-      const inner = (r.data as { response?: Record<string, unknown>; data?: Record<string, unknown> } | null)?.response
-        ?? (r.data as { response?: Record<string, unknown>; data?: Record<string, unknown> } | null)?.data
-        ?? (r.data as Record<string, unknown> | null);
-      subscriptionUrl = (inner as { subscriptionUrl?: string } | null)?.subscriptionUrl ?? null;
-    } catch { /* ignore */ }
-  }
+  const trialConfig = await getSystemConfig();
+  const subscriptionUrl = createdSub?.publicSubscriptionToken
+    ? publicSubscriptionUrlForRequest(req, createdSub.publicSubscriptionToken, trialConfig.publicAppUrl)
+    : null;
 
   // уведомление админам в TG-группу: активирован триал (best-effort, не ломаем флоу).
   import("../notification/telegram-notify.service.js")
@@ -2850,7 +2850,7 @@ clientRouter.get("/subscription", async (req, res) => {
   // EXPIRED Remna-юзера, тогда как subscriptions хранит актуального). Бот берёт из subscriptions — кабинет теперь тоже.
   const rootSub = await prisma.subscription.findFirst({
     where: { ownerId: client.id, subscriptionIndex: 0, remnawaveUuid: { not: null } },
-    select: { remnawaveUuid: true, trialId: true, expireAt: true, tariff: { select: { name: true } }, trial: { select: { name: true, convertEnabled: true } } },
+    select: { remnawaveUuid: true, publicSubscriptionToken: true, trialId: true, expireAt: true, tariff: { select: { name: true } }, trial: { select: { name: true, convertEnabled: true } } },
   });
   const effectiveUuid = rootSub?.remnawaveUuid ?? client.remnawaveUuid;
   if (!effectiveUuid) {
@@ -2886,6 +2886,12 @@ clientRouter.get("/subscription", async (req, res) => {
   // Опциональное шифрование subscriptionUrl в happ://crypt4/... — настройка happCryptEnabled.
   // По умолчанию выключено: crypt4-ссылка длинная (1500+ символов).
   const subCfg = await getSystemConfig();
+  if (rootSub?.publicSubscriptionToken) {
+    replaceRemnaSubscriptionUrlInPlace(
+      result.data,
+      publicSubscriptionUrlForRequest(req, rootSub.publicSubscriptionToken, subCfg.publicAppUrl),
+    );
+  }
   if (subCfg.happCryptEnabled) {
     await encryptSubscriptionUrlInPlace(result.data);
   }
@@ -3015,15 +3021,13 @@ clientRouter.get("/subscription/by-uuid/:uuid", async (req, res) => {
     return res.status(400).json({ subscription: null, tariffDisplayName: null, message: "UUID не указан" });
   }
 
-  // Проверяем принадлежность: root или secondary подписка
-  const isRoot = client.remnawaveUuid === uuid;
-  if (!isRoot) {
-    const secondarySub = await prisma.subscription.findFirst({
-      where: { ownerId: clientId, remnawaveUuid: uuid },
-    });
-    if (!secondarySub) {
-      return res.status(404).json({ subscription: null, tariffDisplayName: null, message: "Подписка не найдена" });
-    }
+  // Проверяем принадлежность и одновременно получаем стабильный публичный token.
+  const dbSubscription = await prisma.subscription.findFirst({
+    where: { ownerId: clientId, remnawaveUuid: uuid },
+    select: { publicSubscriptionToken: true },
+  });
+  if (!dbSubscription && client.remnawaveUuid !== uuid) {
+    return res.status(404).json({ subscription: null, tariffDisplayName: null, message: "Подписка не найдена" });
   }
 
   const result = await remnaGetUser(uuid);
@@ -3031,6 +3035,12 @@ clientRouter.get("/subscription/by-uuid/:uuid", async (req, res) => {
     return res.json({ subscription: null, tariffDisplayName: null, message: result.error });
   }
   const subUuidCfg = await getSystemConfig();
+  if (dbSubscription?.publicSubscriptionToken) {
+    replaceRemnaSubscriptionUrlInPlace(
+      result.data,
+      publicSubscriptionUrlForRequest(req, dbSubscription.publicSubscriptionToken, subUuidCfg.publicAppUrl),
+    );
+  }
   if (subUuidCfg.happCryptEnabled) {
     await encryptSubscriptionUrlInPlace(result.data);
   }
@@ -3089,6 +3099,7 @@ clientRouter.get("/subscription/all", async (req, res) => {
     select: {
       id: true,
       remnawaveUuid: true,
+      publicSubscriptionToken: true,
       subscriptionIndex: true,
       trialId: true,
       giftStatus: true,
@@ -3115,6 +3126,10 @@ clientRouter.get("/subscription/all", async (req, res) => {
     let tariffName = (sub.trialId ? sub.trial?.name?.trim() : undefined) ?? sub.tariff?.name?.trim() ?? "";
     if (sub.remnawaveUuid) {
       const r = await remnaGetUser(sub.remnawaveUuid);
+      replaceRemnaSubscriptionUrlInPlace(
+        r.data,
+        publicSubscriptionUrlForRequest(req, sub.publicSubscriptionToken, subAllCfg.publicAppUrl),
+      );
       if (cryptOn) await encryptSubscriptionUrlInPlace(r.data);
       remnaPayload = r.data ?? null;
       if (!tariffName) tariffName = await resolveTariffDisplayName(r.data ?? null);

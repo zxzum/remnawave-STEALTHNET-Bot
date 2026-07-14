@@ -49,7 +49,11 @@ export function resolveRemnawaveComponents(subscription: {
   components?: ResolvedRemnawaveComponent[];
 }): ResolvedRemnawaveComponent[] {
   if (subscription.components?.length) {
-    return [...subscription.components].sort((a, b) => a.mergeOrder - b.mergeOrder);
+    return subscription.components
+      .map((component) => component.required && !component.remnawaveUuid && subscription.remnawaveUuid
+        ? { ...component, remnawaveUuid: subscription.remnawaveUuid }
+        : component)
+      .sort((a, b) => a.mergeOrder - b.mergeOrder);
   }
   if (!subscription.remnawaveUuid) return [];
 

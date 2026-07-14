@@ -78,6 +78,61 @@ export async function remnaFetch<T>(
   }
 }
 
+export type RemnaSubscriptionFetchResult = {
+  status: number;
+  body?: string;
+  headers?: Record<string, string>;
+  error?: string;
+};
+
+/**
+ * Загружает публичную подписку Remnawave от имени VPN-клиента.
+ * Admin Authorization/Cookie намеренно не используются: upstream должен увидеть
+ * тот же User-Agent/HWID, который пришёл на публичную ссылку STEALTHNET.
+ */
+export async function remnaFetchSubscription(
+  rawUrl: string,
+  clientHeaders: Record<string, string>,
+): Promise<RemnaSubscriptionFetchResult> {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return { status: 400, error: "Invalid subscription URL" };
+  }
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) {
+    return { status: 400, error: "Unsupported subscription URL protocol" };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: clientHeaders,
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    const body = await response.text();
+    const headers = Object.fromEntries(response.headers.entries());
+    if (!response.ok) {
+      return {
+        status: response.status,
+        headers,
+        error: body.slice(0, 300) || response.statusText || "Subscription upstream error",
+      };
+    }
+    return { status: response.status, body, headers };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return { status: 504, error: "Remna subscription timeout" };
+    }
+    return { status: 502, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** GET /api/users — пагинация Remna: size и start (offset) */
 export function remnaGetUsers(params?: { page?: number; limit?: number; start?: number; size?: number }) {
   const search = new URLSearchParams();

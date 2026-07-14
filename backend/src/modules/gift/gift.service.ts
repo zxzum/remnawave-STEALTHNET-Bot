@@ -25,7 +25,7 @@ import {
   remnaDeleteUser,
 } from "../remna/remna.client.js";
 import { getSystemConfig } from "../client/client.service.js";
-import { getNextSubscriptionIndex } from "../subscription/subscription.helpers.js";
+import { buildPublicSubscriptionUrl, getNextSubscriptionIndex } from "../subscription/subscription.helpers.js";
 import { calcExtrasPrice } from "../tariff/extras-pricing.js";
 import { synchronizeSubscriptionComponents } from "../subscription/subscription-components.service.js";
 
@@ -847,9 +847,11 @@ export async function redeemGiftCode(
   let subscriptionUrl: string | null = null;
   const updatedSub = await prisma.subscription.findUnique({
     where: { id: giftCode.subscriptionId },
-    select: { remnawaveUuid: true },
+    select: { remnawaveUuid: true, publicSubscriptionToken: true },
   });
-  if (updatedSub?.remnawaveUuid) {
+  if (updatedSub?.publicSubscriptionToken && config.publicAppUrl) {
+    subscriptionUrl = buildPublicSubscriptionUrl(config.publicAppUrl, updatedSub.publicSubscriptionToken);
+  } else if (updatedSub?.remnawaveUuid) {
     try {
       const { remnaGetUser } = await import("../remna/remna.client.js");
       const r = await remnaGetUser(updatedSub.remnawaveUuid);
@@ -1016,10 +1018,10 @@ export async function listGiftCodes(
 export async function getSubscriptionUrl(
   subscriptionId: string,
   rootClientId: string,
-): Promise<GiftResult<{ uuid: string }>> {
+): Promise<GiftResult<{ uuid: string; subscriptionUrl: string | null }>> {
   const sub = await prisma.subscription.findUnique({
     where: { id: subscriptionId },
-    select: { ownerId: true, remnawaveUuid: true, giftStatus: true },
+    select: { ownerId: true, remnawaveUuid: true, publicSubscriptionToken: true, giftStatus: true },
   });
 
   if (!sub || sub.ownerId !== rootClientId) {
@@ -1032,7 +1034,16 @@ export async function getSubscriptionUrl(
     return { ok: false, error: "VPN-пользователь не создан", status: 400 };
   }
 
-  return { ok: true, data: { uuid: sub.remnawaveUuid } };
+  const config = await getSystemConfig();
+  return {
+    ok: true,
+    data: {
+      uuid: sub.remnawaveUuid,
+      subscriptionUrl: config.publicAppUrl
+        ? buildPublicSubscriptionUrl(config.publicAppUrl, sub.publicSubscriptionToken)
+        : null,
+    },
+  };
 }
 
 /**
