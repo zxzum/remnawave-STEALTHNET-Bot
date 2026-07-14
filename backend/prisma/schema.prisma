@@ -8,6 +8,12 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum SubscriptionSyncStatus {
+  SYNCED
+  PENDING
+  ERROR
+}
+
 model Admin {
   id                 String         @id @default(cuid())
   email              String         @unique
@@ -413,17 +419,17 @@ model PromoCodeUsage {
 
 // Категория тарифов (например «Базовый», «Премиум»). emojiKey — код из админки (ordinary, premium) для подстановки эмодзи.
 model TariffCategory {
-  id        String   @id @default(cuid())
-  name      String
-  emojiKey  String?  @map("emoji_key") // ordinary | premium — подставляется эмодзи из настройки category_emojis
-  sortOrder Int      @default(0) @map("sort_order")
+  id                     String   @id @default(cuid())
+  name                   String
+  emojiKey               String?  @map("emoji_key") // ordinary | premium — подставляется эмодзи из настройки category_emojis
+  sortOrder              Int      @default(0) @map("sort_order")
   // режим «одна подписка из категории».
   // При покупке тарифа из такой категории, если у клиента уже есть подписка с тарифом
   // этой категории — она КОНВЕРТИРУЕТСЯ (pro-rata перенос остатка дней + смена тарифа),
   // а не создаётся вторая. Единый код для любой подписки (включая index 0).
-  singleSubscriptionMode Boolean @default(false) @map("single_subscription_mode")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  singleSubscriptionMode Boolean  @default(false) @map("single_subscription_mode")
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
 
   tariffs Tariff[]
 
@@ -473,16 +479,17 @@ model Tariff {
   createdAt            DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
-  category               TariffCategory      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  category               TariffCategory             @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   payments               Payment[]
-  autoRenewClients       Client[]            @relation("ClientAutoRenewTariff")
-  currentTariffClients   Client[]            @relation("ClientCurrentTariff")
-  subscriptions          Subscription[]      @relation("SubscriptionTariff")
+  autoRenewClients       Client[]                   @relation("ClientAutoRenewTariff")
+  currentTariffClients   Client[]                   @relation("ClientCurrentTariff")
+  subscriptions          Subscription[]             @relation("SubscriptionTariff")
   /// T-unify: подписки, у которых этот тариф настроен на автопродление.
-  autoRenewSubscriptions Subscription[]      @relation("SubscriptionAutoRenewTariff")
+  autoRenewSubscriptions Subscription[]             @relation("SubscriptionAutoRenewTariff")
   priceOptions           TariffPriceOption[]
   // T15 (11.05.2026, WolfVPN): пресеты пробных подписок, привязанные к этому тарифу.
   trials                 Trial[]
+  remnawaveComponents    TariffRemnawaveComponent[]
 
   @@index([categoryId])
   @@map("tariffs")
@@ -967,49 +974,56 @@ model ContestWinner {
 // Теперь: ВСЕ подписки клиента живут в одной таблице. subscriptionIndex=0 — главная.
 // Поля Client.remnawaveUuid / currentTariffId / autoRenew* помечены deprecated (читаются для совместимости кабинета).
 model Subscription {
-  id                       String    @id @default(cuid())
-  ownerId                  String    @map("owner_id")
-  remnawaveUuid            String?   @map("remnawave_uuid")
+  id                       String                 @id @default(cuid())
+  ownerId                  String                 @map("owner_id")
+  remnawaveUuid            String?                @map("remnawave_uuid")
+  publicSubscriptionToken  String                 @unique @default(cuid()) @map("public_subscription_token")
+  syncStatus               SubscriptionSyncStatus @default(SYNCED) @map("sync_status")
+  syncAttempts             Int                    @default(0) @map("sync_attempts")
+  syncError                String?                @map("sync_error") @db.Text
+  syncRequiredAt           DateTime?              @map("sync_required_at")
+  lastReconciledAt         DateTime?              @map("last_reconciled_at")
+  graceUntil               DateTime?              @map("grace_until")
   /// subscriptionIndex=0 — «главная» (бывш. root). 1..N — дополнительные.
   /// Первая созданная любого типа всегда получает 0. После «обнуления» главной
   /// (tariffId=null) запись остаётся, новая покупка продлевает её.
-  subscriptionIndex        Int       @map("subscription_index")
-  tariffId                 String?   @map("tariff_id")
-  giftStatus               String?   @map("gift_status") // null = owned | GIFT_RESERVED | GIFT_CODE_ACTIVE | GIFTED
-  giftedToClientId         String?   @map("gifted_to_client_id") // если подарено — кому
+  subscriptionIndex        Int                    @map("subscription_index")
+  tariffId                 String?                @map("tariff_id")
+  giftStatus               String?                @map("gift_status") // null = owned | GIFT_RESERVED | GIFT_CODE_ACTIVE | GIFTED
+  giftedToClientId         String?                @map("gifted_to_client_id") // если подарено — кому
   // T15 (11.05.2026, WolfVPN): если эта sub была создана через активацию пробного триала —
   // здесь ID использованного Trial. Позволяет показывать пометку «🎁 Пробная» в боте,
   // и кнопку «Конвертировать» (продлить = купить тариф этого триала и заменить triald).
-  trialId                  String?   @map("trial_id")
+  trialId                  String?                @map("trial_id")
   // T7c (11.05.2026, WolfVPN): персональная цена подписки (накопительная).
   // Стартует = базовая цена тарифа при покупке. При apply каждой extra-option (+устройство/трафик)
   // увеличивается на стоимость опции. При продлении используется ЭТА цена (а не базовая тарифа).
-  customPrice              Float?    @map("custom_price")
+  customPrice              Float?                 @map("custom_price")
   // T17 (11.05.2026, WolfVPN): чёткое разграничение «купил себе» vs «купил, чтобы подарить».
   // true  → подписка куплена через раздел «🎁 Подарки» (отображается ТОЛЬКО в gift menu)
   // false → обычная купленная подписка (отображается в «Мои подписки» / menu:vpn)
   // Меняется на false при явной кнопке «Забрать себе» (activateGiftForSelf).
   // Не зависит от giftStatus — те описывают жизненный цикл кода, а это — намерение покупки.
-  purchasedAsGift          Boolean   @default(false) @map("purchased_as_gift")
+  purchasedAsGift          Boolean                @default(false) @map("purchased_as_gift")
   // T-autorenew: индивидуальное автосписание на эту подписку.
-  autoRenewEnabled         Boolean   @default(false) @map("auto_renew_enabled")
+  autoRenewEnabled         Boolean                @default(false) @map("auto_renew_enabled")
   /// T-unify: тариф для автопродления (если null → продлеваем текущий tariffId).
-  autoRenewTariffId        String?   @map("auto_renew_tariff_id")
+  autoRenewTariffId        String?                @map("auto_renew_tariff_id")
   /// T-unify: опция длительности для автопродления.
-  autoRenewPriceOptionId   String?   @map("auto_renew_price_option_id")
+  autoRenewPriceOptionId   String?                @map("auto_renew_price_option_id")
   /// T-unify: количество доп. устройств при автопродлении.
-  autoRenewExtraDevices    Int       @default(0) @map("auto_renew_extra_devices")
+  autoRenewExtraDevices    Int                    @default(0) @map("auto_renew_extra_devices")
   /// T-unify: счётчик retry автопродления (cron сбрасывает после успеха).
-  autoRenewRetryCount      Int       @default(0) @map("auto_renew_retry_count")
+  autoRenewRetryCount      Int                    @default(0) @map("auto_renew_retry_count")
   /// T-unify: метка последнего уведомления (старая логика, не дублировать с lastNotifiedKey).
-  autoRenewNotifiedAt      DateTime? @map("auto_renew_notified_at")
+  autoRenewNotifiedAt      DateTime?              @map("auto_renew_notified_at")
   /// T-unify: промокод применяемый при автопродлении.
-  autoRenewPromoCode       String?   @map("auto_renew_promo_code")
+  autoRenewPromoCode       String?                @map("auto_renew_promo_code")
   /// T-unify: цена за день — аналитический snapshot для отображения.
-  currentPricePerDay       Float?    @map("current_price_per_day")
+  currentPricePerDay       Float?                 @map("current_price_per_day")
   /// T-extras-counter (14.05.2026, WolfVPN): количество докупленных доп. устройств.
   /// Заменяет старый customPrice-накопитель для устройств.
-  extraDevices             Int       @default(0) @map("extra_devices")
+  extraDevices             Int                    @default(0) @map("extra_devices")
   /// T-extras-monthly-price (14.05.2026, WolfVPN): суммарная цена за ВСЕ доп.
   /// устройства этой подписки на 30 дней. Берётся из sell-options-products (цена пакета).
   /// При продлении формула: option.price + extraDevicesMonthlyPrice × (days/30).
@@ -1017,25 +1031,26 @@ model Subscription {
   /// выбора устройств при покупке тарифа — НЕ наша логика sell-options).
   /// При apply пакета +N устройств: extraDevices += N, monthlyPrice += pkg.price.
   /// При «Убрать дополнительные» → monthlyPrice = 0.
-  extraDevicesMonthlyPrice Float     @default(0) @map("extra_devices_monthly_price")
+  extraDevicesMonthlyPrice Float                  @default(0) @map("extra_devices_monthly_price")
   /// T-autorenew (12.05.2026, WolfVPN): метка последнего уведомления (notif_template_id:timestamp)
   /// — чтобы не слать одно и то же уведомление дважды в течение N часов.
-  lastNotifiedKey          String?   @map("last_notified_key")
+  lastNotifiedKey          String?                @map("last_notified_key")
   /// T-expire-sync (13.05.2026, WolfVPN): дата истечения подписки в Remnawave.
   /// Кешируем в БД для быстрых фильтров (broadcast «Активные/Истёкшие», auto-renew cron).
   /// Синхронизируется при каждом upsert/extend через extractCurrentExpireAt из Remna-ответа.
   /// null = подписка ещё не привязана к Remna user или дата неизвестна.
-  expireAt                 DateTime? @map("expire_at")
-  createdAt                DateTime  @default(now()) @map("created_at")
-  updatedAt                DateTime  @updatedAt @map("updated_at")
+  expireAt                 DateTime?              @map("expire_at")
+  createdAt                DateTime               @default(now()) @map("created_at")
+  updatedAt                DateTime               @updatedAt @map("updated_at")
 
-  owner           Client     @relation("OwnerSubscriptions", fields: [ownerId], references: [id], onDelete: Cascade)
-  giftedToClient  Client?    @relation("ReceivedSubscriptions", fields: [giftedToClientId], references: [id], onDelete: SetNull)
-  tariff          Tariff?    @relation("SubscriptionTariff", fields: [tariffId], references: [id], onDelete: SetNull)
-  autoRenewTariff Tariff?    @relation("SubscriptionAutoRenewTariff", fields: [autoRenewTariffId], references: [id], onDelete: SetNull)
-  trial           Trial?     @relation(fields: [trialId], references: [id], onDelete: SetNull)
-  giftCodes       GiftCode[] @relation("GiftCodeSubscription")
-  payments        Payment[]  @relation("PaymentSubscription")
+  owner           Client               @relation("OwnerSubscriptions", fields: [ownerId], references: [id], onDelete: Cascade)
+  giftedToClient  Client?              @relation("ReceivedSubscriptions", fields: [giftedToClientId], references: [id], onDelete: SetNull)
+  tariff          Tariff?              @relation("SubscriptionTariff", fields: [tariffId], references: [id], onDelete: SetNull)
+  autoRenewTariff Tariff?              @relation("SubscriptionAutoRenewTariff", fields: [autoRenewTariffId], references: [id], onDelete: SetNull)
+  trial           Trial?               @relation(fields: [trialId], references: [id], onDelete: SetNull)
+  giftCodes       GiftCode[]           @relation("GiftCodeSubscription")
+  payments        Payment[]            @relation("PaymentSubscription")
+  components      RemnawaveComponent[]
 
   @@unique([ownerId, subscriptionIndex])
   @@index([ownerId])
@@ -1044,7 +1059,38 @@ model Subscription {
   @@index([trialId])
   @@index([autoRenewEnabled])
   @@index([expireAt])
+  @@index([syncStatus, syncRequiredAt])
   @@map("subscriptions")
+}
+
+/// Один управляемый пользователь Remnawave внутри логической Subscription.
+/// Поведение задаётся данными компонента; key не используется для ветвления lifecycle-логики.
+model RemnawaveComponent {
+  id                 String    @id @default(cuid())
+  subscriptionId     String    @map("subscription_id")
+  key                String
+  adminName          String    @map("admin_name")
+  required           Boolean   @default(false)
+  mergeOrder         Int       @default(0) @map("merge_order")
+  remnawaveUuid      String?   @unique @map("remnawave_uuid")
+  upstreamShortUuid  String?   @map("upstream_short_uuid")
+  internalSquadUuids String[]  @map("internal_squad_uuids")
+  trafficLimitBytes  BigInt?   @map("traffic_limit_bytes")
+  trafficResetMode   String    @default("no_reset") @map("traffic_reset_mode")
+  showQuotaToClient  Boolean   @default(false) @map("show_quota_to_client")
+  quotaDisplayName   String?   @map("quota_display_name")
+  lastKnownStatus    String?   @map("last_known_status")
+  lastSyncError      String?   @map("last_sync_error") @db.Text
+  lastSyncedAt       DateTime? @map("last_synced_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriptionId, key])
+  @@unique([subscriptionId, mergeOrder])
+  @@index([subscriptionId])
+  @@map("remnawave_components")
 }
 
 // T15 (11.05.2026, WolfVPN): пресет пробной подписки.
@@ -1086,12 +1132,63 @@ model Trial {
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
-  tariff        Tariff?            @relation(fields: [tariffId], references: [id], onDelete: SetNull)
-  usages        ClientTrialUsage[]
-  subscriptions Subscription[]
+  tariff              Tariff?                   @relation(fields: [tariffId], references: [id], onDelete: SetNull)
+  usages              ClientTrialUsage[]
+  subscriptions       Subscription[]
+  remnawaveComponents TrialRemnawaveComponent[]
 
   @@index([tariffId])
   @@map("trials")
+}
+
+/// Data-driven шаблон компонента тарифа. WhiteList — только одна возможная конфигурация.
+model TariffRemnawaveComponent {
+  id                 String   @id @default(cuid())
+  tariffId           String   @map("tariff_id")
+  key                String
+  adminName          String   @map("admin_name")
+  required           Boolean  @default(false)
+  mergeOrder         Int      @default(0) @map("merge_order")
+  internalSquadUuids String[] @map("internal_squad_uuids")
+  trafficLimitBytes  BigInt?  @map("traffic_limit_bytes")
+  trafficResetMode   String   @default("no_reset") @map("traffic_reset_mode")
+  showQuotaToClient  Boolean  @default(false) @map("show_quota_to_client")
+  quotaDisplayName   String?  @map("quota_display_name")
+  enabled            Boolean  @default(true)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  tariff Tariff @relation(fields: [tariffId], references: [id], onDelete: Cascade)
+
+  @@unique([tariffId, key])
+  @@unique([tariffId, mergeOrder])
+  @@index([tariffId])
+  @@map("tariff_remnawave_components")
+}
+
+/// Шаблон компонента standalone trial. Trial с tariffId наследует шаблоны тарифа.
+model TrialRemnawaveComponent {
+  id                 String   @id @default(cuid())
+  trialId            String   @map("trial_id")
+  key                String
+  adminName          String   @map("admin_name")
+  required           Boolean  @default(false)
+  mergeOrder         Int      @default(0) @map("merge_order")
+  internalSquadUuids String[] @map("internal_squad_uuids")
+  trafficLimitBytes  BigInt?  @map("traffic_limit_bytes")
+  trafficResetMode   String   @default("no_reset") @map("traffic_reset_mode")
+  showQuotaToClient  Boolean  @default(false) @map("show_quota_to_client")
+  quotaDisplayName   String?  @map("quota_display_name")
+  enabled            Boolean  @default(true)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  trial Trial @relation(fields: [trialId], references: [id], onDelete: Cascade)
+
+  @@unique([trialId, key])
+  @@unique([trialId, mergeOrder])
+  @@index([trialId])
+  @@map("trial_remnawave_components")
 }
 
 // T15 (11.05.2026, WolfVPN): запись «клиент X активировал триал Y».

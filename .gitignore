@@ -1,0 +1,23 @@
+# Local and production secrets
+/.env
+/.env.*
+!/backend/.env.example
+!/bot/.env.example
+
+# Server-side backups and temporary copies
+/*.sql
+/**/*.bak-*
+/**/*.before-*
+
+# Dependencies and build output
+**/node_modules/
+**/dist/
+**/*.tsbuildinfo
+
+# Local indexes and worktrees
+/.codebase-memory/
+/.worktrees/
+
+# OS and editor metadata
+.DS_Store
+._*
