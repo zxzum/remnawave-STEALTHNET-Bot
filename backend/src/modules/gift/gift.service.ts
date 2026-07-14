@@ -27,6 +27,7 @@ import {
 import { getSystemConfig } from "../client/client.service.js";
 import { getNextSubscriptionIndex } from "../subscription/subscription.helpers.js";
 import { calcExtrasPrice } from "../tariff/extras-pricing.js";
+import { synchronizeSubscriptionComponents } from "../subscription/subscription-components.service.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -308,6 +309,10 @@ export async function createAdditionalSubscription(
     },
   });
 
+  await synchronizeSubscriptionComponents(subscription.id).catch((e) =>
+    console.error("[gift] component sync failed:", e),
+  );
+
   // если это primary-подписка (idx=0) — синкаем
   // legacy-поля Client.{remnawaveUuid,currentTariffId,currentPricePerDay} для обратной
   // совместимости старого кода (кабинет, mini-app, /api/client/me).
@@ -380,6 +385,10 @@ export async function activateForSelf(
       purchasedAsGift: false,
     },
   });
+
+  await synchronizeSubscriptionComponents(subscriptionId).catch((error) =>
+    console.error("[gift] component synchronization failed after self activation:", error),
+  );
 
   await logGiftEvent(ownerId, "ACTIVATED_SELF", subscriptionId, {
     tariffName: sub.tariff?.name ?? null,
@@ -778,6 +787,9 @@ export async function redeemGiftCode(
     });
     if (rebind.error) console.error("[gift] redeem: rebind remna tg/email failed:", rebind.error);
   }
+  await synchronizeSubscriptionComponents(giftCode.subscriptionId).catch((e) =>
+    console.error("[gift] redeem: component sync failed:", e),
+  );
 
   // Логируем для обеих сторон
   await logGiftEvent(giftCode.creatorId, "GIFT_SENT", giftCode.subscriptionId, {

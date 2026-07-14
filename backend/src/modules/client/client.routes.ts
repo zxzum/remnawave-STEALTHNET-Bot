@@ -32,7 +32,8 @@ import { renderEmailTemplate } from "../email-templates/email-templates.service.
 import { signClientPasswordResetToken, verifyClientPasswordResetToken } from "../auth/auth.service.js";
 import { createPlategaTransaction, isPlategaConfigured } from "../platega/platega.service.js";
 import { activateTariffForClient, activateTariffByPaymentId, findConvertibleSubscription, computeConvertedDays } from "../tariff/tariff-activation.service.js";
-import { upsertPrimarySubscription, upsertSubscriptionByRemnaUuid } from "../subscription/subscription.helpers.js";
+import { upsertSubscriptionByRemnaUuid } from "../subscription/subscription.helpers.js";
+import { synchronizeSubscriptionComponents } from "../subscription/subscription-components.service.js";
 import { saveRedirectAndBuildUrl } from "../payment-redirect/payment-redirect.util.js";
 import { createProxySlotsByPaymentId } from "../proxy/proxy-slots-activation.service.js";
 import { createSingboxSlotsByPaymentId } from "../singbox/singbox-slots-activation.service.js";
@@ -2135,7 +2136,7 @@ clientRouter.post("/trial", async (req, res) => {
 
     const updateRes = await remnaUpdateUser({
       uuid: workingUuid,
-      expireAt,
+      expireAt: new Date(expireAt),
       trafficLimitBytes,
       hwidDeviceLimit,
       activeInternalSquads: [trialSquadUuid],
@@ -2149,11 +2150,20 @@ clientRouter.post("/trial", async (req, res) => {
 
     // материализуем подписку для триала в ПЕРВЫЙ СВОБОДНЫЙ
     // слот (0, 1, 2…). Если триал переактивируется на том же Remna-юзере — UPDATE, не дубль.
-    await upsertSubscriptionByRemnaUuid(client.id, {
+    const trialSubscription = await upsertSubscriptionByRemnaUuid(client.id, {
       remnawaveUuid: workingUuid,
+      expireAt: new Date(expireAt),
       // Триал не привязан к конкретному тарифу — tariffId=null.
       // trialId здесь null (триал из system config, не из таблицы Trial).
-    }).catch((e) => console.error("[trial] upsertSubscriptionByRemnaUuid failed:", e));
+    }).catch((e) => {
+      console.error("[trial] upsertSubscriptionByRemnaUuid failed:", e);
+      return null;
+    });
+    if (trialSubscription) {
+      await synchronizeSubscriptionComponents(trialSubscription.id).catch((e) =>
+        console.error("[trial] component synchronization failed:", e),
+      );
+    }
   } else {
     let existingUuid: string | null = null;
     let currentExpireAt: Date | null = null;
@@ -2225,9 +2235,18 @@ clientRouter.post("/trial", async (req, res) => {
     });
 
     // подписка для триала в первый свободный слот.
-    await upsertSubscriptionByRemnaUuid(client.id, {
+    const trialSubscription = await upsertSubscriptionByRemnaUuid(client.id, {
       remnawaveUuid: existingUuid,
-    }).catch((e) => console.error("[trial] upsertSubscriptionByRemnaUuid failed:", e));
+      expireAt: new Date(expireAt),
+    }).catch((e) => {
+      console.error("[trial] upsertSubscriptionByRemnaUuid failed:", e);
+      return null;
+    });
+    if (trialSubscription) {
+      await synchronizeSubscriptionComponents(trialSubscription.id).catch((e) =>
+        console.error("[trial] component synchronization failed:", e),
+      );
+    }
 
     // уведомление админам в TG-группу: активирован legacy-триал (best-effort).
     import("../notification/telegram-notify.service.js")
@@ -7697,5 +7716,3 @@ publicConfigRouter.get("/singbox-tariffs", async (req, res) => {
     return res.status(500).json({ message: "Ошибка загрузки тарифов Sing-box" });
   }
 });
-
-

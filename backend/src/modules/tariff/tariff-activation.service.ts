@@ -19,6 +19,7 @@ import {
 import { createAdditionalSubscription, deleteSubscription } from "../gift/gift.service.js";
 import { getSystemConfig } from "../client/client.service.js";
 import { upsertSubscriptionByRemnaUuid } from "../subscription/subscription.helpers.js";
+import { synchronizeSubscriptionComponents } from "../subscription/subscription-components.service.js";
 
 export type ActivationResult =
   | { ok: true; /** дни, добавленные pro-rata конвертацией остатка (режим convert) */ convertedDays?: number }
@@ -531,7 +532,7 @@ export async function activateTariffForClient(
   // когда клиент впервые покупает после удаления primary, или просто покупает первый тариф.
   const finalUuid = await prisma.client.findUnique({ where: { id: client.id }, select: { remnawaveUuid: true } }).then((c) => c?.remnawaveUuid ?? null);
   if (finalUuid) {
-    await upsertSubscriptionByRemnaUuid(client.id, {
+    const materialized = await upsertSubscriptionByRemnaUuid(client.id, {
       remnawaveUuid: finalUuid,
       ...(tariff.id ? { tariffId: tariff.id } : {}),
       trialId: null,
@@ -539,7 +540,15 @@ export async function activateTariffForClient(
       currentPricePerDay: newPricePerDay > 0 ? newPricePerDay : null,
       // кешируем дату истечения для broadcast-фильтра.
       ...(finalExpireAt ? { expireAt: new Date(finalExpireAt) } : {}),
-    }).catch((e) => console.error("[tariff-activation] upsertSubscriptionByRemnaUuid failed:", e));
+    }).catch((e) => {
+      console.error("[tariff-activation] upsertSubscriptionByRemnaUuid failed:", e);
+      return null;
+    });
+    if (materialized) {
+      await synchronizeSubscriptionComponents(materialized.id).catch((e) =>
+        console.error("[tariff-activation] component sync failed:", e),
+      );
+    }
   }
 
   // Синхронизируем autoRenewTariffId с купленным тарифом + сохраняем priceOption.
@@ -794,6 +803,10 @@ export async function extendSecondarySubscription(
       } : {}),
     },
   }).catch(() => {});
+
+  await synchronizeSubscriptionComponents(sec.id).catch((e) =>
+    console.error("[extendSecondarySubscription] component sync failed:", e),
+  );
 
   // юзер выбрал «без устройств» — лимит уже выставлен выше (included + новые extras,
   // старые обнулены в счётчиках), остаётся кикнуть HWID-устройства сверх нового лимита.
