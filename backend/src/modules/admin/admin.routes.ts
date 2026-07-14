@@ -783,6 +783,7 @@ adminRouter.get("/tariff-categories", async (_req, res) => {
           orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
           include: {
             priceOptions: { orderBy: [{ sortOrder: "asc" }, { durationDays: "asc" }] },
+            remnawaveComponents: { orderBy: { mergeOrder: "asc" } },
           },
         },
       },
