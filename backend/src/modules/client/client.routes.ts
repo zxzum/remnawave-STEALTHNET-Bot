@@ -33,8 +33,14 @@ import { signClientPasswordResetToken, verifyClientPasswordResetToken } from "..
 import { createPlategaTransaction, isPlategaConfigured } from "../platega/platega.service.js";
 import { activateTariffForClient, activateTariffByPaymentId, findConvertibleSubscription, computeConvertedDays } from "../tariff/tariff-activation.service.js";
 import { buildPublicSubscriptionUrl, upsertSubscriptionByRemnaUuid } from "../subscription/subscription.helpers.js";
-import { synchronizeSubscriptionComponents } from "../subscription/subscription-components.service.js";
+import {
+  componentQuotaFromRemna,
+  mergeComponentDevices,
+  subscriptionRemnawaveUuids,
+  synchronizeSubscriptionComponents,
+} from "../subscription/subscription-components.service.js";
 import { replaceRemnaSubscriptionUrlInPlace } from "../subscription/composite-subscription.js";
+import { removeAllExtraDevicesForSub } from "../subscription/extras.helper.js";
 import { saveRedirectAndBuildUrl } from "../payment-redirect/payment-redirect.util.js";
 import { createProxySlotsByPaymentId } from "../proxy/proxy-slots-activation.service.js";
 import { createSingboxSlotsByPaymentId } from "../singbox/singbox-slots-activation.service.js";
@@ -1258,6 +1264,26 @@ clientRouter.use("/auth", clientAuthRouter);
 function publicSubscriptionUrlForRequest(req: Request, token: string, configuredBaseUrl?: string | null): string {
   const baseUrl = configuredBaseUrl?.trim() || `${req.protocol}://${req.get("host") ?? "localhost"}`;
   return buildPublicSubscriptionUrl(baseUrl, token);
+}
+
+type ClientComponentQuotaSource = {
+  key: string;
+  adminName: string;
+  remnawaveUuid: string | null;
+  trafficLimitBytes: bigint | null;
+  trafficResetMode: string;
+  showQuotaToClient: boolean;
+  quotaDisplayName: string | null;
+};
+
+async function loadVisibleComponentQuotas(components: ClientComponentQuotaSource[]) {
+  return Promise.all(components
+    .filter((component) => component.showQuotaToClient && component.remnawaveUuid)
+    .map(async (component) => {
+      const result = await remnaGetUser(component.remnawaveUuid!);
+      const quota = componentQuotaFromRemna(component, result.data);
+      return result.error ? { ...quota, status: "UNAVAILABLE" } : quota;
+    }));
 }
 
 // ЮMoney OAuth callback — без авторизации клиента (редирект с ЮMoney)
@@ -2850,7 +2876,19 @@ clientRouter.get("/subscription", async (req, res) => {
   // EXPIRED Remna-юзера, тогда как subscriptions хранит актуального). Бот берёт из subscriptions — кабинет теперь тоже.
   const rootSub = await prisma.subscription.findFirst({
     where: { ownerId: client.id, subscriptionIndex: 0, remnawaveUuid: { not: null } },
-    select: { remnawaveUuid: true, publicSubscriptionToken: true, trialId: true, expireAt: true, tariff: { select: { name: true } }, trial: { select: { name: true, convertEnabled: true } } },
+    select: {
+      remnawaveUuid: true,
+      publicSubscriptionToken: true,
+      trialId: true,
+      expireAt: true,
+      tariff: { select: { name: true } },
+      trial: { select: { name: true, convertEnabled: true } },
+      components: {
+        where: { showQuotaToClient: true },
+        orderBy: { mergeOrder: "asc" },
+        select: { key: true, adminName: true, remnawaveUuid: true, trafficLimitBytes: true, trafficResetMode: true, showQuotaToClient: true, quotaDisplayName: true },
+      },
+    },
   });
   const effectiveUuid = rootSub?.remnawaveUuid ?? client.remnawaveUuid;
   if (!effectiveUuid) {
@@ -3006,6 +3044,7 @@ clientRouter.get("/subscription", async (req, res) => {
     isTrial: Boolean(rootSub?.trialId),
     trialName: rootSub?.trialId ? (rootSub.trial?.name ?? null) : null,
     trialConvertEnabled: rootSub?.trialId ? (rootSub.trial?.convertEnabled ?? true) : true,
+    componentQuotas: await loadVisibleComponentQuotas(rootSub?.components ?? []),
   });
 });
 
@@ -3087,6 +3126,7 @@ clientRouter.get("/subscription/all", async (req, res) => {
     trialConvertEnabled: boolean;
     /** конвертация разрешена в любой тариф. */
     trialConvertAllTariffs: boolean;
+    componentQuotas: Awaited<ReturnType<typeof loadVisibleComponentQuotas>>;
   };
 
   const allSubs = await prisma.subscription.findMany({
@@ -3106,6 +3146,11 @@ clientRouter.get("/subscription/all", async (req, res) => {
       autoRenewEnabled: true,
       extraDevices: true,
       extraDevicesMonthlyPrice: true,
+      components: {
+        where: { showQuotaToClient: true },
+        orderBy: { mergeOrder: "asc" },
+        select: { key: true, adminName: true, remnawaveUuid: true, trafficLimitBytes: true, trafficResetMode: true, showQuotaToClient: true, quotaDisplayName: true },
+      },
       tariff: { select: { id: true, name: true, menuEmoji: true } },
       trial: { select: { name: true, convertEnabled: true, convertAllTariffs: true, convertTariffIds: true } },
     },
@@ -3161,6 +3206,7 @@ clientRouter.get("/subscription/all", async (req, res) => {
       trialName: sub.trialId ? (sub.trial?.name ?? null) : null,
       trialConvertEnabled: sub.trialId ? (sub.trial?.convertEnabled ?? true) : true,
       trialConvertAllTariffs: sub.trialId ? (sub.trial?.convertAllTariffs ?? false) : false,
+      componentQuotas: await loadVisibleComponentQuotas(sub.components),
     });
   }
 
@@ -3397,79 +3443,33 @@ clientRouter.post("/subscription/:type/:id/remove-extra-devices", async (req, re
   if (sub.ownerId !== clientId && sub.giftedToClientId !== clientId) {
     return res.status(403).json({ message: "Нет доступа" });
   }
-  if (!sub.remnawaveUuid) return res.status(400).json({ message: "Подписка не привязана к Remnawave" });
   if ((sub.extraDevices ?? 0) === 0) {
     return res.status(400).json({ message: "У этой подписки нет докупленных устройств" });
   }
-
-  const tariff = sub.tariffId
-    ? await prisma.tariff.findUnique({ where: { id: sub.tariffId }, select: { includedDevices: true, deviceLimit: true } })
-    : null;
-  const includedDevices = tariff?.includedDevices ?? tariff?.deviceLimit ?? 1;
-
-  // Список активных HWID — вариант Б: жёстко удалить лишние.
-  let removedHwids = 0;
-  try {
-    const devicesRes = await remnaGetUserHwidDevices(sub.remnawaveUuid);
-    const devicesData = devicesRes.data as { response?: { devices?: Array<{ hwid: string; createdAt?: string }> } } | undefined;
-    const activeDevices = devicesData?.response?.devices ?? [];
-    if (activeDevices.length > includedDevices) {
-      // Сортируем по createdAt asc — старые удаляем первыми, новые сохраняем.
-      const sorted = [...activeDevices].sort((a, b) => {
-        const aT = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-        const bT = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-        return aT - bT;
-      });
-      const toRemove = sorted.slice(0, activeDevices.length - includedDevices);
-      for (const dev of toRemove) {
-        await remnaDeleteUserHwidDevice(sub.remnawaveUuid, dev.hwid).catch((e) => {
-          console.error("[remove-extra-devices] kick HWID failed:", dev.hwid, e);
-        });
-        removedHwids += 1;
-      }
-    }
-  } catch (e) {
-    console.error("[remove-extra-devices] devices kick error:", e);
-  }
-
-  // Уменьшаем лимит в Remna до базы.
-  const updateRes = await remnaUpdateUser({
-    uuid: sub.remnawaveUuid,
-    hwidDeviceLimit: includedDevices,
-  });
-  if (updateRes.error) {
-    return res.status(updateRes.status >= 400 ? updateRes.status : 500).json({ message: updateRes.error });
-  }
-
-  // Обнуляем счётчик + monthlyPrice в БД.
-  await prisma.subscription.update({
-    where: { id: sub.id },
-    data: { extraDevices: 0, extraDevicesMonthlyPrice: 0 },
-  });
-
-  return res.json({
-    ok: true,
-    extraDevicesRemoved: sub.extraDevices ?? 0,
-    hwidKicked: removedHwids,
-    newDeviceLimit: includedDevices,
-  });
+  const result = await removeAllExtraDevicesForSub(sub.id);
+  if (!result.ok) return res.status(502).json({ message: result.error ?? "Не удалось обновить устройства" });
+  return res.json(result);
 });
 
 /** GET /api/client/devices — список устройств (HWID) пользователя в Remna */
 clientRouter.get("/devices", async (req, res) => {
   const client = (req as unknown as { client: { id: string; remnawaveUuid: string | null } }).client;
-  if (!client.remnawaveUuid) {
+  const primary = await prisma.subscription.findUnique({
+    where: { ownerId_subscriptionIndex: { ownerId: client.id, subscriptionIndex: 0 } },
+    select: { remnawaveUuid: true, components: { select: { remnawaveUuid: true, mergeOrder: true } } },
+  });
+  const uuids = subscriptionRemnawaveUuids(primary ?? { remnawaveUuid: client.remnawaveUuid });
+  if (!uuids.length) {
     return res.json({ total: 0, devices: [] });
   }
-  const result = await remnaGetUserHwidDevices(client.remnawaveUuid);
-  if (result.error) {
-    return res.status(result.status >= 500 ? 503 : 400).json({ message: result.error });
+  const results = await Promise.all(uuids.map((uuid) => remnaGetUserHwidDevices(uuid)));
+  const successful = results.filter((result) => !result.error && result.data).map((result) => result.data);
+  if (!successful.length) {
+    const error = results[0];
+    return res.status((error?.status ?? 500) >= 500 ? 503 : 400).json({ message: error?.error ?? "Не удалось получить устройства" });
   }
-  const data = result.data as { response?: { total?: number; devices?: Array<{ hwid: string; platform?: string; deviceModel?: string; createdAt?: string }> } } | undefined;
-  const resp = data?.response;
-  const devices = Array.isArray(resp?.devices) ? resp.devices : [];
-  const total = typeof resp?.total === "number" ? resp.total : devices.length;
-  return res.json({ total, devices });
+  const devices = mergeComponentDevices(successful);
+  return res.json({ total: devices.length, devices });
 });
 
 // схема расширена subscriptionType/subscriptionId — теперь устройство
@@ -3488,63 +3488,46 @@ clientRouter.post("/devices/delete", async (req, res) => {
   const body = deleteDeviceSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Проверьте введённые данные", errors: body.error.flatten() });
 
-  // Определяем UUID подписки откуда удалять.
-  // резолвим uuid ВСЕГДА по subscriptionId, если он передан
-  // (бот шлёт его и для root, и для secondary). Раньше root-ветка брала client.remnawaveUuid —
-  // после унификации это legacy-поле рассинхронено с subscriptions[idx0].remnawaveUuid у 18560
-  // клиентов → Remna отвечал "HWID device not found" и устройство не удалялось.
-  let targetUuid: string | null = null;
+  let targetSubscriptions: Array<{
+    remnawaveUuid: string | null;
+    components: Array<{ remnawaveUuid: string | null; mergeOrder: number }>;
+  }> = [];
   if (body.data.subscriptionId) {
-    // Удаление из конкретной подписки (root или secondary — едины после унификации). Проверяем ownership.
     const sub = await prisma.subscription.findUnique({
       where: { id: body.data.subscriptionId },
-      select: { ownerId: true, giftedToClientId: true, remnawaveUuid: true },
+      select: {
+        ownerId: true,
+        giftedToClientId: true,
+        remnawaveUuid: true,
+        components: { select: { remnawaveUuid: true, mergeOrder: true } },
+      },
     });
     if (!sub || (sub.ownerId !== clientId && sub.giftedToClientId !== clientId)) {
       return res.status(404).json({ message: "Подписка не найдена" });
     }
-    if (!sub.remnawaveUuid) {
-      return res.status(400).json({ message: "Подписка не привязана к VPN" });
-    }
-    targetUuid = sub.remnawaveUuid;
+    targetSubscriptions = [sub];
   } else {
-    // Back-compat: старые версии бота шлют только hwid без subscriptionId → root-поле клиента.
-    if (!client.remnawaveUuid) {
-      return res.status(400).json({ message: "Подписка не привязана" });
-    }
-    targetUuid = client.remnawaveUuid;
-  }
-
-  // Если subscriptionType не задан явно — попробуем удалить со всех подписок (best-effort).
-  // Это для back-compat: старые версии бота шлют только hwid, без указания подписки.
-  if (!body.data.subscriptionType) {
-    // Сначала root.
-    const rootResult = await remnaDeleteUserHwidDevice(targetUuid, body.data.hwid);
-    if (!rootResult.error) {
-      return res.json({ ok: true, message: "Устройство удалено" });
-    }
-    // Если в root не нашли — перебираем все secondary этого клиента.
-    const secs = await prisma.subscription.findMany({
-      where: { ownerId: clientId, remnawaveUuid: { not: null } },
-      select: { remnawaveUuid: true },
+    targetSubscriptions = await prisma.subscription.findMany({
+      where: { OR: [{ ownerId: clientId }, { giftedToClientId: clientId, giftStatus: "GIFTED" }] },
+      select: {
+        remnawaveUuid: true,
+        components: { select: { remnawaveUuid: true, mergeOrder: true } },
+      },
     });
-    for (const s of secs) {
-      if (!s.remnawaveUuid) continue;
-      const r = await remnaDeleteUserHwidDevice(s.remnawaveUuid, body.data.hwid);
-      if (!r.error) {
-        return res.json({ ok: true, message: "Устройство удалено" });
-      }
-    }
-    // Нигде не нашли — возвращаем ошибку с понятным текстом.
-    return res.status(404).json({ message: "Устройство не найдено ни в одной из ваших подписок" });
   }
 
-  // subscriptionType задан → целенаправленное удаление.
-  const result = await remnaDeleteUserHwidDevice(targetUuid, body.data.hwid);
-  if (result.error) {
-    return res.status(result.status >= 500 ? 503 : 400).json({ message: result.error });
+  const uuids = [...new Set(targetSubscriptions.flatMap(subscriptionRemnawaveUuids))];
+  if (!uuids.length && !body.data.subscriptionId && client.remnawaveUuid) uuids.push(client.remnawaveUuid);
+  if (!uuids.length) return res.status(400).json({ message: "Подписка не привязана к VPN" });
+
+  // Один логический HWID удаляется из каждого Remnawave-компонента подписки.
+  const results = await Promise.all(uuids.map((uuid) => remnaDeleteUserHwidDevice(uuid, body.data.hwid)));
+  if (results.some((result) => !result.error)) {
+    return res.json({ ok: true, message: "Устройство удалено" });
   }
-  return res.json({ ok: true, message: "Устройство удалено" });
+  const upstreamFailure = results.find((result) => result.status >= 500);
+  if (upstreamFailure) return res.status(503).json({ message: upstreamFailure.error });
+  return res.status(404).json({ message: "Устройство не найдено ни в одной из ваших подписок" });
 });
 
 /**
@@ -3573,22 +3556,6 @@ clientRouter.get("/devices/all", async (req, res) => {
   };
   const items: DeviceItem[] = [];
 
-  const extractDevices = (data: unknown): { hwid: string; platform?: string; deviceModel?: string; appName?: string; createdAt?: string }[] => {
-    const raw = data as { response?: { devices?: Record<string, unknown>[] } } | undefined;
-    const devs = Array.isArray(raw?.response?.devices) ? raw.response.devices : [];
-    return devs.map((d) => {
-      const obj = d as Record<string, unknown>;
-      const appName = (obj.appName ?? obj.clientName ?? obj.userAgent ?? obj.app ?? null) as string | null;
-      return {
-        hwid: String(obj.hwid ?? ""),
-        platform: obj.platform ? String(obj.platform) : undefined,
-        deviceModel: obj.deviceModel ? String(obj.deviceModel) : undefined,
-        appName: appName?.toString().trim() || undefined,
-        createdAt: obj.createdAt ? String(obj.createdAt) : undefined,
-      };
-    });
-  };
-
   // ВСЕ подписки клиента — из Subscription.
   // legacy `client.remnawaveUuid` не используется. Дедуп по UUID — на случай дубля записей.
   const subs = await prisma.subscription.findMany({
@@ -3600,24 +3567,24 @@ clientRouter.get("/devices/all", async (req, res) => {
         { ownerId: clientId, purchasedAsGift: false, giftStatus: "GIFTED" },
         { giftedToClientId: clientId, giftStatus: "GIFTED" },
       ],
-      remnawaveUuid: { not: null },
     },
     select: {
       id: true,
       remnawaveUuid: true,
+      components: { select: { remnawaveUuid: true, mergeOrder: true } },
       subscriptionIndex: true,
       tariff: { select: { name: true } },
     },
     orderBy: { subscriptionIndex: "asc" },
   });
-  const seenUuids = new Set<string>();
   for (const sub of subs) {
-    if (!sub.remnawaveUuid) continue;
-    if (seenUuids.has(sub.remnawaveUuid)) continue;
-    seenUuids.add(sub.remnawaveUuid);
-    const r = await remnaGetUserHwidDevices(sub.remnawaveUuid);
-    if (r.error || !r.data) continue;
-    for (const d of extractDevices(r.data)) {
+    const results = await Promise.all(
+      subscriptionRemnawaveUuids(sub).map((uuid) => remnaGetUserHwidDevices(uuid)),
+    );
+    const devices = mergeComponentDevices(
+      results.filter((result) => !result.error && result.data).map((result) => result.data),
+    );
+    for (const d of devices) {
       items.push({
         ...d,
         subscriptionType: sub.subscriptionIndex === 0 ? "root" : "secondary",

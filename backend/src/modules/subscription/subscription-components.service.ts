@@ -12,6 +12,93 @@ type ComponentOperationTarget = {
   mergeOrder: number;
 };
 
+export function subscriptionRemnawaveUuids(subscription: {
+  remnawaveUuid?: string | null;
+  components?: Array<{ remnawaveUuid: string | null; mergeOrder: number }>;
+}): string[] {
+  const ordered = [...(subscription.components ?? [])].sort((a, b) => a.mergeOrder - b.mergeOrder);
+  const values = [subscription.remnawaveUuid, ...ordered.map((component) => component.remnawaveUuid)];
+  return [...new Set(values.filter((uuid): uuid is string => typeof uuid === "string" && uuid.length > 0))];
+}
+
+export type MergedHwidDevice = {
+  hwid: string;
+  platform?: string;
+  deviceModel?: string;
+  appName?: string;
+  createdAt?: string;
+};
+
+export function mergeComponentDevices(payloads: unknown[]): MergedHwidDevice[] {
+  const devices = new Map<string, MergedHwidDevice>();
+  for (const payload of payloads) {
+    const response = payload && typeof payload === "object"
+      ? (payload as { response?: { devices?: unknown[] } }).response
+      : undefined;
+    for (const raw of Array.isArray(response?.devices) ? response.devices : []) {
+      if (!raw || typeof raw !== "object") continue;
+      const item = raw as Record<string, unknown>;
+      const hwid = typeof item.hwid === "string" ? item.hwid : "";
+      if (!hwid) continue;
+      const appName = item.appName ?? item.clientName ?? item.userAgent ?? item.app;
+      const normalized: MergedHwidDevice = {
+        hwid,
+        ...(item.platform ? { platform: String(item.platform) } : {}),
+        ...(item.deviceModel ? { deviceModel: String(item.deviceModel) } : {}),
+        ...(appName ? { appName: String(appName).trim() } : {}),
+        ...(item.createdAt ? { createdAt: String(item.createdAt) } : {}),
+      };
+      devices.set(hwid, { ...(devices.get(hwid) ?? {}), ...normalized });
+    }
+  }
+  return [...devices.values()];
+}
+
+function bigintFromUnknown(value: unknown): bigint {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return BigInt(Math.max(0, Math.trunc(value)));
+  if (typeof value === "string" && /^\d+$/.test(value)) return BigInt(value);
+  return 0n;
+}
+
+export function componentQuotaFromRemna(
+  component: {
+    key: string;
+    adminName?: string | null;
+    quotaDisplayName?: string | null;
+    trafficLimitBytes: bigint | null;
+    trafficResetMode: string;
+  },
+  payload: unknown,
+  now = new Date(),
+) {
+  const root = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  const inner = (root.response && typeof root.response === "object" ? root.response : root) as Record<string, unknown>;
+  const traffic = (inner.userTraffic && typeof inner.userTraffic === "object" ? inner.userTraffic : {}) as Record<string, unknown>;
+  const limit = component.trafficLimitBytes ?? bigintFromUnknown(inner.trafficLimitBytes);
+  const used = bigintFromUnknown(traffic.usedTrafficBytes ?? inner.usedTrafficBytes);
+  let nextResetAt: string | null = null;
+  if (component.trafficResetMode === "monthly") {
+    nextResetAt = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
+  } else if (component.trafficResetMode === "monthly_rolling") {
+    const rawBase = typeof inner.lastTrafficResetAt === "string" ? new Date(inner.lastTrafficResetAt) : now;
+    if (!Number.isNaN(rawBase.getTime())) {
+      rawBase.setUTCMonth(rawBase.getUTCMonth() + 1);
+      nextResetAt = rawBase.toISOString();
+    }
+  }
+  return {
+    key: component.key,
+    displayName: component.quotaDisplayName?.trim() || component.adminName?.trim() || component.key,
+    limitBytes: limit.toString(),
+    usedBytes: used.toString(),
+    remainingBytes: (limit > used ? limit - used : 0n).toString(),
+    resetMode: component.trafficResetMode,
+    nextResetAt,
+    status: typeof inner.status === "string" ? inner.status : null,
+  };
+}
+
 export async function runComponentOperations<T extends ComponentOperationTarget>(
   components: T[],
   operation: (component: T) => Promise<void>,

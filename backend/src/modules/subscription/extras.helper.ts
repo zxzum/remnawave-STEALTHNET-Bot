@@ -16,11 +16,13 @@
  */
 import { prisma } from "../../db.js";
 import {
-  remnaGetUser,
   remnaGetUserHwidDevices,
   remnaDeleteUserHwidDevice,
-  remnaUpdateUser,
 } from "../remna/remna.client.js";
+import {
+  subscriptionRemnawaveUuids,
+  synchronizeSubscriptionComponents,
+} from "./subscription-components.service.js";
 
 export interface RemoveExtrasResult {
   ok: boolean;
@@ -63,15 +65,36 @@ export async function kickExcessHwidDevices(remnawaveUuid: string, keepLimit: nu
   return removedHwids;
 }
 
+export async function kickExcessSubscriptionHwidDevices(subId: string, keepLimit: number): Promise<number> {
+  const subscription = await prisma.subscription.findUnique({
+    where: { id: subId },
+    select: {
+      remnawaveUuid: true,
+      components: { select: { remnawaveUuid: true, mergeOrder: true } },
+    },
+  });
+  if (!subscription) return 0;
+  return Math.max(0, ...await Promise.all(
+    subscriptionRemnawaveUuids(subscription).map((uuid) => kickExcessHwidDevices(uuid, keepLimit)),
+  ));
+}
+
 export async function removeAllExtraDevicesForSub(subId: string): Promise<RemoveExtrasResult> {
   const sub = await prisma.subscription.findUnique({
     where: { id: subId },
-    select: { id: true, remnawaveUuid: true, tariffId: true, extraDevices: true },
+    select: {
+      id: true,
+      remnawaveUuid: true,
+      tariffId: true,
+      extraDevices: true,
+      components: { select: { remnawaveUuid: true, mergeOrder: true } },
+    },
   });
   if (!sub) {
     return { ok: false, extraDevicesRemoved: 0, hwidKicked: 0, newDeviceLimit: 0, error: "подписка не найдена" };
   }
-  if (!sub.remnawaveUuid) {
+  const componentUuids = subscriptionRemnawaveUuids(sub);
+  if (!componentUuids.length) {
     return { ok: false, extraDevicesRemoved: 0, hwidKicked: 0, newDeviceLimit: 0, error: "подписка не привязана к панели" };
   }
   if ((sub.extraDevices ?? 0) === 0) {
@@ -88,34 +111,23 @@ export async function removeAllExtraDevicesForSub(subId: string): Promise<Remove
   const includedDevices = tariff?.includedDevices ?? tariff?.deviceLimit ?? 1;
 
   // Список активных HWID — вариант Б: жёстко удалить лишние.
-  const removedHwids = await kickExcessHwidDevices(sub.remnawaveUuid, includedDevices);
-
-  // Уменьшаем лимит в Remna до базы.
-  const updateRes = await remnaUpdateUser({
-    uuid: sub.remnawaveUuid,
-    hwidDeviceLimit: includedDevices,
-  });
-  if (updateRes.error) {
-    return {
-      ok: false,
-      extraDevicesRemoved: 0,
-      hwidKicked: removedHwids,
-      newDeviceLimit: 0,
-      error: updateRes.error,
-    };
-  }
+  const removedHwids = Math.max(0, ...await Promise.all(
+    componentUuids.map((uuid) => kickExcessHwidDevices(uuid, includedDevices)),
+  ));
 
   // Обнуляем счётчик + monthlyPrice в БД.
   await prisma.subscription.update({
     where: { id: sub.id },
     data: { extraDevices: 0, extraDevicesMonthlyPrice: 0 },
   });
+  const sync = await synchronizeSubscriptionComponents(sub.id);
 
   return {
-    ok: true,
+    ok: !sync.requiredFailure,
     extraDevicesRemoved: sub.extraDevices ?? 0,
     hwidKicked: removedHwids,
     newDeviceLimit: includedDevices,
+    ...(sync.requiredFailure ? { error: sync.failures.map((failure) => failure.error).join("; ") } : {}),
   };
 }
 
@@ -134,20 +146,18 @@ export async function applyDevicesToSubscription(subId: string, deviceCount: num
   }
   const sub = await prisma.subscription.findUnique({
     where: { id: subId },
-    select: { id: true, remnawaveUuid: true },
+    select: {
+      id: true,
+      remnawaveUuid: true,
+      extraDevices: true,
+      tariff: { select: { includedDevices: true, deviceLimit: true } },
+      components: { select: { remnawaveUuid: true, mergeOrder: true } },
+    },
   });
   if (!sub) return { ok: false, newDeviceLimit: 0, error: "подписка не найдена" };
-  if (!sub.remnawaveUuid) return { ok: false, newDeviceLimit: 0, error: "подписка не привязана к панели" };
-
-  const userRes = await remnaGetUser(sub.remnawaveUuid);
-  if (userRes.error) return { ok: false, newDeviceLimit: 0, error: userRes.error };
-  const u = userRes.data as Record<string, unknown> | null;
-  const inner = (u?.response ?? u) as Record<string, unknown> | undefined;
-  const current = typeof inner?.hwidDeviceLimit === "number" ? inner.hwidDeviceLimit : 0;
-  const newDevices = current + deviceCount;
-
-  const updateRes = await remnaUpdateUser({ uuid: sub.remnawaveUuid, hwidDeviceLimit: newDevices });
-  if (updateRes.error) return { ok: false, newDeviceLimit: 0, error: updateRes.error };
+  if (!subscriptionRemnawaveUuids(sub).length) return { ok: false, newDeviceLimit: 0, error: "подписка не привязана к панели" };
+  const includedDevices = sub.tariff?.includedDevices ?? sub.tariff?.deviceLimit ?? 1;
+  const newDevices = includedDevices + sub.extraDevices + deviceCount;
 
   await prisma.subscription.update({
     where: { id: sub.id },
@@ -156,5 +166,8 @@ export async function applyDevicesToSubscription(subId: string, deviceCount: num
       extraDevicesMonthlyPrice: { increment: Math.max(0, monthlyPrice) },
     },
   });
-  return { ok: true, newDeviceLimit: newDevices };
+  const sync = await synchronizeSubscriptionComponents(sub.id);
+  return sync.requiredFailure
+    ? { ok: false, newDeviceLimit: newDevices, error: sync.failures.map((failure) => failure.error).join("; ") }
+    : { ok: true, newDeviceLimit: newDevices };
 }

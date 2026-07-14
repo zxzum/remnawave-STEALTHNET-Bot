@@ -813,8 +813,8 @@ export async function extendSecondarySubscription(
   // НЕ зовём removeAllExtraDevicesForSub: он обнулил бы и только что докупленные extras.
   if (removeExtrasAfter) {
     try {
-      const { kickExcessHwidDevices } = await import("../subscription/extras.helper.js");
-      await kickExcessHwidDevices(sec.remnawaveUuid, hwidDeviceLimit);
+      const { kickExcessSubscriptionHwidDevices } = await import("../subscription/extras.helper.js");
+      await kickExcessSubscriptionHwidDevices(sec.id, hwidDeviceLimit);
     } catch (e) {
       console.error("[extendSecondarySubscription] removeExtrasAfter kick failed:", e);
     }
