@@ -17,6 +17,15 @@ import {
   resolveRemnawaveComponents,
   type ResolvedRemnawaveComponent,
 } from "./subscription.helpers.js";
+import {
+  componentQuotaFromRemna,
+  extractRemnawaveComponentSnapshot,
+} from "./subscription-components.service.js";
+import { getSystemConfig } from "../client/client.service.js";
+import {
+  isBrowserSubscriptionRequest,
+  renderPublicSubscriptionPage,
+} from "./public-subscription-page.js";
 
 export const publicSubscriptionRouter = Router();
 
@@ -61,6 +70,43 @@ publicSubscriptionRouter.get("/:publicSubscriptionToken", async (req, res) => {
   if (!main) return res.status(404).type("text/plain").send("Подписка не настроена");
 
   const client = detectSubscriptionClient(req.get("user-agent") ?? "");
+  if (isBrowserSubscriptionRequest(req.get("user-agent") ?? "", req.get("accept") ?? "")) {
+    const users = await Promise.all(components.map(async (component) => ({
+      component,
+      result: component.remnawaveUuid
+        ? await remnaGetUser(component.remnawaveUuid)
+        : { status: 404, error: "Remnawave component UUID is missing", data: undefined },
+    })));
+    const mainUser = users.find(({ component }) => component.id === main.id)?.result;
+    if (!mainUser?.data) {
+      return res.status(502).type("text/plain").send("Основная подписка временно недоступна");
+    }
+
+    const config = await getSystemConfig();
+    let pageConfig: unknown = null;
+    try { pageConfig = config.subscriptionPageConfig ? JSON.parse(config.subscriptionPageConfig) : null; } catch {}
+    const publicUrl = new URL(req.originalUrl, `${req.protocol}://${req.get("host")}`).toString();
+    const mainSnapshot = extractRemnawaveComponentSnapshot(mainUser.data);
+    const quotas = users
+      .filter(({ component }) => component.showQuotaToClient)
+      .map(({ component, result }) => ({
+        ...componentQuotaFromRemna(component, result.data),
+        ...(result.error ? { status: "UNAVAILABLE" } : {}),
+      }));
+    const title = subscription.trial?.name?.trim() || subscription.tariff?.name?.trim() || "Подписка STEALTHNET";
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Vary", "Accept, User-Agent");
+    return res.status(200).type("html").send(renderPublicSubscriptionPage({
+      publicUrl,
+      title,
+      status: mainSnapshot.status,
+      expireAt: subscription.expireAt?.toISOString() ?? mainSnapshot.expireAt,
+      mainStatus: mainSnapshot.status,
+      quotas,
+      config: pageConfig,
+    }));
+  }
+
   const requestedComponents = client.mergeMode === "base64-json"
     ? [main, ...components.filter((component) => component.id !== main.id)]
     : [main];
