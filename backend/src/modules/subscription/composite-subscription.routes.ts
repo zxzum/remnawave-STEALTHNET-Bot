@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   remnaFetchSubscription,
+  remnaGetHosts,
   remnaGetUser,
   type RemnaSubscriptionFetchResult,
 } from "../remna/remna.client.js";
@@ -23,6 +24,7 @@ import {
 } from "./subscription-components.service.js";
 import { getSystemConfig } from "../client/client.service.js";
 import {
+  availableHostNames,
   isBrowserSubscriptionRequest,
   renderPublicSubscriptionPage,
 } from "./public-subscription-page.js";
@@ -71,12 +73,15 @@ publicSubscriptionRouter.get("/:publicSubscriptionToken", async (req, res) => {
 
   const client = detectSubscriptionClient(req.get("user-agent") ?? "");
   if (isBrowserSubscriptionRequest(req.get("user-agent") ?? "", req.get("accept") ?? "")) {
-    const users = await Promise.all(components.map(async (component) => ({
-      component,
-      result: component.remnawaveUuid
-        ? await remnaGetUser(component.remnawaveUuid)
-        : { status: 404, error: "Remnawave component UUID is missing", data: undefined },
-    })));
+    const [users, hostsResult] = await Promise.all([
+      Promise.all(components.map(async (component) => ({
+        component,
+        result: component.remnawaveUuid
+          ? await remnaGetUser(component.remnawaveUuid)
+          : { status: 404, error: "Remnawave component UUID is missing", data: undefined },
+      }))),
+      remnaGetHosts().catch(() => ({ status: 502, error: "Remnawave hosts are unavailable", data: undefined })),
+    ]);
     const mainUser = users.find(({ component }) => component.id === main.id)?.result;
     if (!mainUser?.data) {
       return res.status(502).type("text/plain").send("Основная подписка временно недоступна");
@@ -98,6 +103,9 @@ publicSubscriptionRouter.get("/:publicSubscriptionToken", async (req, res) => {
     res.setHeader("Vary", "Accept, User-Agent");
     return res.status(200).type("html").send(renderPublicSubscriptionPage({
       publicUrl,
+      brandName: config.serviceName?.trim() || "STEALTHNET",
+      brandLogo: config.logo?.trim() || null,
+      hosts: availableHostNames(hostsResult.data, [...new Set(components.flatMap((component) => component.internalSquadUuids))]),
       title,
       status: mainSnapshot.status,
       expireAt: subscription.expireAt?.toISOString() ?? mainSnapshot.expireAt,

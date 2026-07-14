@@ -19,6 +19,9 @@ test("страница отображает квоты и все приложе�
   const publicUrl = "https://bot.example/api/sub/public-token";
   const html = render({
     publicUrl,
+    brandName: "Лазейка ВПН",
+    brandLogo: "data:image/png;base64,iVBORw0KGgo=",
+    hosts: ["🇷🇺 Москва", "🇫🇮 Финляндия"],
     title: "Стандарт <script>alert(1)</script>",
     status: "ACTIVE",
     expireAt: "2026-08-13T17:25:18.046Z",
@@ -34,6 +37,7 @@ test("страница отображает квоты и все приложе�
       status: "ACTIVE",
     }],
     config: {
+      brandingSettings: { title: "Не использовать" },
       platforms: {
         ios: {
           displayName: { ru: "iOS" },
@@ -68,6 +72,10 @@ test("страница отображает квоты и все приложе�
   });
 
   assert.match(html, /<!doctype html>/i);
+  assert.match(html, /<title>[^<]+Лазейка ВПН<\/title>/);
+  assert.match(html, /src="data:image\/png;base64,iVBORw0KGgo="/);
+  assert.doesNotMatch(html, /Не использовать/);
+  assert.match(html, /color-scheme:dark/);
   assert.match(html, /Обычная подписка/);
   assert.match(html, /Основной доступ/);
   assert.match(html, /Безлимит/);
@@ -77,6 +85,16 @@ test("страница отображает квоты и все приложе�
   assert.match(html, /Happ/);
   assert.match(html, /INCY/);
   assert.match(html, /Koala Clash/);
+  assert.match(html, /id="platform-select"/);
+  assert.match(html, /data-platform="ios"/);
+  assert.match(html, /data-app="happ"/);
+  assert.match(html, /data-guide-app="happ"/);
+  assert.match(html, /data-quick-app="happ"/);
+  assert.match(html, /visibilitychange/);
+  assert.match(html, /<details class="hosts"[^>]*>/);
+  assert.doesNotMatch(html, /<details class="hosts"[^>]* open/);
+  assert.match(html, /🇷🇺 Москва/);
+  assert.match(html, /🇫🇮 Финляндия/);
   assert.match(html, /happ:\/\/add\/https:\/\/bot\.example\/api\/sub\/public-token/);
   assert.match(html, /incy:\/\/add\/https:\/\/bot\.example\/api\/sub\/public-token/);
   assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
@@ -84,3 +102,16 @@ test("страница отображает квоты и все приложе�
   assert.doesNotMatch(html, /\/assets\//);
 });
 
+test("список хостов оставляет только активные доступные локации", () => {
+  assert.equal(typeof page.availableHostNames, "function");
+  const select = page.availableHostNames as (value: unknown, squads: string[]) => string[];
+
+  assert.deepEqual(select({ response: [
+    { remark: " Москва ", isDisabled: false, isHidden: false, excludedInternalSquads: [] },
+    { remark: "Москва", isDisabled: false, isHidden: false, excludedInternalSquads: [] },
+    { remark: "Выключен", isDisabled: true, isHidden: false, excludedInternalSquads: [] },
+    { remark: "Скрыт", isDisabled: false, isHidden: true, excludedInternalSquads: [] },
+    { remark: "Только WL", isDisabled: false, isHidden: false, excludedInternalSquads: [{ uuid: "main" }] },
+    { remark: "Недоступен", isDisabled: false, isHidden: false, excludedInternalSquads: ["main", { uuid: "wl" }] },
+  ] }, ["main", "wl"]), ["Москва", "Только WL"]);
+});

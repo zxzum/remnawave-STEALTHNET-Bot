@@ -69,7 +69,7 @@ Import `remnaGetHosts` and `availableHostNames`. Fetch users and hosts concurren
 
 Run: `npm test --prefix backend && npm run build --prefix backend && git diff --check`
 
-Expected: 39 tests pass, TypeScript exits 0, and diff check is clean.
+Expected: 38 tests pass, TypeScript exits 0, and diff check is clean.
 
 - [ ] **Step 3: Commit**
 
