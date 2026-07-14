@@ -722,6 +722,29 @@ export function AdminSecondarySubscriptionsPage() {
                   </div>
                 </div>
 
+                <div className="rounded-[1.5rem] bg-gradient-to-br from-background/80 to-background/40 backdrop-blur-xl border border-white/10 p-5 shadow-sm">
+                  <div className="flex items-center justify-between gap-3 mb-4">
+                    <h3 className="text-[11px] font-bold uppercase tracking-[0.2em] text-foreground/80">Синхронизация компонентов</h3>
+                    <span className={cn(
+                      "px-2.5 py-1 rounded-md text-[10px] font-bold uppercase",
+                      detailData.syncStatus === "SYNCED" ? "bg-emerald-500/15 text-emerald-500" : "bg-amber-500/15 text-amber-500",
+                    )}>{detailData.syncStatus ?? "SYNCED"}</span>
+                  </div>
+                  {detailData.syncError && <p className="mb-3 text-xs text-red-500">{detailData.syncError}</p>}
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {(detailData.components ?? []).map((component) => (
+                      <div key={component.id} className="rounded-xl border border-white/10 bg-foreground/[0.03] p-3 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold">{component.adminName}</span>
+                          <span className="text-[10px] text-muted-foreground">{component.required ? "обязательный" : "дополнительный"}</span>
+                        </div>
+                        <p className="mt-1 font-mono text-[10px] text-muted-foreground break-all">{component.remnawaveUuid ?? "UUID ожидает синхронизации"}</p>
+                        {component.lastSyncError && <p className="mt-2 text-red-500">{component.lastSyncError}</p>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="rounded-[1.5rem] bg-gradient-to-br from-background/80 to-background/40 backdrop-blur-xl border border-white/10 p-5 shadow-sm relative overflow-hidden group">
                   <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 blur-[40px] pointer-events-none rounded-full" />
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.25em] text-foreground/80 flex items-center gap-2.5 mb-5">

@@ -17,7 +17,8 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { Laptop, Download, Key, Copy, Check, ArrowRight, Smartphone, MonitorSmartphone, Apple, Tv, ExternalLink, Plus, Loader2 } from "lucide-react";
 import { useClientAuth } from "@/contexts/client-auth";
-import { api, type SubscriptionPageConfig } from "@/lib/api";
+import { api, type ComponentQuota, type SubscriptionPageConfig } from "@/lib/api";
+import { ComponentQuotaSummary } from "@/components/subscription/component-quota-summary";
 import { ConcentricRings } from "@/components/stealth/concentric-rings";
 import { WizardHeader } from "@/components/stealth/wizard-header";
 import { StadiumButton } from "@/components/stealth/stadium-button";
@@ -132,7 +133,7 @@ export function StealthSubscribe() {
   // мультиподписки. Грузим ВСЕ подписки клиента (единый код
   // для любой — без спецслучаев на «нулевую») и даём выбрать, какую настраивать.
   // ?sub=<id> (с дашборда) — предвыбор конкретной подписки.
-  const [subsList, setSubsList] = useState<{ id: string; label: string; emoji: string | null; url: string | null; isActive: boolean }[]>([]);
+  const [subsList, setSubsList] = useState<{ id: string; label: string; emoji: string | null; url: string | null; isActive: boolean; componentQuotas: ComponentQuota[] }[]>([]);
   const [selectedSubId, setSelectedSubId] = useState<string | null>(null);
   const [pageConfig, setPageConfig] = useState<SubscriptionPageConfig | null>(null);
   const [publicAppUrl, setPublicAppUrl] = useState<string>("");
@@ -178,6 +179,7 @@ export function StealthSubscribe() {
           emoji: it.tariffMenuEmoji ?? null,
           url: getSubscriptionUrl(it.subscription),
           isActive: !!expireAt && !Number.isNaN(expireAt.getTime()) && expireAt.getTime() > Date.now(),
+          componentQuotas: it.componentQuotas ?? [],
         };
       }).filter((s) => s.url);
       setSubsList(list);
@@ -254,6 +256,11 @@ export function StealthSubscribe() {
         totalSteps={3}
         onBack={step > 1 ? () => setStep(step - 1) : undefined}
         onClose={() => navigate("/cabinet/dashboard")}
+      />
+
+      <ComponentQuotaSummary
+        quotas={subsList.find((subscription) => subscription.id === selectedSubId)?.componentQuotas ?? []}
+        stealth
       />
 
       <AnimatePresence mode="wait">

@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, RefreshCw, Activity, Clock, FileText, ShieldOff, Play, CheckCircle2, AlertTriangle, XCircle, MinusCircle } from "lucide-react";
-import { diagnosticsApi, adminSecurityApi, type HealthResponse, type CronEntry } from "@/lib/admin-extras-api";
+import { diagnosticsApi, adminSecurityApi, type HealthResponse, type CronEntry, type CompositeSubscriptionMetrics } from "@/lib/admin-extras-api";
 import { fmtMsk } from "@/lib/datetime";
 
 const STATUS_META = {
@@ -27,10 +27,11 @@ export function AdminDiagnosticsPage() {
 
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [crons, setCrons] = useState<CronEntry[]>([]);
+  const [composite, setComposite] = useState<CompositeSubscriptionMetrics | null>(null);
   const [logs, setLogs] = useState("");
   const [logsFilter, setLogsFilter] = useState("");
   const [logsLines, setLogsLines] = useState(200);
-  const [loading, setLoading] = useState({ health: false, crons: false, logs: false });
+  const [loading, setLoading] = useState({ health: false, crons: false, composite: false, logs: false });
   const [triggeringCron, setTriggeringCron] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,7 +74,19 @@ export function AdminDiagnosticsPage() {
     }
   }, [token, logsLines, logsFilter]);
 
-  useEffect(() => { void loadHealth(); void loadCrons(); }, [loadHealth, loadCrons]);
+  const loadComposite = useCallback(async () => {
+    if (!token) return;
+    setLoading((l) => ({ ...l, composite: true }));
+    try {
+      setComposite(await diagnosticsApi.compositeSubscriptions(token));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading((l) => ({ ...l, composite: false }));
+    }
+  }, [token]);
+
+  useEffect(() => { void loadHealth(); void loadCrons(); void loadComposite(); }, [loadHealth, loadCrons, loadComposite]);
 
   const triggerCron = async (name: string) => {
     if (!token) return;
@@ -166,6 +179,38 @@ export function AdminDiagnosticsPage() {
           ) : (
             <div className="flex h-20 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card className="bg-background/60 backdrop-blur-3xl border-white/10 rounded-[2rem] shadow-xl">
+        <CardContent className="p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+              <Activity className="h-4 w-4" /> Составные подписки
+            </h2>
+            <Button onClick={loadComposite} variant="ghost" size="sm" disabled={loading.composite} className="gap-1">
+              {loading.composite ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            </Button>
+          </div>
+          {composite ? (
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                ["Запросы", composite.requests.requests],
+                ["Fallback", composite.requests.degraded],
+                ["Ошибка Main", composite.requests.requiredFailures],
+                ["Ожидают sync", composite.synchronization.pending + composite.synchronization.errors],
+                ["Средняя задержка", `${composite.requests.upstreamLatencyMs.average} мс`],
+                ["Макс. задержка", `${composite.requests.upstreamLatencyMs.max} мс`],
+                ["Base64", composite.requests.formats.base64 ?? 0],
+                ["JSON", composite.requests.formats.json ?? 0],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-xl border border-white/10 bg-foreground/[0.03] p-3">
+                  <div className="text-[11px] text-muted-foreground">{label}</div>
+                  <div className="mt-1 text-xl font-bold">{value}</div>
+                </div>
+              ))}
+            </div>
+          ) : <div className="flex h-20 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}
         </CardContent>
       </Card>
 

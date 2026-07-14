@@ -2028,13 +2028,14 @@ export const api = {
     isTrial?: boolean;
     trialName?: string | null;
     trialConvertEnabled?: boolean;
+    componentQuotas?: ComponentQuota[];
     message?: string;
   }> {
     return request("/client/subscription", { token });
   },
 
   /** Подписка по Remnawave UUID (для secondary подписок на /cabinet/subscribe?uuid=xxx) */
-  async clientSubscriptionByUuid(token: string, uuid: string): Promise<{ subscription: unknown; tariffDisplayName?: string | null; message?: string }> {
+  async clientSubscriptionByUuid(token: string, uuid: string): Promise<{ subscription: unknown; tariffDisplayName?: string | null; componentQuotas?: ComponentQuota[]; message?: string }> {
     return request(`/client/subscription/by-uuid/${encodeURIComponent(uuid)}`, { token });
   },
 
@@ -2061,6 +2062,7 @@ export const api = {
       trialConvertEnabled?: boolean;
       /** конвертация триала разрешена в любой тариф. */
       trialConvertAllTariffs?: boolean;
+      componentQuotas?: ComponentQuota[];
     }>;
   }> {
     return request("/client/subscription/all", { token });
@@ -3478,6 +3480,9 @@ export type UpdateSettingsPayload = {
   giftExpiryNotificationDays?: number;
   giftReferralEnabled?: boolean;
   giftMessageMaxLength?: number;
+  expiredGraceEnabled?: boolean;
+  expiredGraceDays?: number;
+  expiredGraceSquadUuid?: string | null;
 }
 
 // T-admin-services (портировано из WolfVPN): услуга «доп. устройства» на подписке.
@@ -3669,6 +3674,9 @@ export interface RemnaUserUsageResponse {
 
 export interface AdminSettings {
   allowUserThemeChange?: boolean;
+  expiredGraceEnabled?: boolean;
+  expiredGraceDays?: number;
+  expiredGraceSquadUuid?: string | null;
   activeLanguages: string[];
   activeCurrencies: string[];
   defaultLanguage?: string;
@@ -4006,6 +4014,17 @@ export interface AdminSettings {
   giftMessageMaxLength?: number;
 }
 
+export interface ComponentQuota {
+  key: string;
+  displayName: string;
+  limitBytes: string;
+  usedBytes: string;
+  remainingBytes: string;
+  resetMode: string;
+  nextResetAt: string | null;
+  status: string | null;
+}
+
 /** Конфиг страницы подписки (формат как sub.stealthnet.app) */
 export type SubscriptionPageConfig = {
   locales?: string[];
@@ -4198,6 +4217,10 @@ export interface AdminSecondarySubscription {
   giftedToClientId: string | null;
   /** true = куплена для подарка, false = куплена себе. */
   purchasedAsGift: boolean;
+  syncStatus?: "SYNCED" | "PENDING" | "ERROR";
+  syncError?: string | null;
+  syncAttempts?: number;
+  lastReconciledAt?: string | null;
   createdAt: string;
   updatedAt: string;
   owner: AdminSecondarySubscriptionOwner;
@@ -4218,6 +4241,18 @@ export interface AdminSecondarySubscriptionsResponse {
 }
 
 export interface AdminSecondarySubscriptionDetail extends AdminSecondarySubscription {
+  components?: Array<{
+    id: string;
+    key: string;
+    adminName: string;
+    required: boolean;
+    mergeOrder: number;
+    remnawaveUuid: string | null;
+    trafficLimitBytes: string | null;
+    lastKnownStatus: string | null;
+    lastSyncError: string | null;
+    lastSyncedAt: string | null;
+  }>;
   giftCodes: AdminGiftCodeBrief[];
   remnaData: Record<string, unknown> | null;
   history: {
@@ -4613,6 +4648,20 @@ export interface DeviceDiscountTier {
   discountPercent: number;
 }
 
+export interface RemnawaveComponentTemplate {
+  id?: string;
+  key: string;
+  adminName: string;
+  required: boolean;
+  mergeOrder: number;
+  internalSquadUuids: string[];
+  trafficLimitBytes: number | null;
+  trafficResetMode: string;
+  showQuotaToClient: boolean;
+  quotaDisplayName: string | null;
+  enabled: boolean;
+}
+
 export interface TariffRecord {
   id: string;
   categoryId: string;
@@ -4638,6 +4687,7 @@ export interface TariffRecord {
   /** T-cooldown (13.05.2026) — кулдаун покупки тарифа в днях (null/0 = без ограничения). */
   purchaseCooldownDays?: number | null;
   priceOptions: TariffPriceOption[];
+  remnawaveComponents?: RemnawaveComponentTemplate[];
   createdAt: string;
   updatedAt: string;
 }
@@ -4665,6 +4715,7 @@ export interface TrialRecord {
   convertAllTariffs?: boolean;
   /** тарифы, в которые можно конвертировать триал (переход на их сквады). */
   convertTariffIds?: string[];
+  remnawaveComponents?: RemnawaveComponentTemplate[];
   createdAt: string;
   updatedAt: string;
 }
@@ -4684,6 +4735,7 @@ export type CreateTrialPayload = {
   convertAllTariffs?: boolean;
   /** тарифы, в которые можно конвертировать триал. */
   convertTariffIds?: string[] | null;
+  remnawaveComponents?: Omit<RemnawaveComponentTemplate, "id">[];
 };
 
 export type UpdateTrialPayload = Partial<CreateTrialPayload>;
@@ -4794,6 +4846,7 @@ export type CreateTariffPayload = {
   /** T-cooldown (13.05.2026) — кулдаун покупки в днях (null/0 = без ограничения). */
   purchaseCooldownDays?: number | null;
   priceOptions?: { durationDays: number; price: number }[];
+  remnawaveComponents?: Omit<RemnawaveComponentTemplate, "id">[];
 };
 
 export type UpdateTariffPayload = {
@@ -4819,6 +4872,7 @@ export type UpdateTariffPayload = {
   /** T-cooldown (13.05.2026) — кулдаун покупки в днях (null/0 = без ограничения). */
   purchaseCooldownDays?: number | null;
   priceOptions?: { durationDays: number; price: number }[];
+  remnawaveComponents?: Omit<RemnawaveComponentTemplate, "id">[];
 };
 
 // ——— Кабинет клиента ———

@@ -92,6 +92,20 @@ type DiscountTierDraft = {
   discountPercent: string;
 };
 
+type RemnawaveComponentDraft = {
+  uid: string;
+  key: string;
+  adminName: string;
+  required: boolean;
+  mergeOrder: number;
+  internalSquadUuids: string[];
+  trafficGb: string;
+  trafficResetMode: string;
+  showQuotaToClient: boolean;
+  quotaDisplayName: string;
+  enabled: boolean;
+};
+
 const PRICE_OPTION_PRESETS = [7, 30, 90, 365];
 const MAX_PRICE_OPTIONS = 10;
 const MAX_DISCOUNT_TIERS = 10;
@@ -1181,9 +1195,27 @@ function TariffModal({
     return [{ uid: makeDraftUid(), days: 30, price: "0" }];
   };
 
+  const buildInitialComponents = (t: TariffRecord | null): RemnawaveComponentDraft[] =>
+    (t?.remnawaveComponents ?? []).map((component) => ({
+      uid: component.id ?? makeDraftUid(),
+      key: component.key,
+      adminName: component.adminName,
+      required: component.required,
+      mergeOrder: component.mergeOrder,
+      internalSquadUuids: component.internalSquadUuids,
+      trafficGb: component.trafficLimitBytes != null
+        ? String((component.trafficLimitBytes / BYTES_PER_GB).toFixed(2))
+        : "",
+      trafficResetMode: component.trafficResetMode,
+      showQuotaToClient: component.showQuotaToClient,
+      quotaDisplayName: component.quotaDisplayName ?? "",
+      enabled: component.enabled,
+    }));
+
   const [name, setName] = useState(tariff?.name ?? "");
   const [description, setDescription] = useState(tariff?.description ?? "");
   const [priceOptions, setPriceOptions] = useState<PriceOptionDraft[]>(() => buildInitialPriceOptions(tariff));
+  const [remnawaveComponents, setRemnawaveComponents] = useState<RemnawaveComponentDraft[]>(() => buildInitialComponents(tariff));
   const [selectedSquadUuids, setSelectedSquadUuids] = useState<string[]>(tariff?.internalSquadUuids ?? []);
   const [trafficGb, setTrafficGb] = useState<string>(
     tariff?.trafficLimitBytes != null ? String((tariff.trafficLimitBytes / BYTES_PER_GB).toFixed(2)) : ""
@@ -1220,6 +1252,7 @@ function TariffModal({
       setName(tariff.name);
       setDescription(tariff.description ?? "");
       setPriceOptions(buildInitialPriceOptions(tariff));
+      setRemnawaveComponents(buildInitialComponents(tariff));
       setSelectedSquadUuids(tariff.internalSquadUuids);
       setTrafficGb(tariff.trafficLimitBytes != null ? String((tariff.trafficLimitBytes / BYTES_PER_GB).toFixed(2)) : "");
       setTrafficResetMode(tariff.trafficResetMode ?? "no_reset");
@@ -1246,6 +1279,7 @@ function TariffModal({
       setName("");
       setDescription("");
       setPriceOptions([{ uid: makeDraftUid(), days: 30, price: "0" }]);
+      setRemnawaveComponents([]);
       setSelectedSquadUuids([]);
       setTrafficGb("");
       setTrafficResetMode("no_reset");
@@ -1283,6 +1317,39 @@ function TariffModal({
     setSelectedSquadUuids((prev) =>
       prev.includes(uuid) ? prev.filter((id) => id !== uuid) : [...prev, uuid]
     );
+  };
+
+  const addRemnawaveComponent = () => {
+    setRemnawaveComponents((items) => {
+      const first = items.length === 0;
+      return [...items, {
+        uid: makeDraftUid(),
+        key: first ? "primary" : `component_${items.length + 1}`,
+        adminName: first ? "Основной" : "Дополнительный",
+        required: first,
+        mergeOrder: items.length * 10,
+        internalSquadUuids: first ? selectedSquadUuids : [],
+        trafficGb: first ? trafficGb : "",
+        trafficResetMode: first ? trafficResetMode : "monthly",
+        showQuotaToClient: !first,
+        quotaDisplayName: first ? "" : "Лимит компонента",
+        enabled: true,
+      }];
+    });
+  };
+  const updateRemnawaveComponent = (uid: string, patch: Partial<RemnawaveComponentDraft>) => {
+    setRemnawaveComponents((items) => items.map((item) => item.uid === uid ? { ...item, ...patch } : item));
+  };
+  const setRequiredComponent = (uid: string) => {
+    setRemnawaveComponents((items) => items.map((item) => ({ ...item, required: item.uid === uid })));
+  };
+  const toggleComponentSquad = (uid: string, squadUuid: string) => {
+    setRemnawaveComponents((items) => items.map((item) => item.uid !== uid ? item : {
+      ...item,
+      internalSquadUuids: item.internalSquadUuids.includes(squadUuid)
+        ? item.internalSquadUuids.filter((value) => value !== squadUuid)
+        : [...item.internalSquadUuids, squadUuid],
+    }));
   };
 
   const selectedSquadsList = squads.filter((s) => selectedSquadUuids.includes(s.uuid));
@@ -1436,6 +1503,50 @@ function TariffModal({
     const pricePerExtraNum = parseFloat(pricePerExtraDevice);
     const effectivePricePerExtra = extraDevicesEnabled && Number.isFinite(pricePerExtraNum) && pricePerExtraNum > 0 ? pricePerExtraNum : 0;
 
+    const normalizedComponents = remnawaveComponents.length > 0
+      ? remnawaveComponents.map((component) => ({
+          key: component.key.trim(),
+          adminName: component.adminName.trim(),
+          required: component.required,
+          mergeOrder: component.mergeOrder,
+          internalSquadUuids: component.internalSquadUuids,
+          trafficLimitBytes: component.trafficGb.trim()
+            ? Math.round(Number(component.trafficGb) * BYTES_PER_GB)
+            : null,
+          trafficResetMode: component.trafficResetMode,
+          showQuotaToClient: component.showQuotaToClient,
+          quotaDisplayName: component.quotaDisplayName.trim() || null,
+          enabled: component.enabled,
+        }))
+      : undefined;
+    if (normalizedComponents) {
+      if (normalizedComponents.filter((component) => component.required).length !== 1) {
+        setValidationError("Выберите ровно один обязательный Remnawave-компонент");
+        return;
+      }
+      if (normalizedComponents.some((component) => component.required && !component.enabled)) {
+        setValidationError("Обязательный Remnawave-компонент должен быть включён");
+        return;
+      }
+      if (normalizedComponents.some((component) => !/^[a-zA-Z0-9_-]+$/.test(component.key) || !component.adminName)) {
+        setValidationError("У каждого компонента нужны название и ключ из латинских букв, цифр, _ или -");
+        return;
+      }
+      if (normalizedComponents.some((component) => component.internalSquadUuids.length === 0)) {
+        setValidationError("У каждого компонента выберите хотя бы один Squad");
+        return;
+      }
+      if (new Set(normalizedComponents.map((component) => component.key)).size !== normalizedComponents.length
+        || new Set(normalizedComponents.map((component) => component.mergeOrder)).size !== normalizedComponents.length) {
+        setValidationError("Ключи и порядок Remnawave-компонентов должны быть уникальны");
+        return;
+      }
+      if (normalizedComponents.some((component) => component.trafficLimitBytes != null && (!Number.isFinite(component.trafficLimitBytes) || component.trafficLimitBytes < 0))) {
+        setValidationError("Лимит компонента должен быть положительным числом");
+        return;
+      }
+    }
+
     setSaving(true);
     try {
       if (isEdit && tariff) {
@@ -1462,6 +1573,7 @@ function TariffModal({
             return Number.isFinite(n) && n > 0 ? n : null;
           })(),
           priceOptions: normalized,
+          remnawaveComponents: normalizedComponents,
         };
         await api.updateTariff(token, tariff.id, payload);
       } else {
@@ -1489,6 +1601,7 @@ function TariffModal({
             return Number.isFinite(n) && n > 0 ? n : null;
           })(),
           priceOptions: normalized,
+          remnawaveComponents: normalizedComponents,
         };
         await api.createTariff(token, payload);
       }
@@ -1811,6 +1924,91 @@ function TariffModal({
               {trafficResetMode === "monthly" && "Трафик обнуляется каждый месяц (Remna MONTH). Например: 10 ГБ/мес на 3 месяца."}
               {trafficResetMode === "monthly_rolling" && "Трафик сбрасывается через 30 дней от последнего сброса (Remna MONTH_ROLLING)."}
             </p>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-foreground/[0.03] dark:bg-white/[0.02] p-4 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold">Компоненты Remnawave</p>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Одна подписка может включать несколько пользователей Remnawave. WhiteList — обычный компонент, без специальной логики.
+                </p>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={addRemnawaveComponent} className="gap-1 rounded-lg shrink-0">
+                <Plus className="h-3.5 w-3.5" /> Компонент
+              </Button>
+            </div>
+            {remnawaveComponents.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-white/10 p-3 text-[11px] text-muted-foreground">
+                Используется совместимый режим с одним основным пользователем. Добавьте компонент, чтобы включить составную подписку.
+              </p>
+            ) : remnawaveComponents.map((component, index) => (
+              <div key={component.uid} className="rounded-xl border border-white/10 p-3 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="flex items-center gap-2 text-xs font-medium">
+                    <input
+                      type="radio"
+                      name="required-remnawave-component"
+                      checked={component.required}
+                      onChange={() => setRequiredComponent(component.uid)}
+                    />
+                    Обязательный
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <input type="checkbox" checked={component.enabled} onChange={(e) => updateRemnawaveComponent(component.uid, { enabled: e.target.checked })} />
+                      Включён
+                    </label>
+                    <Button type="button" variant="ghost" size="icon" onClick={() => setRemnawaveComponents((items) => items.filter((item) => item.uid !== component.uid))} className="h-7 w-7 text-destructive">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="grid gap-1">
+                    <Label className="text-[10px] text-muted-foreground">Название в админке</Label>
+                    <Input value={component.adminName} onChange={(e) => updateRemnawaveComponent(component.uid, { adminName: e.target.value })} placeholder="WhiteList" className={inputCls} />
+                  </div>
+                  <div className="grid gap-1">
+                    <Label className="text-[10px] text-muted-foreground">Ключ</Label>
+                    <Input value={component.key} onChange={(e) => updateRemnawaveComponent(component.uid, { key: e.target.value })} placeholder="whitelist" className={`${inputCls} font-mono`} />
+                  </div>
+                  <div className="grid gap-1">
+                    <Label className="text-[10px] text-muted-foreground">Порядок объединения</Label>
+                    <Input type="number" min={0} value={component.mergeOrder} onChange={(e) => updateRemnawaveComponent(component.uid, { mergeOrder: Number(e.target.value) || index * 10 })} className={inputCls} />
+                  </div>
+                  <div className="grid gap-1">
+                    <Label className="text-[10px] text-muted-foreground">Лимит, ГБ</Label>
+                    <Input type="number" min={0} step={0.1} value={component.trafficGb} onChange={(e) => updateRemnawaveComponent(component.uid, { trafficGb: e.target.value })} placeholder="Безлимит" className={inputCls} />
+                  </div>
+                </div>
+                <div className="grid gap-1">
+                  <Label className="text-[10px] text-muted-foreground">Сброс лимита компонента</Label>
+                  <select value={component.trafficResetMode} onChange={(e) => updateRemnawaveComponent(component.uid, { trafficResetMode: e.target.value })} className={selectCls}>
+                    <option value="no_reset">Без сброса</option>
+                    <option value="monthly">Ежемесячно</option>
+                    <option value="monthly_rolling">Скользящий месяц</option>
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] text-muted-foreground">Squad компонента</Label>
+                  <div className="max-h-28 overflow-y-auto rounded-lg border border-white/10 p-2 grid grid-cols-2 gap-1">
+                    {squads.map((squad) => (
+                      <label key={squad.uuid} className="flex items-center gap-2 text-[11px] min-w-0">
+                        <input type="checkbox" checked={component.internalSquadUuids.includes(squad.uuid)} onChange={() => toggleComponentSquad(component.uid, squad.uuid)} />
+                        <span className="truncate">{squad.name || squad.uuid}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input id={`quota-${component.uid}`} type="checkbox" checked={component.showQuotaToClient} onChange={(e) => updateRemnawaveComponent(component.uid, { showQuotaToClient: e.target.checked })} />
+                  <Label htmlFor={`quota-${component.uid}`} className="text-[11px]">Показывать квоту пользователю</Label>
+                </div>
+                {component.showQuotaToClient && (
+                  <Input value={component.quotaDisplayName} onChange={(e) => updateRemnawaveComponent(component.uid, { quotaDisplayName: e.target.value })} placeholder="Например: WhiteList" className={inputCls} />
+                )}
+              </div>
+            ))}
           </div>
           <DeviceSection
             includedDevices={includedDevices}

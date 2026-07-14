@@ -558,6 +558,9 @@ export function SettingsPage() {
         giftExpiryNotificationDays: (data as AdminSettings).giftExpiryNotificationDays ?? 3,
         giftReferralEnabled: (data as AdminSettings).giftReferralEnabled ?? true,
         giftMessageMaxLength: (data as AdminSettings).giftMessageMaxLength ?? 200,
+        expiredGraceEnabled: (data as AdminSettings).expiredGraceEnabled ?? false,
+        expiredGraceDays: (data as AdminSettings).expiredGraceDays ?? 7,
+        expiredGraceSquadUuid: (data as AdminSettings).expiredGraceSquadUuid ?? "",
       });
     }).finally(() => setLoading(false));
     api.getAutoRenewStats(token).then(setAutoRenewStats).catch(() => {});
@@ -959,6 +962,9 @@ export function SettingsPage() {
         giftExpiryNotificationDays: settings.giftExpiryNotificationDays ?? 3,
         giftReferralEnabled: settings.giftReferralEnabled ?? true,
         giftMessageMaxLength: settings.giftMessageMaxLength ?? 200,
+        expiredGraceEnabled: settings.expiredGraceEnabled ?? false,
+        expiredGraceDays: settings.expiredGraceDays ?? 7,
+        expiredGraceSquadUuid: settings.expiredGraceSquadUuid?.trim() || null,
         customBuildEnabled: settings.customBuildEnabled ?? false,
         customBuildPricePerDay: settings.customBuildPricePerDay ?? 0,
         customBuildPricePerDevice: settings.customBuildPricePerDevice ?? 0,
@@ -5479,6 +5485,46 @@ export function SettingsPage() {
                   </div>
                 </div>
               )}
+
+              <div className="space-y-4 rounded-lg border p-4 bg-muted/20">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <Label htmlFor="expired-grace-enabled" className="text-base font-medium">Доступ к Telegram после окончания</Label>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Все обычные компоненты отключаются, а подписка временно переводится в указанный only_telegram Squad.
+                    </p>
+                  </div>
+                  <Switch
+                    id="expired-grace-enabled"
+                    checked={settings.expiredGraceEnabled === true}
+                    onCheckedChange={(checked: boolean) => setSettings((s) => s ? { ...s, expiredGraceEnabled: checked } : s)}
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="expired-grace-days">Grace-период, дней</Label>
+                    <Input
+                      id="expired-grace-days"
+                      type="number"
+                      min={0}
+                      max={365}
+                      value={settings.expiredGraceDays ?? 7}
+                      onChange={(e) => setSettings((s) => s ? { ...s, expiredGraceDays: Number(e.target.value) || 0 } : s)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="expired-grace-squad">UUID Squad only_telegram</Label>
+                    <Input
+                      id="expired-grace-squad"
+                      value={settings.expiredGraceSquadUuid ?? ""}
+                      onChange={(e) => setSettings((s) => s ? { ...s, expiredGraceSquadUuid: e.target.value } : s)}
+                      placeholder="00000000-0000-0000-0000-000000000000"
+                      className="font-mono text-xs"
+                    />
+                    <p className="text-xs text-muted-foreground">Ограничение скорости настраивается в самом Squad Remnawave.</p>
+                  </div>
+                </div>
+              </div>
 
               {message && <p className="text-sm text-muted-foreground">{message}</p>}
               <Button

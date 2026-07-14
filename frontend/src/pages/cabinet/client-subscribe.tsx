@@ -30,7 +30,8 @@ import {
 import { useClientAuth } from "@/contexts/client-auth";
 import { useCabinetMiniapp } from "@/pages/cabinet/cabinet-layout";
 import { api } from "@/lib/api";
-import type { SubscriptionPageConfig } from "@/lib/api";
+import type { ComponentQuota, SubscriptionPageConfig } from "@/lib/api";
+import { ComponentQuotaSummary } from "@/components/subscription/component-quota-summary";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -210,6 +211,7 @@ function ClassicSubscribePage() {
   const [searchParams] = useSearchParams();
 
   const [subscription, setSubscription] = useState<unknown>(null);
+  const [componentQuotas, setComponentQuotas] = useState<ComponentQuota[]>([]);
   const [pageConfig, setPageConfig] = useState<SubscriptionPageConfig | null>(null);
   const [publicAppUrl, setPublicAppUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -242,6 +244,7 @@ function ClassicSubscribePage() {
     ])
       .then(([subRes, config, appUrl]) => {
         setSubscription(subRes.subscription ?? null);
+        setComponentQuotas(subRes.componentQuotas ?? []);
         setPageConfig(config ?? null);
         setPublicAppUrl(appUrl ?? null);
       })
@@ -624,11 +627,13 @@ function ClassicSubscribePage() {
 
       {isMiniapp ? (
         <div className="space-y-6">
+          <ComponentQuotaSummary quotas={componentQuotas} />
           {appsBlock}
           {linkCard}
         </div>
       ) : (
         <div className="space-y-8">
+          <ComponentQuotaSummary quotas={componentQuotas} />
           {linkCard}
           {instructionSection}
           {appsBlock}
