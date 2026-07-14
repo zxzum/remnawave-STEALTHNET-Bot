@@ -113,6 +113,10 @@ import { registerBackupRoutes } from "../backup/backup.routes.js";
 import { invalidateBrandCache } from "../branding/spa-html.js";
 import { getBroadcastRecipientsCount, startBroadcastJob, getBroadcastJob, cancelBroadcastJob, listBroadcastHistory, getBroadcastHistoryItem, sendDirectTelegramMessage, sendDirectEmail, startListSendJob, getListSendJob } from "../broadcast/broadcast.service.js";
 import { applyDevicesToSubscription, removeAllExtraDevicesForSub } from "../subscription/extras.helper.js";
+import {
+  revokeSubscriptionComponents,
+  runSubscriptionComponentOperation,
+} from "../subscription/subscription-components.service.js";
 import { uploadMascotImage, uploadVideo, uploadTicketAttachment, mascotUrl, videoUploadUrl, removeUploadedFile } from "../../lib/upload.js";
 import {
   filesToAttachments,
@@ -1749,54 +1753,11 @@ adminRouter.delete("/clients/:id", async (req, res) => {
   const client = await prisma.client.findUnique({ where: { id: parsed.data.id }, select: { id: true, remnawaveUuid: true, telegramId: true, email: true } });
   if (!client) return res.status(404).json({ message: "Клиент не найден" });
 
-  // T (11.05.2026): удалять ВСЕ Remna-юзеры клиента,
-  // включая дополнительные подписки (secondary_subscriptions с собственным remnawave_uuid).
-  // Раньше удалялся только primary, secondary висели в Remna навсегда.
+  // Удаляем все логические подписки вместе со всеми их Remnawave-компонентами.
   if (isRemnaConfigured()) {
-    let remnaUuid = client.remnawaveUuid;
-
-    // Если remnawaveUuid нет — ищем юзера в Remna по telegramId / email
-    if (!remnaUuid && client.telegramId?.trim()) {
-      const byTg = await remnaGetUserByTelegramId(client.telegramId.trim());
-      remnaUuid = extractRemnaUuid(byTg.data);
-    }
-    if (!remnaUuid && client.email?.trim()) {
-      const byEmail = await remnaGetUserByEmail(client.email.trim());
-      remnaUuid = extractRemnaUuid(byEmail.data);
-    }
-
-    if (remnaUuid) {
-      const remnaRes = await remnaDeleteUser(remnaUuid);
-      if (remnaRes.error) {
-        console.warn(`[admin delete client] Remna delete primary failed for ${remnaUuid}:`, remnaRes.error);
-      }
-    }
-
-    // Удаляем все secondary-subscriptions этого клиента из Remna.
-    // (БД-каскад удалит сами строки; но Remna-юзеров надо чистить через API).
-    const secondaries = await prisma.subscription.findMany({
-      where: { ownerId: parsed.data.id, remnawaveUuid: { not: null } },
-      select: { id: true, remnawaveUuid: true, subscriptionIndex: true },
-    });
-    let deletedCount = 0;
-    let failedCount = 0;
-    for (const sec of secondaries) {
-      if (!sec.remnawaveUuid) continue;
-      try {
-        const r = await remnaDeleteUser(sec.remnawaveUuid);
-        if (r.error) {
-          failedCount++;
-          console.warn(`[admin delete client] Remna delete secondary #${sec.subscriptionIndex} (${sec.remnawaveUuid}) failed:`, r.error);
-        } else {
-          deletedCount++;
-        }
-      } catch (e) {
-        failedCount++;
-        console.warn(`[admin delete client] Remna delete secondary #${sec.subscriptionIndex} threw:`, e);
-      }
-    }
-    if (secondaries.length > 0) {
-      console.log(`[admin delete client ${parsed.data.id}] Remna secondary cleanup: ${deletedCount} deleted, ${failedCount} failed (of ${secondaries.length})`);
+    const report = await wipeClientSubscriptions(parsed.data.id);
+    if (report.failed) {
+      console.warn(`[admin delete client ${parsed.data.id}] ${report.failed} subscription component cleanup(s) failed`);
     }
   }
 
@@ -2177,41 +2138,29 @@ adminRouter.post("/clients/:id/remna/unlink", async (req, res) => {
 adminRouter.post("/clients/:id/remna/revoke-subscription", async (req, res) => {
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
-  const result = await remnaRevokeUserSubscription(remnaUuid);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? {});
+  const report = await revokeAllSubscriptionsUrls(parsed.data.id);
+  return res.status(report.failed ? 502 : 200).json(report);
 });
 
 adminRouter.post("/clients/:id/remna/disable", async (req, res) => {
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
-  const result = await remnaDisableUser(remnaUuid);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? {});
+  const report = await disableAllSubscriptionsInRemna(parsed.data.id);
+  return res.status(report.failed ? 502 : 200).json(report);
 });
 
 adminRouter.post("/clients/:id/remna/enable", async (req, res) => {
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
-  const result = await remnaEnableUser(remnaUuid);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? {});
+  const report = await enableAllSubscriptionsInRemna(parsed.data.id);
+  return res.status(report.failed ? 502 : 200).json(report);
 });
 
 adminRouter.post("/clients/:id/remna/reset-traffic", async (req, res) => {
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
-  const result = await remnaResetUserTraffic(remnaUuid);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? {});
+  const report = await resetAllSubscriptionsTraffic(parsed.data.id);
+  return res.status(report.failed ? 502 : 200).json(report);
 });
 
 const grantTariffSchema = z.object({
@@ -6239,11 +6188,14 @@ adminRouter.delete("/secondary-subscriptions/:id", asyncRoute(async (req, res) =
   });
   if (!sub) return res.status(404).json({ message: "Подписка не найдена" });
 
-  // Delete Remnawave user if exists
-  if (sub.remnawaveUuid && isRemnaConfigured()) {
-    try {
-      await remnaDeleteUser(sub.remnawaveUuid);
-    } catch { /* best effort */ }
+  if (isRemnaConfigured()) {
+    const deletion = await runSubscriptionComponentOperation(sub.id, async ({ remnawaveUuid }) => {
+      const result = await remnaDeleteUser(remnawaveUuid);
+      if (result.error && result.status !== 404) throw new Error(result.error);
+    });
+    if (deletion.requiredFailure) {
+      return res.status(502).json({ message: deletion.failures.map((failure) => failure.error).join("; ") });
+    }
   }
 
   // Log event
@@ -6273,10 +6225,13 @@ adminRouter.delete("/secondary-subscriptions/bulk", asyncRoute(async (req, res) 
     select: { id: true, remnawaveUuid: true, ownerId: true },
   });
 
-  // Delete Remnawave users
+  // Delete every Remnawave component of every logical subscription.
   if (isRemnaConfigured()) {
     await Promise.allSettled(
-      subs.filter((s) => s.remnawaveUuid).map((s) => remnaDeleteUser(s.remnawaveUuid!))
+      subs.map((sub) => runSubscriptionComponentOperation(sub.id, async ({ remnawaveUuid }) => {
+        const result = await remnaDeleteUser(remnawaveUuid);
+        if (result.error && result.status !== 404) throw new Error(result.error);
+      }))
     );
   }
 
@@ -7121,41 +7076,39 @@ adminRouter.post("/subscriptions/:subId/remna/unlink", asyncRoute(async (req, re
 adminRouter.post("/subscriptions/:subId/remna/revoke-subscription", asyncRoute(async (req, res) => {
   const parsed = subIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid subscription id" });
-  const remnaUuid = await getSubscriptionRemnaUuid(parsed.data.subId);
-  if (!remnaUuid) return res.status(400).json({ message: "Подписка не привязана к Remna" });
-  const result = await remnaRevokeUserSubscription(remnaUuid);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? {});
+  const result = await revokeSubscriptionComponents(parsed.data.subId);
+  if (result.requiredFailure) return res.status(502).json({ message: result.failures.map((failure) => failure.error).join("; ") });
+  return res.json({ ok: true, degraded: result.failures.length > 0 });
 }));
 
 adminRouter.post("/subscriptions/:subId/remna/disable", asyncRoute(async (req, res) => {
   const parsed = subIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid subscription id" });
-  const remnaUuid = await getSubscriptionRemnaUuid(parsed.data.subId);
-  if (!remnaUuid) return res.status(400).json({ message: "Подписка не привязана к Remna" });
-  const result = await remnaDisableUser(remnaUuid);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? {});
+  const result = await runSubscriptionComponentOperation(parsed.data.subId, async ({ remnawaveUuid }) => {
+    const response = await remnaDisableUser(remnawaveUuid);
+    if (response.error) throw new Error(response.error);
+  });
+  return res.status(result.requiredFailure ? 502 : 200).json(result);
 }));
 
 adminRouter.post("/subscriptions/:subId/remna/enable", asyncRoute(async (req, res) => {
   const parsed = subIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid subscription id" });
-  const remnaUuid = await getSubscriptionRemnaUuid(parsed.data.subId);
-  if (!remnaUuid) return res.status(400).json({ message: "Подписка не привязана к Remna" });
-  const result = await remnaEnableUser(remnaUuid);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? {});
+  const result = await runSubscriptionComponentOperation(parsed.data.subId, async ({ remnawaveUuid }) => {
+    const response = await remnaEnableUser(remnawaveUuid);
+    if (response.error) throw new Error(response.error);
+  });
+  return res.status(result.requiredFailure ? 502 : 200).json(result);
 }));
 
 adminRouter.post("/subscriptions/:subId/remna/reset-traffic", asyncRoute(async (req, res) => {
   const parsed = subIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid subscription id" });
-  const remnaUuid = await getSubscriptionRemnaUuid(parsed.data.subId);
-  if (!remnaUuid) return res.status(400).json({ message: "Подписка не привязана к Remna" });
-  const result = await remnaResetUserTraffic(remnaUuid);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? {});
+  const result = await runSubscriptionComponentOperation(parsed.data.subId, async ({ remnawaveUuid }) => {
+    const response = await remnaResetUserTraffic(remnawaveUuid);
+    if (response.error) throw new Error(response.error);
+  });
+  return res.status(result.requiredFailure ? 502 : 200).json(result);
 }));
 
 adminRouter.post("/subscriptions/:subId/remna/squads/add", asyncRoute(async (req, res) => {

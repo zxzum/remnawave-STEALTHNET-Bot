@@ -26,7 +26,7 @@ import {
   notifyAdminsAboutNewTicket,
 } from "../notification/telegram-notify.service.js";
 import { requireClientAuth } from "./client.middleware.js";
-import { remnaCreateUser, remnaUpdateUser, isRemnaConfigured, remnaGetUser, remnaGetUserByUsername, remnaGetUserByEmail, remnaGetUserByTelegramId, extractRemnaUuid, remnaUsernameFromClient, remnaGetUserHwidDevices, remnaDeleteUserHwidDevice, encryptSubscriptionUrlInPlace, remnaRevokeUserSubscription } from "../remna/remna.client.js";
+import { remnaCreateUser, remnaUpdateUser, isRemnaConfigured, remnaGetUser, remnaGetUserByUsername, remnaGetUserByEmail, remnaGetUserByTelegramId, extractRemnaUuid, remnaUsernameFromClient, remnaGetUserHwidDevices, remnaDeleteUserHwidDevice, encryptSubscriptionUrlInPlace } from "../remna/remna.client.js";
 import { isSmtpConfigured, isMailConfigured, mailConfigFromSystem, sendEmail } from "../mail/mail.service.js";
 import { renderEmailTemplate } from "../email-templates/email-templates.service.js";
 import { signClientPasswordResetToken, verifyClientPasswordResetToken } from "../auth/auth.service.js";
@@ -36,6 +36,7 @@ import { buildPublicSubscriptionUrl, upsertSubscriptionByRemnaUuid } from "../su
 import {
   componentQuotaFromRemna,
   mergeComponentDevices,
+  revokeSubscriptionComponents,
   subscriptionRemnawaveUuids,
   synchronizeSubscriptionComponents,
 } from "../subscription/subscription-components.service.js";
@@ -3321,18 +3322,17 @@ clientRouter.post("/subscription/:type/:id/reissue", async (req, res) => {
   if (sub.ownerId !== clientId && sub.giftedToClientId !== clientId) {
     return res.status(403).json({ message: "Нет доступа" });
   }
-  const targetUuid = sub.remnawaveUuid;
-  if (!targetUuid) return res.status(404).json({ message: "Подписка не привязана к Remnawave" });
-
   try {
-    await remnaRevokeUserSubscription(targetUuid);
-    // Достаём свежий subscription URL.
-    const fresh = await remnaGetUser(targetUuid);
-    const inner = (fresh.data as { response?: Record<string, unknown>; data?: Record<string, unknown> } | null)?.response
-      ?? (fresh.data as { response?: Record<string, unknown>; data?: Record<string, unknown> } | null)?.data
-      ?? (fresh.data as Record<string, unknown> | null);
-    const newUrl = (inner as { subscriptionUrl?: string } | null)?.subscriptionUrl ?? null;
-    return res.json({ ok: true, subscriptionUrl: newUrl });
+    const result = await revokeSubscriptionComponents(sub.id);
+    if (result.requiredFailure) {
+      return res.status(502).json({ message: result.failures.map((failure) => failure.error).join("; ") });
+    }
+    const config = await getSystemConfig();
+    return res.json({
+      ok: true,
+      degraded: result.failures.length > 0,
+      subscriptionUrl: publicSubscriptionUrlForRequest(req, result.publicSubscriptionToken!, config.publicAppUrl),
+    });
   } catch (e) {
     console.error("[reissue] error:", e);
     return res.status(500).json({ message: e instanceof Error ? e.message : "Ошибка обновления" });

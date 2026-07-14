@@ -19,7 +19,10 @@ import {
 import { createAdditionalSubscription, deleteSubscription } from "../gift/gift.service.js";
 import { getSystemConfig } from "../client/client.service.js";
 import { upsertSubscriptionByRemnaUuid } from "../subscription/subscription.helpers.js";
-import { synchronizeSubscriptionComponents } from "../subscription/subscription-components.service.js";
+import {
+  runSubscriptionComponentOperation,
+  synchronizeSubscriptionComponents,
+} from "../subscription/subscription-components.service.js";
 
 export type ActivationResult =
   | { ok: true; /** дни, добавленные pro-rata конвертацией остатка (режим convert) */ convertedDays?: number }
@@ -768,7 +771,10 @@ export async function extendSecondarySubscription(
   // T-traffic-expired-fix : used сбрасываем по resetUsed, не завися от истечения
   // (доп./триальные подписки тоже должны переносить остаток после истечения).
   if (traffic.resetUsed) {
-    await remnaResetUserTraffic(sec.remnawaveUuid);
+    await runSubscriptionComponentOperation(sec.id, async ({ remnawaveUuid }) => {
+      const reset = await remnaResetUserTraffic(remnawaveUuid);
+      if (reset.error) throw new Error(reset.error);
+    });
   }
   const finalTrafficLimitBytes = traffic.finalLimitBytes;
 
@@ -1190,10 +1196,10 @@ export async function replaceTrialOnPurchase(clientId: string, requestedTrialSub
   });
   if (trials.length === 0) return null;
   const target = (requestedTrialSubId && trials.find((t) => t.id === requestedTrialSubId)) || trials[0];
-  if (target.remnawaveUuid) {
-    const del = await remnaDeleteUser(target.remnawaveUuid);
-    if (del.error) console.error("[trial-replace] remnaDeleteUser failed:", del.error);
-  }
+  await runSubscriptionComponentOperation(target.id, async ({ remnawaveUuid }) => {
+    const del = await remnaDeleteUser(remnawaveUuid);
+    if (del.error && del.status !== 404) throw new Error(del.error);
+  }).catch((error) => console.error("[trial-replace] component delete failed:", error));
   await prisma.subscription.delete({ where: { id: target.id } }).catch((e) => {
     console.error("[trial-replace] subscription delete failed:", e);
   });

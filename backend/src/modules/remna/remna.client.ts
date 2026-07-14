@@ -372,7 +372,7 @@ export function remnaDeleteConfigProfile(uuid: string) {
 }
 
 /** POST /api/users/{uuid}/actions/revoke — отозвать подписку */
-export function remnaRevokeUserSubscription(uuid: string, body?: { expirationDate?: string }) {
+export function remnaRevokeUserSubscription(uuid: string, body?: { expirationDate?: string; shortUuid?: string }) {
   return remnaFetch<unknown>(`/api/users/${uuid}/actions/revoke`, {
     method: "POST",
     body: body ? JSON.stringify(body) : "{}",

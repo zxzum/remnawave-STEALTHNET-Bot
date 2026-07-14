@@ -16,11 +16,13 @@ import {
   remnaGetUser,
   remnaGetInternalSquads,
   remnaUpdateUser,
-  remnaRevokeUserSubscription,
-  remnaDisableUser,
-  remnaEnableUser,
-  remnaResetUserTraffic,
 } from "../remna/remna.client.js";
+import {
+  disableAllSubscriptionsInRemna,
+  enableAllSubscriptionsInRemna,
+  resetAllSubscriptionsTraffic,
+  revokeAllSubscriptionsUrls,
+} from "../client/client-bulk-ops.service.js";
 
 async function getClientRemnaUuid(clientId: string): Promise<string | null> {
   const c = await prisma.client.findUnique({
@@ -322,11 +324,8 @@ botAdminRouter.post("/clients/:id/remna/revoke-subscription", async (req, res) =
   if (!admin) return;
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
-  const result = await remnaRevokeUserSubscription(remnaUuid);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? { ok: true });
+  const report = await revokeAllSubscriptionsUrls(parsed.data.id);
+  return res.status(report.failed ? 502 : 200).json(report);
 });
 
 /** POST /api/bot-admin/clients/:id/remna/disable */
@@ -335,11 +334,8 @@ botAdminRouter.post("/clients/:id/remna/disable", async (req, res) => {
   if (!admin) return;
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
-  const result = await remnaDisableUser(remnaUuid);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? { ok: true });
+  const report = await disableAllSubscriptionsInRemna(parsed.data.id);
+  return res.status(report.failed ? 502 : 200).json(report);
 });
 
 /** POST /api/bot-admin/clients/:id/remna/enable */
@@ -348,11 +344,8 @@ botAdminRouter.post("/clients/:id/remna/enable", async (req, res) => {
   if (!admin) return;
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
-  const result = await remnaEnableUser(remnaUuid);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? { ok: true });
+  const report = await enableAllSubscriptionsInRemna(parsed.data.id);
+  return res.status(report.failed ? 502 : 200).json(report);
 });
 
 /** POST /api/bot-admin/clients/:id/remna/reset-traffic */
@@ -361,11 +354,8 @@ botAdminRouter.post("/clients/:id/remna/reset-traffic", async (req, res) => {
   if (!admin) return;
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
-  const result = await remnaResetUserTraffic(remnaUuid);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? { ok: true });
+  const report = await resetAllSubscriptionsTraffic(parsed.data.id);
+  return res.status(report.failed ? 502 : 200).json(report);
 });
 
 /** GET /api/bot-admin/remna/squads/internal — список внутренних сквадов Remna */

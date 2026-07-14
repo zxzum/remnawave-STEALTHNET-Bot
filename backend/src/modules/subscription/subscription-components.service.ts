@@ -2,9 +2,11 @@ import { prisma } from "../../db.js";
 import {
   extractRemnaUuid,
   remnaCreateUser,
+  remnaRevokeUserSubscription,
   remnaUpdateUser,
   remnaUsernameFromClient,
 } from "../remna/remna.client.js";
+import { generatePublicSubscriptionToken } from "./subscription.helpers.js";
 
 type ComponentOperationTarget = {
   key: string;
@@ -121,6 +123,90 @@ export async function runComponentOperations<T extends ComponentOperationTarget>
   );
   const failures = outcomes.filter((failure): failure is NonNullable<typeof failure> => failure !== null);
   return { failures, requiredFailure: failures.some((failure) => failure.required) };
+}
+
+export async function runSubscriptionComponentOperation(
+  subscriptionId: string,
+  operation: (target: { key: string; required: boolean; mergeOrder: number; remnawaveUuid: string }) => Promise<void>,
+) {
+  const subscription = await prisma.subscription.findUnique({
+    where: { id: subscriptionId },
+    select: {
+      remnawaveUuid: true,
+      components: {
+        orderBy: { mergeOrder: "asc" },
+        select: { key: true, required: true, mergeOrder: true, remnawaveUuid: true },
+      },
+    },
+  });
+  if (!subscription) {
+    return { failures: [{ key: "subscription", required: true, error: "Подписка не найдена" }], requiredFailure: true };
+  }
+
+  const targets = subscription.components.length
+    ? subscription.components.map((component) => ({
+        ...component,
+        remnawaveUuid: component.remnawaveUuid
+          ?? (component.required ? subscription.remnawaveUuid : null),
+      }))
+    : [{ key: "primary", required: true, mergeOrder: 0, remnawaveUuid: subscription.remnawaveUuid }];
+  const available = targets.filter((target): target is typeof target & { remnawaveUuid: string } => Boolean(target.remnawaveUuid));
+  if (!available.length) {
+    return { failures: [{ key: "subscription", required: true, error: "Подписка не привязана к Remnawave" }], requiredFailure: true };
+  }
+
+  const result = await runComponentOperations(available, operation);
+  if (result.failures.length) {
+    await prisma.subscription.update({
+      where: { id: subscriptionId },
+      data: {
+        syncStatus: "PENDING",
+        syncAttempts: { increment: 1 },
+        syncError: result.failures.map((failure) => `${failure.key}: ${failure.error}`).join("; "),
+        syncRequiredAt: new Date(Date.now() + 5 * 60_000),
+      },
+    });
+  }
+  return result;
+}
+
+/**
+ * Перевыпускает upstream-ссылки всех компонентов одним shortUuid и только после
+ * успешного обязательного компонента меняет публичный токен STEALTHNET.
+ */
+export async function revokeSubscriptionComponents(subscriptionId: string) {
+  const upstreamShortUuid = generatePublicSubscriptionToken().slice(0, 32);
+  const succeededKeys: string[] = [];
+  const result = await runSubscriptionComponentOperation(
+    subscriptionId,
+    async ({ key, remnawaveUuid }) => {
+      const response = await remnaRevokeUserSubscription(remnawaveUuid, { shortUuid: upstreamShortUuid });
+      if (response.error) throw new Error(response.error);
+      succeededKeys.push(key);
+    },
+  );
+  if (result.requiredFailure) return { ...result, publicSubscriptionToken: null, upstreamShortUuid };
+
+  const publicSubscriptionToken = generatePublicSubscriptionToken();
+  await prisma.$transaction([
+    prisma.subscription.update({
+      where: { id: subscriptionId },
+      data: result.failures.length
+        ? { publicSubscriptionToken }
+        : {
+            publicSubscriptionToken,
+            syncStatus: "SYNCED",
+            syncAttempts: 0,
+            syncError: null,
+            syncRequiredAt: null,
+          },
+    }),
+    prisma.remnawaveComponent.updateMany({
+      where: { subscriptionId, key: { in: succeededKeys } },
+      data: { upstreamShortUuid },
+    }),
+  ]);
+  return { ...result, publicSubscriptionToken, upstreamShortUuid };
 }
 
 export function buildComponentUsername(base: string, key: string, subscriptionIndex: number): string {

@@ -17,7 +17,6 @@ import {
   remnaDisableUser,
   remnaEnableUser,
   remnaResetUserTraffic,
-  remnaRevokeUserSubscription,
   remnaDeleteUser,
   remnaGetUserByTelegramId,
   remnaCreateUser,
@@ -25,6 +24,11 @@ import {
   extractRemnaUuid,
   isRemnaConfigured,
 } from "../remna/remna.client.js";
+import {
+  runSubscriptionComponentOperation,
+  revokeSubscriptionComponents,
+  synchronizeSubscriptionComponents,
+} from "../subscription/subscription-components.service.js";
 
 export type BulkOpItem = {
   subscriptionId: string;
@@ -50,6 +54,24 @@ function pushItem(report: BulkOpReport, item: BulkOpItem) {
   if (item.status === "ok") report.ok++;
   else if (item.status === "skipped") report.skipped++;
   else report.failed++;
+}
+
+async function applyToSubscription(
+  report: BulkOpReport,
+  sub: { id: string; subscriptionIndex: number; remnawaveUuid: string | null },
+  operation: (uuid: string) => Promise<{ error?: string }>,
+) {
+  const result = await runSubscriptionComponentOperation(sub.id, async ({ remnawaveUuid }) => {
+    const response = await operation(remnawaveUuid);
+    if (response.error) throw new Error(response.error);
+  });
+  pushItem(report, {
+    subscriptionId: sub.id,
+    subscriptionIndex: sub.subscriptionIndex,
+    remnawaveUuid: sub.remnawaveUuid,
+    status: result.failures.length ? "error" : "ok",
+    ...(result.failures.length ? { message: result.failures.map((failure) => `${failure.key}: ${failure.error}`).join("; ") } : {}),
+  });
 }
 
 async function fetchSubscriptions(clientId: string) {
@@ -83,20 +105,11 @@ export async function disableClient(clientId: string): Promise<BulkOpReport & { 
 
   const subs = await fetchSubscriptions(clientId);
   for (const sub of subs) {
-    if (!sub.remnawaveUuid) {
-      pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: null, status: "skipped", message: "no remnawaveUuid" });
-      continue;
-    }
     if (!isRemnaConfigured()) {
       pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "skipped", message: "Remna not configured" });
       continue;
     }
-    const r = await remnaDisableUser(sub.remnawaveUuid);
-    if (r.error) {
-      pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "error", message: r.error });
-    } else {
-      pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "ok" });
-    }
+    await applyToSubscription(report, sub, remnaDisableUser);
   }
   return { ...report, clientBlocked: true, autoRenewDisabled: arResult.count };
 }
@@ -132,12 +145,7 @@ export async function enableClient(clientId: string): Promise<BulkOpReport & { c
       pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "skipped", message: "expired — оставляем disabled" });
       continue;
     }
-    const r = await remnaEnableUser(sub.remnawaveUuid);
-    if (r.error) {
-      pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "error", message: r.error });
-    } else {
-      pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "ok" });
-    }
+    await applyToSubscription(report, sub, remnaEnableUser);
   }
   return { ...report, clientUnblocked: true };
 }
@@ -147,13 +155,7 @@ export async function disableAllSubscriptionsInRemna(clientId: string): Promise<
   const report = newReport();
   const subs = await fetchSubscriptions(clientId);
   for (const sub of subs) {
-    if (!sub.remnawaveUuid) {
-      pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: null, status: "skipped", message: "no remnawaveUuid" });
-      continue;
-    }
-    const r = await remnaDisableUser(sub.remnawaveUuid);
-    if (r.error) pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "error", message: r.error });
-    else pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "ok" });
+    await applyToSubscription(report, sub, remnaDisableUser);
   }
   return report;
 }
@@ -162,13 +164,7 @@ export async function enableAllSubscriptionsInRemna(clientId: string): Promise<B
   const report = newReport();
   const subs = await fetchSubscriptions(clientId);
   for (const sub of subs) {
-    if (!sub.remnawaveUuid) {
-      pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: null, status: "skipped", message: "no remnawaveUuid" });
-      continue;
-    }
-    const r = await remnaEnableUser(sub.remnawaveUuid);
-    if (r.error) pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "error", message: r.error });
-    else pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "ok" });
+    await applyToSubscription(report, sub, remnaEnableUser);
   }
   return report;
 }
@@ -178,13 +174,7 @@ export async function resetAllSubscriptionsTraffic(clientId: string): Promise<Bu
   const report = newReport();
   const subs = await fetchSubscriptions(clientId);
   for (const sub of subs) {
-    if (!sub.remnawaveUuid) {
-      pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: null, status: "skipped", message: "no remnawaveUuid" });
-      continue;
-    }
-    const r = await remnaResetUserTraffic(sub.remnawaveUuid);
-    if (r.error) pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "error", message: r.error });
-    else pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "ok" });
+    await applyToSubscription(report, sub, remnaResetUserTraffic);
   }
   return report;
 }
@@ -194,13 +184,16 @@ export async function revokeAllSubscriptionsUrls(clientId: string): Promise<Bulk
   const report = newReport();
   const subs = await fetchSubscriptions(clientId);
   for (const sub of subs) {
-    if (!sub.remnawaveUuid) {
-      pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: null, status: "skipped", message: "no remnawaveUuid" });
-      continue;
-    }
-    const r = await remnaRevokeUserSubscription(sub.remnawaveUuid);
-    if (r.error) pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "error", message: r.error });
-    else pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "ok" });
+    const result = await revokeSubscriptionComponents(sub.id);
+    pushItem(report, {
+      subscriptionId: sub.id,
+      subscriptionIndex: sub.subscriptionIndex,
+      remnawaveUuid: sub.remnawaveUuid,
+      status: result.requiredFailure ? "error" : "ok",
+      ...(result.failures.length
+        ? { message: result.failures.map((failure) => `${failure.key}: ${failure.error}`).join("; ") }
+        : {}),
+    });
   }
   return report;
 }
@@ -222,16 +215,14 @@ export async function syncAllSubscriptionsToRemna(clientId: string): Promise<Bul
       pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "skipped", message: "нет тарифа — нечего пушить" });
       continue;
     }
-    const trafficLimitBytes = sub.tariff.trafficLimitBytes != null ? Number(sub.tariff.trafficLimitBytes) : 0;
-    const includedDevices = sub.tariff.includedDevices ?? 1;
-    const r = await remnaUpdateUser({
-      uuid: sub.remnawaveUuid,
-      trafficLimitBytes,
-      hwidDeviceLimit: sub.tariff.deviceLimit ?? includedDevices,
-      activeInternalSquads: sub.tariff.internalSquadUuids,
+    const result = await synchronizeSubscriptionComponents(sub.id);
+    pushItem(report, {
+      subscriptionId: sub.id,
+      subscriptionIndex: sub.subscriptionIndex,
+      remnawaveUuid: sub.remnawaveUuid,
+      status: result.failures.length ? "error" : "ok",
+      ...(result.failures.length ? { message: result.failures.map((failure) => `${failure.key}: ${failure.error}`).join("; ") } : {}),
     });
-    if (r.error) pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "error", message: r.error });
-    else pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "ok" });
   }
   return report;
 }
@@ -275,15 +266,14 @@ export async function wipeClientSubscriptions(clientId: string): Promise<BulkOpR
   const report = newReport();
   const subs = await fetchSubscriptions(clientId);
   for (const sub of subs) {
-    let remnaOk = true;
-    if (sub.remnawaveUuid) {
-      const r = await remnaDeleteUser(sub.remnawaveUuid);
-      if (r.error && r.status !== 404) {
-        remnaOk = false;
-        pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "error", message: `Remna: ${r.error}` });
-      }
+    const deletion = await runSubscriptionComponentOperation(sub.id, async ({ remnawaveUuid }) => {
+      const result = await remnaDeleteUser(remnawaveUuid);
+      if (result.error && result.status !== 404) throw new Error(result.error);
+    });
+    if (deletion.requiredFailure) {
+      pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "error", message: deletion.failures.map((failure) => failure.error).join("; ") });
+      continue;
     }
-    if (!remnaOk) continue;
     // Сначала отвязываем GiftCode (FK), потом удаляем подписку.
     await prisma.giftCode.updateMany({
       where: { subscriptionId: sub.id, status: "ACTIVE" },
