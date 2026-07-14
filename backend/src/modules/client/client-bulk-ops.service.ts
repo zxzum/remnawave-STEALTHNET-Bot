@@ -17,7 +17,6 @@ import {
   remnaDisableUser,
   remnaEnableUser,
   remnaResetUserTraffic,
-  remnaDeleteUser,
   remnaGetUserByTelegramId,
   remnaCreateUser,
   remnaUsernameFromClient,
@@ -25,6 +24,7 @@ import {
   isRemnaConfigured,
 } from "../remna/remna.client.js";
 import {
+  deleteSubscriptionComponents,
   runSubscriptionComponentOperation,
   revokeSubscriptionComponents,
   synchronizeSubscriptionComponents,
@@ -266,22 +266,11 @@ export async function wipeClientSubscriptions(clientId: string): Promise<BulkOpR
   const report = newReport();
   const subs = await fetchSubscriptions(clientId);
   for (const sub of subs) {
-    const deletion = await runSubscriptionComponentOperation(sub.id, async ({ remnawaveUuid }) => {
-      const result = await remnaDeleteUser(remnawaveUuid);
-      if (result.error && result.status !== 404) throw new Error(result.error);
-    });
-    if (deletion.requiredFailure) {
+    const deletion = await deleteSubscriptionComponents(sub.id);
+    if (!deletion.deleted) {
       pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "error", message: deletion.failures.map((failure) => failure.error).join("; ") });
       continue;
     }
-    // Сначала отвязываем GiftCode (FK), потом удаляем подписку.
-    await prisma.giftCode.updateMany({
-      where: { subscriptionId: sub.id, status: "ACTIVE" },
-      data: { status: "CANCELLED" },
-    }).catch(() => {});
-    await prisma.subscription.delete({ where: { id: sub.id } }).catch((e) => {
-      pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "error", message: `DB delete: ${String(e)}` });
-    });
     // Сбросим легаси-якорь у клиента если удалили primary.
     if (sub.subscriptionIndex === 0) {
       await prisma.client.update({ where: { id: clientId }, data: { remnawaveUuid: null, currentTariffId: null } }).catch(() => {});

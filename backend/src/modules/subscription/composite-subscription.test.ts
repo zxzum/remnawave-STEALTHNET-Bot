@@ -5,6 +5,27 @@ const merge = (await import("./composite-subscription.js").catch(() => ({}))) as
 
 type Source = { key: string; body: string; contentType?: string };
 
+test("собирает диагностические метрики объединённой выдачи", () => {
+  assert.equal(typeof merge.createCompositeSubscriptionMetrics, "function");
+  const create = merge.createCompositeSubscriptionMetrics as () => {
+    record: (sample: { client: string; format: string; degraded: boolean; requiredFailure: boolean; upstreamLatenciesMs: number[] }) => void;
+    snapshot: () => Record<string, unknown>;
+  };
+  const metrics = create();
+  metrics.record({ client: "happ", format: "base64", degraded: false, requiredFailure: false, upstreamLatenciesMs: [10, 30] });
+  metrics.record({ client: "happ", format: "other", degraded: true, requiredFailure: true, upstreamLatenciesMs: [50] });
+
+  assert.deepEqual(metrics.snapshot(), {
+    requests: 2,
+    successful: 1,
+    degraded: 1,
+    requiredFailures: 1,
+    formats: { base64: 1, other: 1 },
+    clients: { happ: 2 },
+    upstreamLatencyMs: { count: 3, average: 30, max: 50 },
+  });
+});
+
 test("объединяет Base64-подписки без дублей", () => {
   assert.equal(typeof merge.mergeSubscriptionBodies, "function");
   const run = merge.mergeSubscriptionBodies as (sources: Source[]) => { body: string; format: string };

@@ -5,6 +5,58 @@ export type DetectedSubscriptionClient = {
   mergeMode: SubscriptionMergeMode;
 };
 
+export function createCompositeSubscriptionMetrics() {
+  let requests = 0;
+  let successful = 0;
+  let degraded = 0;
+  let requiredFailures = 0;
+  let latencyCount = 0;
+  let latencyTotal = 0;
+  let latencyMax = 0;
+  const formats: Record<string, number> = {};
+  const clients: Record<string, number> = {};
+
+  return {
+    record(sample: {
+      client: string;
+      format: string;
+      degraded: boolean;
+      requiredFailure: boolean;
+      upstreamLatenciesMs: number[];
+    }) {
+      requests++;
+      if (!sample.requiredFailure) successful++;
+      if (sample.degraded) degraded++;
+      if (sample.requiredFailure) requiredFailures++;
+      formats[sample.format] = (formats[sample.format] ?? 0) + 1;
+      clients[sample.client] = (clients[sample.client] ?? 0) + 1;
+      for (const latency of sample.upstreamLatenciesMs) {
+        if (!Number.isFinite(latency) || latency < 0) continue;
+        latencyCount++;
+        latencyTotal += latency;
+        latencyMax = Math.max(latencyMax, latency);
+      }
+    },
+    snapshot() {
+      return {
+        requests,
+        successful,
+        degraded,
+        requiredFailures,
+        formats: { ...formats },
+        clients: { ...clients },
+        upstreamLatencyMs: {
+          count: latencyCount,
+          average: latencyCount ? Math.round(latencyTotal / latencyCount) : 0,
+          max: latencyMax,
+        },
+      };
+    },
+  };
+}
+
+export const compositeSubscriptionMetrics = createCompositeSubscriptionMetrics();
+
 const CLIENTS: Array<{ pattern: RegExp; name: string; mergeMode: SubscriptionMergeMode }> = [
   { pattern: /^Happ\//i, name: "happ", mergeMode: "base64-json" },
   { pattern: /^INCY\//i, name: "incy", mergeMode: "base64-json" },

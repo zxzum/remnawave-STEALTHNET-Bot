@@ -13,6 +13,8 @@ import { aggregateHealth } from "./health.service.js";
 import { listCronEntries, triggerCron } from "./cron-registry.js";
 import { logAdmin } from "../audit/audit.service.js";
 import { getLogs } from "./log-buffer.js";
+import { prisma } from "../../db.js";
+import { compositeSubscriptionMetrics } from "../subscription/composite-subscription.js";
 
 function asyncRoute(fn: (req: express.Request, res: express.Response) => Promise<void | express.Response>) {
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -36,6 +38,20 @@ diagnosticsAdminRouter.get(
   "/crons",
   asyncRoute(async (_req, res) => {
     return res.json({ items: listCronEntries() });
+  }),
+);
+
+diagnosticsAdminRouter.get(
+  "/composite-subscriptions",
+  asyncRoute(async (_req, res) => {
+    const [pending, errors] = await Promise.all([
+      prisma.subscription.count({ where: { syncStatus: "PENDING" } }),
+      prisma.subscription.count({ where: { syncStatus: "ERROR" } }),
+    ]);
+    return res.json({
+      requests: compositeSubscriptionMetrics.snapshot(),
+      synchronization: { pending, errors },
+    });
   }),
 );
 

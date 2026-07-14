@@ -17,6 +17,10 @@ import {
 } from "../remna/remna.client.js";
 import { getSystemConfig } from "../client/client.service.js";
 import { getPrimaryBot } from "../bot/bot.service.js";
+import {
+  isManagedComponentUsername,
+  synchronizeSubscriptionComponents,
+} from "../subscription/subscription-components.service.js";
 
 const PAGE_SIZE = 100;
 
@@ -84,6 +88,12 @@ export async function syncFromRemna(): Promise<{
     const users = extractRemnaUsers(res.data);
     if (users.length === 0) hasMore = false;
     else {
+      const pageUuids = users.map((user) => user.uuid).filter((uuid): uuid is string => Boolean(uuid));
+      const linkedComponents = await prisma.remnawaveComponent.findMany({
+        where: { remnawaveUuid: { in: pageUuids } },
+        select: { remnawaveUuid: true },
+      });
+      const linkedComponentUuids = new Set(linkedComponents.flatMap((component) => component.remnawaveUuid ? [component.remnawaveUuid] : []));
       for (const u of users) {
         const uuid = u.uuid;
         if (!uuid) {
@@ -95,6 +105,12 @@ export async function syncFromRemna(): Promise<{
         const username = u.username && String(u.username).trim() ? String(u.username).trim() : null;
 
         try {
+          // Runtime-компоненты уже принадлежат одной логической подписке и не
+          // должны превращаться в отдельных клиентов при Remnawave -> STEALTHNET.
+          if (linkedComponentUuids.has(uuid) || isManagedComponentUsername(username)) {
+            result.skipped++;
+            continue;
+          }
           const existingByUuid = await prisma.client.findFirst({
             where: { remnawaveUuid: uuid },
           });
@@ -255,6 +271,19 @@ export async function syncToRemna(): Promise<{
       }
     } catch (e) {
       result.errors.push(`${uuid}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // Дополнительные пользователи Remnawave синхронизируются как части
+  // Subscription, а не как самостоятельные Client.
+  const subscriptions = await prisma.subscription.findMany({
+    where: { ownerId: { in: clients.map((client) => client.id) } },
+    select: { id: true },
+  });
+  for (const subscription of subscriptions) {
+    const sync = await synchronizeSubscriptionComponents(subscription.id);
+    if (sync.failures.length) {
+      result.errors.push(...sync.failures.map((failure) => `${subscription.id}/${failure.key}: ${failure.error}`));
     }
   }
 

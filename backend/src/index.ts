@@ -13,6 +13,7 @@ import { startContestDailyReminderScheduler, stopContestDailyReminderScheduler }
 import { startAutoRenewScheduler } from "./modules/payment/auto-renew.cron.js";
 import { startAutoBackupScheduler, stopAutoBackupScheduler } from "./modules/backup/auto-backup.scheduler.js";
 import { startGiftExpiryCron } from "./modules/gift/gift-expiry.cron.js";
+import { startSubscriptionMaintenance } from "./modules/subscription/subscription-maintenance.cron.js";
 import { startMarketplaceScheduler, stopMarketplaceScheduler } from "./modules/marketplace/marketplace.scheduler.js";
 import { ensureTheme, seedDefaultsToEmptyBlocks } from "./modules/landing/landing.service.js";
 import { migrateLandingToBlocks } from "./scripts/migrate-landing-to-blocks.js";
@@ -46,6 +47,7 @@ async function main() {
   startContestDailyReminderScheduler(env.CONTEST_REMINDER_CRON ?? undefined);
   startAutoRenewScheduler();
   startGiftExpiryCron();
+  startSubscriptionMaintenance();
   // крон удаления «заброшенных» аккаунтов УДАЛЁН.
   // Он удалял всех с onboardingCompleted=false старше 30 мин — а теперь этот флаг ставится
   // TG-юзерам для запуска онбординга (см. /telegram-login-check, /register). Крон бы их стирал.

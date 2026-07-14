@@ -2553,6 +2553,7 @@ clientRouter.post("/promo/activate", async (req, res) => {
   const hwidDeviceLimit = group.deviceLimit ?? null;
 
   let promoWorkingUuid = client.remnawaveUuid;
+  let promoExpireAt: string | null = null;
 
   if (promoWorkingUuid) {
     const checkRes = await remnaGetUser(promoWorkingUuid);
@@ -2567,6 +2568,7 @@ clientRouter.post("/promo/activate", async (req, res) => {
     const userRes = await remnaGetUser(promoWorkingUuid);
     const currentExpireAt = extractCurrentExpireAt(userRes.data);
     const expireAt = calculateExpireAt(currentExpireAt, group.durationDays);
+    promoExpireAt = expireAt;
 
     const updateRes = await remnaUpdateUser({
       uuid: promoWorkingUuid,
@@ -2598,6 +2600,7 @@ clientRouter.post("/promo/activate", async (req, res) => {
       clientIdFallback: client.id,
     });
     const expireAt = calculateExpireAt(currentExpireAt, group.durationDays);
+    promoExpireAt = expireAt;
     if (!existingUuid) {
       const createRes = await remnaCreateUser({
         username: displayUsername,
@@ -2619,10 +2622,20 @@ clientRouter.post("/promo/activate", async (req, res) => {
       where: { id: client.id },
       data: { remnawaveUuid: existingUuid },
     });
+    promoWorkingUuid = existingUuid;
   }
 
   // Запись об активации уже создана выше в Serializable-транзакции до Remna —
   // повторный create тут НЕ нужен.
+  if (promoWorkingUuid && promoExpireAt) {
+    const logical = await upsertSubscriptionByRemnaUuid(client.id, {
+      remnawaveUuid: promoWorkingUuid,
+      expireAt: new Date(promoExpireAt),
+    });
+    await synchronizeSubscriptionComponents(logical.id).catch((error) =>
+      console.error("[promo] component sync failed:", error),
+    );
+  }
 
   return res.json({ message: "Промокод активирован! Подписка подключена." });
 });
@@ -2700,11 +2713,14 @@ clientRouter.post("/promo-code/activate", async (req, res) => {
 
   const trafficLimitBytes = Number(promo.trafficLimitBytes ?? 0);
   const hwidDeviceLimit = promo.deviceLimit ?? null;
+  let activatedUuid: string | null = client.remnawaveUuid;
+  let activatedExpireAt: string | null = null;
 
   if (client.remnawaveUuid) {
     const userRes = await remnaGetUser(client.remnawaveUuid);
     const currentExpireAt = extractCurrentExpireAt(userRes.data);
     const expireAt = calculateExpireAt(currentExpireAt, promo.durationDays);
+    activatedExpireAt = expireAt;
 
     const updateRes = await remnaUpdateUser({
       uuid: client.remnawaveUuid,
@@ -2737,6 +2753,7 @@ clientRouter.post("/promo-code/activate", async (req, res) => {
       clientIdFallback: client.id,
     });
     const expireAt = calculateExpireAt(currentExpireAt, promo.durationDays);
+    activatedExpireAt = expireAt;
     if (!existingUuid) {
       const createRes = await remnaCreateUser({
         username: displayUsername,
@@ -2755,9 +2772,19 @@ clientRouter.post("/promo-code/activate", async (req, res) => {
     await remnaUpdateUser({ uuid: existingUuid, expireAt, trafficLimitBytes, hwidDeviceLimit, activeInternalSquads: [promo.squadUuid] });
     // Не вызываем add-users: по api-1.yaml эндпоинт добавляет ВСЕХ пользователей в сквад.
     await prisma.client.update({ where: { id: client.id }, data: { remnawaveUuid: existingUuid } });
+    activatedUuid = existingUuid;
   }
 
   await prisma.promoCodeUsage.create({ data: { promoCodeId: promo.id, clientId: client.id } });
+  if (activatedUuid && activatedExpireAt) {
+    const logical = await upsertSubscriptionByRemnaUuid(client.id, {
+      remnawaveUuid: activatedUuid,
+      expireAt: new Date(activatedExpireAt),
+    });
+    await synchronizeSubscriptionComponents(logical.id).catch((error) =>
+      console.error("[promo-code] component sync failed:", error),
+    );
+  }
 
   // уведомление админам в TG-группу: активирован промокод FREE_DAYS (best-effort).
   {
@@ -3064,7 +3091,22 @@ clientRouter.get("/subscription/by-uuid/:uuid", async (req, res) => {
   // Проверяем принадлежность и одновременно получаем стабильный публичный token.
   const dbSubscription = await prisma.subscription.findFirst({
     where: { ownerId: clientId, remnawaveUuid: uuid },
-    select: { publicSubscriptionToken: true },
+    select: {
+      publicSubscriptionToken: true,
+      components: {
+        where: { showQuotaToClient: true },
+        orderBy: { mergeOrder: "asc" },
+        select: {
+          key: true,
+          adminName: true,
+          quotaDisplayName: true,
+          trafficLimitBytes: true,
+          trafficResetMode: true,
+          remnawaveUuid: true,
+          showQuotaToClient: true,
+        },
+      },
+    },
   });
   if (!dbSubscription && client.remnawaveUuid !== uuid) {
     return res.status(404).json({ subscription: null, tariffDisplayName: null, message: "Подписка не найдена" });
@@ -3085,7 +3127,11 @@ clientRouter.get("/subscription/by-uuid/:uuid", async (req, res) => {
     await encryptSubscriptionUrlInPlace(result.data);
   }
   const tariffDisplayName = await resolveTariffDisplayName(result.data ?? null);
-  return res.json({ subscription: result.data ?? null, tariffDisplayName });
+  return res.json({
+    subscription: result.data ?? null,
+    tariffDisplayName,
+    componentQuotas: await loadVisibleComponentQuotas(dbSubscription?.components ?? []),
+  });
 });
 
 /**

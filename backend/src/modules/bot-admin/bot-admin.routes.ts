@@ -18,7 +18,9 @@ import {
   remnaUpdateUser,
 } from "../remna/remna.client.js";
 import {
+  disableClient,
   disableAllSubscriptionsInRemna,
+  enableClient,
   enableAllSubscriptionsInRemna,
   resetAllSubscriptionsTraffic,
   revokeAllSubscriptionsUrls,
@@ -289,10 +291,11 @@ botAdminRouter.patch("/clients/:id/block", async (req, res) => {
   }
   const client = await prisma.client.findUnique({ where: { id: parsed.data.id } });
   if (!client) return res.status(404).json({ message: "Клиент не найден" });
+  if (body.data.isBlocked) await disableClient(parsed.data.id);
+  else await enableClient(parsed.data.id);
   await prisma.client.update({
     where: { id: parsed.data.id },
     data: {
-      isBlocked: body.data.isBlocked,
       blockReason: body.data.isBlocked ? (body.data.blockReason ?? null) : null,
     },
   });

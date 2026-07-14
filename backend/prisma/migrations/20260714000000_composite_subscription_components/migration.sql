@@ -10,7 +10,8 @@ ALTER TABLE "subscriptions"
   ADD COLUMN "sync_error" TEXT,
   ADD COLUMN "sync_required_at" TIMESTAMP(3),
   ADD COLUMN "last_reconciled_at" TIMESTAMP(3),
-  ADD COLUMN "grace_until" TIMESTAMP(3);
+  ADD COLUMN "grace_until" TIMESTAMP(3),
+  ADD COLUMN "deletion_requested_at" TIMESTAMP(3);
 
 -- Не зависит от UUID-функций/extensions и безопасно для существующей production DB.
 UPDATE "subscriptions"
@@ -26,6 +27,10 @@ CREATE UNIQUE INDEX "subscriptions_public_subscription_token_key"
   ON "subscriptions"("public_subscription_token");
 CREATE INDEX "subscriptions_sync_status_sync_required_at_idx"
   ON "subscriptions"("sync_status", "sync_required_at");
+CREATE INDEX "subscriptions_last_reconciled_at_idx"
+  ON "subscriptions"("last_reconciled_at");
+CREATE INDEX "subscriptions_deletion_requested_at_idx"
+  ON "subscriptions"("deletion_requested_at");
 
 CREATE TABLE "remnawave_components" (
   "id" TEXT NOT NULL,

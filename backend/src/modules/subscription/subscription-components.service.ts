@@ -1,12 +1,18 @@
 import { prisma } from "../../db.js";
 import {
   extractRemnaUuid,
+  isRemnaConfigured,
   remnaCreateUser,
+  remnaDeleteUser,
+  remnaDisableUser,
+  remnaEnableUser,
+  remnaGetUser,
   remnaRevokeUserSubscription,
   remnaUpdateUser,
   remnaUsernameFromClient,
 } from "../remna/remna.client.js";
 import { generatePublicSubscriptionToken } from "./subscription.helpers.js";
+import { getSystemConfig } from "../client/client.service.js";
 
 type ComponentOperationTarget = {
   key: string;
@@ -61,6 +67,29 @@ function bigintFromUnknown(value: unknown): bigint {
   if (typeof value === "number" && Number.isFinite(value)) return BigInt(Math.max(0, Math.trunc(value)));
   if (typeof value === "string" && /^\d+$/.test(value)) return BigInt(value);
   return 0n;
+}
+
+export function extractRemnawaveComponentSnapshot(payload: unknown) {
+  const root = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  const inner = ((root.response ?? root.data ?? root) && typeof (root.response ?? root.data ?? root) === "object"
+    ? (root.response ?? root.data ?? root)
+    : {}) as Record<string, unknown>;
+  const squads = Array.isArray(inner.activeInternalSquads) ? inner.activeInternalSquads : [];
+  return {
+    uuid: typeof inner.uuid === "string" ? inner.uuid : null,
+    shortUuid: typeof inner.shortUuid === "string" ? inner.shortUuid : null,
+    expireAt: typeof inner.expireAt === "string" ? inner.expireAt : null,
+    status: typeof inner.status === "string" ? inner.status : null,
+    hwidDeviceLimit: typeof inner.hwidDeviceLimit === "number" ? inner.hwidDeviceLimit : null,
+    trafficLimitBytes: bigintFromUnknown(inner.trafficLimitBytes),
+    internalSquadUuids: squads.flatMap((item) => {
+      if (typeof item === "string") return [item];
+      if (item && typeof item === "object" && typeof (item as Record<string, unknown>).uuid === "string") {
+        return [(item as Record<string, unknown>).uuid as string];
+      }
+      return [];
+    }),
+  };
 }
 
 export function componentQuotaFromRemna(
@@ -209,11 +238,73 @@ export async function revokeSubscriptionComponents(subscriptionId: string) {
   return { ...result, publicSubscriptionToken, upstreamShortUuid };
 }
 
+/**
+ * Идемпотентное удаление логической подписки. Tombstone сохраняет UUID
+ * компонентов до тех пор, пока каждый upstream user не удалён или не вернул 404.
+ */
+export async function deleteSubscriptionComponents(subscriptionId: string) {
+  const marked = await prisma.subscription.updateMany({
+    where: { id: subscriptionId },
+    data: {
+      deletionRequestedAt: new Date(),
+      syncStatus: "PENDING",
+      syncRequiredAt: new Date(),
+    },
+  });
+  if (!marked.count) {
+    return {
+      deleted: true,
+      failures: [] as Array<{ key: string; required: boolean; error: string }>,
+      requiredFailure: false,
+    };
+  }
+  const links = await prisma.subscription.findUnique({
+    where: { id: subscriptionId },
+    select: {
+      remnawaveUuid: true,
+      components: { select: { remnawaveUuid: true, mergeOrder: true } },
+    },
+  });
+  if (links && !subscriptionRemnawaveUuids(links).length) {
+    await prisma.subscription.delete({ where: { id: subscriptionId } });
+    return {
+      deleted: true,
+      failures: [] as Array<{ key: string; required: boolean; error: string }>,
+      requiredFailure: false,
+    };
+  }
+  const result = await runSubscriptionComponentOperation(subscriptionId, async ({ remnawaveUuid }) => {
+    const response = await remnaDeleteUser(remnawaveUuid);
+    if (response.error && response.status !== 404) throw new Error(response.error);
+  });
+  if (!result.failures.length) {
+    await prisma.subscription.delete({ where: { id: subscriptionId } });
+  }
+  return { deleted: result.failures.length === 0, ...result };
+}
+
 export function buildComponentUsername(base: string, key: string, subscriptionIndex: number): string {
   const safeBase = base.replace(/[^a-zA-Z0-9_-]/g, "_");
   const safeKey = key.replace(/[^a-zA-Z0-9_-]/g, "_");
   const suffix = `_c_${safeKey}_${subscriptionIndex}`;
   return `${safeBase.slice(0, Math.max(1, 36 - suffix.length))}${suffix}`.slice(0, 36);
+}
+
+/** Наш универсальный suffix и legacy `_WL` нужны только на границе импорта. */
+export function isManagedComponentUsername(username: string | null | undefined): boolean {
+  return typeof username === "string" && (/_c_[a-zA-Z0-9_-]+_\d+$/.test(username) || /_WL$/i.test(username));
+}
+
+export function computeExpiredGraceWindow(expireAt: Date, days: number, now = new Date()) {
+  const graceUntil = new Date(expireAt.getTime() + Math.max(0, days) * 86_400_000);
+  return { graceUntil, active: days > 0 && now.getTime() < graceUntil.getTime() };
+}
+
+export function expiredGraceComponentPolicy(required: boolean, squadUuid: string) {
+  return {
+    activeInternalSquads: required ? [squadUuid] : [],
+    enabled: required,
+  };
 }
 
 type ComponentTemplate = {
@@ -261,7 +352,7 @@ function templatesForSubscription(subscription: {
     ? subscription.tariff.remnawaveComponents
     : subscription.trial?.remnawaveComponents ?? [];
   const enabled = configured.filter((component) => component.enabled);
-  if (enabled.length) {
+  if (enabled.some((component) => component.required)) {
     return enabled.map((component) => ({
       key: component.key,
       adminName: component.adminName,
@@ -314,15 +405,42 @@ export async function synchronizeSubscriptionComponents(subscriptionId: string):
       failures: [{ key: "subscription", required: true, error: "Подписка не найдена" }],
     };
   }
+  if (subscription.deletionRequestedAt) {
+    return {
+      ok: false,
+      requiredFailure: true,
+      failures: [{ key: "subscription", required: true, error: "Подписка ожидает удаления" }],
+    };
+  }
+
+  const now = new Date();
+  const systemConfig = await getSystemConfig();
+  const graceSquadUuid = systemConfig.expiredGraceSquadUuid;
+  const graceActive = Boolean(
+    systemConfig.expiredGraceEnabled
+    && graceSquadUuid
+    && subscription.graceUntil
+    && subscription.graceUntil.getTime() > now.getTime()
+    && subscription.expireAt
+    && subscription.expireAt.getTime() <= now.getTime(),
+  );
+  if (subscription.expireAt && subscription.expireAt.getTime() > now.getTime() && subscription.graceUntil) {
+    await prisma.subscription.update({ where: { id: subscriptionId }, data: { graceUntil: null } });
+  }
 
   const templates = templatesForSubscription(subscription);
+  const templateKeys = templates.map((template) => template.key);
+  const subscriptionUuidIsFree = Boolean(
+    subscription.remnawaveUuid
+    && !subscription.components.some((component) => component.remnawaveUuid === subscription.remnawaveUuid),
+  );
   for (const template of templates) {
     await prisma.remnawaveComponent.upsert({
       where: { subscriptionId_key: { subscriptionId, key: template.key } },
       create: {
         subscriptionId,
         ...template,
-        remnawaveUuid: template.required ? subscription.remnawaveUuid : null,
+        remnawaveUuid: template.required && subscriptionUuidIsFree ? subscription.remnawaveUuid : null,
       },
       update: {
         adminName: template.adminName,
@@ -333,7 +451,7 @@ export async function synchronizeSubscriptionComponents(subscriptionId: string):
         trafficResetMode: template.trafficResetMode,
         showQuotaToClient: template.showQuotaToClient,
         quotaDisplayName: template.quotaDisplayName,
-        ...(template.required && subscription.remnawaveUuid
+        ...(template.required && subscriptionUuidIsFree && subscription.remnawaveUuid
           ? { remnawaveUuid: subscription.remnawaveUuid }
           : {}),
       },
@@ -341,7 +459,11 @@ export async function synchronizeSubscriptionComponents(subscriptionId: string):
   }
 
   const components = await prisma.remnawaveComponent.findMany({
-    where: { subscriptionId, key: { in: templates.map((template) => template.key) } },
+    where: { subscriptionId, key: { in: templateKeys } },
+    orderBy: { mergeOrder: "asc" },
+  });
+  const obsoleteComponents = await prisma.remnawaveComponent.findMany({
+    where: { subscriptionId, key: { notIn: templateKeys } },
     orderBy: { mergeOrder: "asc" },
   });
   const baseUsername = remnaUsernameFromClient({
@@ -362,6 +484,22 @@ export async function synchronizeSubscriptionComponents(subscriptionId: string):
       }
     : {};
 
+  const upstreamState = new Map<string, { status: number; error?: string; snapshot: ReturnType<typeof extractRemnawaveComponentSnapshot> }>();
+  await Promise.all(components.map(async (component) => {
+    if (!component.remnawaveUuid) return;
+    const response = await remnaGetUser(component.remnawaveUuid);
+    upstreamState.set(component.id, {
+      status: response.status,
+      ...(response.error ? { error: response.error } : {}),
+      snapshot: extractRemnawaveComponentSnapshot(response.data),
+    });
+  }));
+  const requiredComponent = components.find((component) => component.required);
+  const requiredState = requiredComponent ? upstreamState.get(requiredComponent.id) : undefined;
+  const sharedShortUuid = requiredState?.snapshot.shortUuid
+    ?? requiredComponent?.upstreamShortUuid
+    ?? generatePublicSubscriptionToken().slice(0, 32);
+
   const result = await runComponentOperations(components, async (component) => {
     // Legacy system-config Trial does not have a persisted template. Its main user
     // was already configured by the caller, so an empty synthesized squad list
@@ -369,52 +507,107 @@ export async function synchronizeSubscriptionComponents(subscriptionId: string):
     if (component.required && !subscription.tariff && !subscription.trial) return;
     if (!subscription.expireAt) throw new Error("Неизвестен срок действия подписки");
 
+    const gracePolicy = graceActive && graceSquadUuid
+      ? expiredGraceComponentPolicy(component.required, graceSquadUuid)
+      : null;
     const payload = {
-      expireAt: subscription.expireAt.toISOString(),
+      expireAt: (graceActive && subscription.graceUntil ? subscription.graceUntil : subscription.expireAt).toISOString(),
       trafficLimitBytes: component.trafficLimitBytes == null ? 0 : Number(component.trafficLimitBytes),
       trafficLimitStrategy: trafficStrategy(component.trafficResetMode),
       hwidDeviceLimit,
-      activeInternalSquads: component.internalSquadUuids,
+      activeInternalSquads: gracePolicy?.activeInternalSquads ?? component.internalSquadUuids,
     };
 
     let remnawaveUuid = component.remnawaveUuid;
-    if (remnawaveUuid) {
+    const previousState = upstreamState.get(component.id);
+    let lastKnownStatus = previousState?.snapshot.status ?? null;
+    if (remnawaveUuid && previousState?.status !== 404) {
       const updated = await remnaUpdateUser({ uuid: remnawaveUuid, ...payload, ...identityPayload });
-      if (updated.error) throw new Error(updated.error);
-    } else {
+      if (updated.error && updated.status !== 404) throw new Error(updated.error);
+      if (updated.status === 404) remnawaveUuid = null;
+    }
+    if (!remnawaveUuid) {
       const created = await remnaCreateUser({
         username: buildComponentUsername(baseUsername, component.key, subscription.subscriptionIndex),
         ...payload,
         ...identityPayload,
+        ...(sharedShortUuid ? { shortUuid: sharedShortUuid } : {}),
       });
       remnawaveUuid = extractRemnaUuid(created.data);
       if (!remnawaveUuid) throw new Error(created.error || "Remnawave не вернул UUID компонента");
+      lastKnownStatus = extractRemnawaveComponentSnapshot(created.data).status;
+    }
+
+    if (
+      sharedShortUuid
+      && previousState
+      && previousState.snapshot.shortUuid !== sharedShortUuid
+    ) {
+      const revoked = await remnaRevokeUserSubscription(remnawaveUuid, { shortUuid: sharedShortUuid });
+      if (revoked.error) throw new Error(revoked.error);
+    }
+    if (
+      subscription.owner.isBlocked
+      || (subscription.expireAt.getTime() <= now.getTime() && !graceActive)
+      || gracePolicy?.enabled === false
+    ) {
+      const disabled = await remnaDisableUser(remnawaveUuid);
+      if (disabled.error) throw new Error(disabled.error);
+      lastKnownStatus = "DISABLED";
+    } else if (gracePolicy?.enabled) {
+      const enabled = await remnaEnableUser(remnawaveUuid);
+      if (enabled.error) throw new Error(enabled.error);
+      lastKnownStatus = "ACTIVE";
     }
 
     await prisma.remnawaveComponent.update({
       where: { id: component.id },
       data: {
         remnawaveUuid,
+        upstreamShortUuid: sharedShortUuid,
+        lastKnownStatus,
         lastSyncError: null,
         lastSyncedAt: new Date(),
       },
     });
+    if (component.required && remnawaveUuid !== subscription.remnawaveUuid) {
+      await prisma.subscription.update({ where: { id: subscriptionId }, data: { remnawaveUuid } });
+      if (subscription.subscriptionIndex === 0) {
+        await prisma.client.update({ where: { id: subscription.ownerId }, data: { remnawaveUuid } });
+      }
+    }
   });
 
-  for (const failure of result.failures) {
+  const cleanupResult = result.requiredFailure
+    ? { failures: [] as Array<{ key: string; required: boolean; error: string }>, requiredFailure: false }
+    : await runComponentOperations(obsoleteComponents, async (component) => {
+        await prisma.remnawaveComponent.update({
+          where: { id: component.id },
+          data: { lastKnownStatus: "REMOVING" },
+        });
+        if (component.remnawaveUuid) {
+          const disabled = await remnaDisableUser(component.remnawaveUuid);
+          if (disabled.error && disabled.status !== 404) throw new Error(disabled.error);
+        }
+        await prisma.remnawaveComponent.delete({ where: { id: component.id } });
+      });
+  const failures = [...result.failures, ...cleanupResult.failures];
+  const requiredFailure = result.requiredFailure || cleanupResult.requiredFailure;
+
+  for (const failure of failures) {
     await prisma.remnawaveComponent.updateMany({
       where: { subscriptionId, key: failure.key },
       data: { lastSyncError: failure.error },
     });
   }
 
-  if (result.failures.length) {
+  if (failures.length) {
     await prisma.subscription.update({
       where: { id: subscriptionId },
       data: {
         syncStatus: "PENDING",
         syncAttempts: { increment: 1 },
-        syncError: result.failures.map((failure) => `${failure.key}: ${failure.error}`).join("; "),
+        syncError: failures.map((failure) => `${failure.key}: ${failure.error}`).join("; "),
         syncRequiredAt: new Date(Date.now() + 5 * 60_000),
       },
     });
@@ -431,5 +624,74 @@ export async function synchronizeSubscriptionComponents(subscriptionId: string):
     });
   }
 
-  return { ok: result.failures.length === 0, ...result };
+  return { ok: failures.length === 0, requiredFailure, failures };
+}
+
+export async function reconcileSubscriptionComponents(limit = 50) {
+  if (!isRemnaConfigured()) return { checked: 0, synced: 0, degraded: 0, failed: 0 };
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - 6 * 60 * 60_000);
+  const subscriptions = await prisma.subscription.findMany({
+    where: {
+      OR: [
+        { deletionRequestedAt: { not: null } },
+        { syncStatus: { not: "SYNCED" }, OR: [{ syncRequiredAt: null }, { syncRequiredAt: { lte: now } }] },
+        { lastReconciledAt: null },
+        { lastReconciledAt: { lte: staleBefore } },
+      ],
+    },
+    orderBy: [{ syncRequiredAt: "asc" }, { lastReconciledAt: "asc" }],
+    take: Math.max(1, Math.min(500, Math.trunc(limit))),
+    select: { id: true, deletionRequestedAt: true },
+  });
+
+  let synced = 0;
+  let degraded = 0;
+  let failed = 0;
+  for (const subscription of subscriptions) {
+    const result = await (subscription.deletionRequestedAt
+      ? deleteSubscriptionComponents(subscription.id)
+      : synchronizeSubscriptionComponents(subscription.id)).catch((error) => ({
+      ok: false,
+      deleted: false,
+      requiredFailure: true,
+      failures: [{ key: "subscription", required: true, error: error instanceof Error ? error.message : String(error) }],
+    }));
+    if (("deleted" in result && result.deleted) || ("ok" in result && result.ok)) synced++;
+    else if (result.requiredFailure) failed++;
+    else degraded++;
+  }
+  return { checked: subscriptions.length, synced, degraded, failed };
+}
+
+export async function processExpiredSubscriptionAccess(limit = 200) {
+  if (!isRemnaConfigured()) return { checked: 0, grace: 0, disabled: 0, failed: 0 };
+  const config = await getSystemConfig();
+  const now = new Date();
+  const subscriptions = await prisma.subscription.findMany({
+    where: { expireAt: { lte: now }, deletionRequestedAt: null },
+    orderBy: { expireAt: "desc" },
+    take: Math.max(1, Math.min(1000, Math.trunc(limit))),
+    select: { id: true, expireAt: true, graceUntil: true },
+  });
+  let grace = 0;
+  let disabled = 0;
+  let failed = 0;
+  for (const subscription of subscriptions) {
+    if (!subscription.expireAt) continue;
+    const window = computeExpiredGraceWindow(subscription.expireAt, config.expiredGraceDays, now);
+    const allowGrace = Boolean(config.expiredGraceEnabled && config.expiredGraceSquadUuid && window.active);
+    const desiredGraceUntil = allowGrace ? window.graceUntil : null;
+    if (subscription.graceUntil?.getTime() !== desiredGraceUntil?.getTime()) {
+      await prisma.subscription.update({
+        where: { id: subscription.id },
+        data: { graceUntil: desiredGraceUntil },
+      });
+    }
+    const result = await synchronizeSubscriptionComponents(subscription.id);
+    if (result.requiredFailure) failed++;
+    else if (allowGrace) grace++;
+    else disabled++;
+  }
+  return { checked: subscriptions.length, grace, disabled, failed };
 }

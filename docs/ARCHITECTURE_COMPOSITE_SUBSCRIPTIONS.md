@@ -1,6 +1,6 @@
 # Архитектура составных подписок Remnawave
 
-Статус: проект решения, требует утверждения до реализации  
+Статус: реализовано в ветке `feature/composite-subscriptions`
 Проект: STEALTHNET  
 Дата: 2026-07-14
 
@@ -54,9 +54,9 @@ HWID limit и логический статус подписки.
 ### Component Template
 
 Настройка компонента в тарифе или standalone trial. При активации она
-материализуется в `RemnawaveComponent` как snapshot. Благодаря
-snapshot изменение тарифа не меняет уже купленные подписки до следующей
-явной смены тарифа или продления по выбранной политике.
+материализуется в `RemnawaveComponent` как операционный snapshot. Изменение
+шаблонов тарифа помечает связанные подписки `PENDING`; существующий scheduler
+применяет новую конфигурацию ко всем активным экземплярам.
 
 ## 3. Архитектурные инварианты
 
@@ -115,6 +115,7 @@ syncError               String?
 syncRequiredAt           DateTime?
 lastReconciledAt         DateTime?
 graceUntil               DateTime?
+deletionRequestedAt      DateTime?
 components               RemnawaveComponent[]
 ```
 
@@ -253,9 +254,10 @@ Base64/JSON merge являются чистыми функциями без до
 
 ### Reconciliation
 
-Reconciliation добавляется в существующий `sync.service.ts`, поскольку это
-операция синхронизации STEALTHNET и Remnawave. Отдельный reconciliation service
-не создаётся.
+Алгоритм reconciliation находится в единственном component service, а
+`sync.service.ts` вызывает его в существующих направлениях синхронизации.
+Планирование использует имеющиеся `node-cron`, `wrapCronTick` и
+`cron-registry`; отдельный scheduler или service layer не создаётся.
 
 ## 7. Почему необходим публичный endpoint
 
@@ -416,13 +418,14 @@ UI получает массив публичных квот:
 
 ```json
 {
-  "quotas": [
+  "componentQuotas": [
     {
-      "name": "WhiteList",
-      "limitBytes": 16106127360,
-      "usedBytes": 16106127360,
-      "remainingBytes": 0,
-      "resetAt": "2026-08-01T00:00:00.000Z",
+      "key": "whitelist",
+      "displayName": "WhiteList",
+      "limitBytes": "16106127360",
+      "usedBytes": "16106127360",
+      "remainingBytes": "0",
+      "nextResetAt": "2026-08-01T00:00:00.000Z",
       "status": "LIMITED"
     }
   ]
@@ -468,9 +471,9 @@ sequenceDiagram
     API-->>U: новый единый subscriptionUrl
 ```
 
-Upstream short UUID разных пользователей Remnawave не обязаны совпадать.
-Reconciliation проверяет, что у каждого компонента сохранено его актуальное
-значение. Пользователь знает только `publicSubscriptionToken`.
+Все пользователи Remnawave одной логической подписки получают одинаковый
+upstream short UUID. Reconciliation исправляет расхождения, а пользователь
+знает только независимый `publicSubscriptionToken`.
 
 ## 13. Удаление, блокировка и reset traffic
 
@@ -486,13 +489,19 @@ Reconciliation проверяет, что у каждого компонента
 Существующие admin/client/bot маршруты сохраняют контракт и вызывают общий
 сервис вместо прямой операции над одним `remnawaveUuid`.
 
+Удаление сначала устанавливает `deletionRequestedAt`. Пока не удалены все
+upstream-пользователи, локальная запись и UUID сохраняются для повторной
+попытки, а публичная ссылка уже недоступна. После ответов success/404 по всем
+компонентам worker выполняет hard delete. Поэтому partial failure не оставляет
+неуправляемый orphan в Remnawave.
+
 ## 14. EXPIRED и Telegram grace
 
 Настройки в `SystemSetting`:
 
-- `expiredTelegramGraceEnabled`;
-- `expiredTelegramGraceDays`;
-- `expiredTelegramGraceSquadUuid`.
+- `expired_grace_enabled`;
+- `expired_grace_days`;
+- `expired_grace_squad_uuid`.
 
 ```mermaid
 stateDiagram-v2
@@ -505,8 +514,8 @@ stateDiagram-v2
 
 Переход в grace:
 
-1. Все обычные компоненты отключаются.
-2. Обязательный компонент получает только Squad `only_telegram`.
+1. Дополнительные компоненты очищаются от Squad и отключаются.
+2. Обязательный компонент получает только Squad `only_telegram` и остаётся включённым.
 3. Его upstream expireAt устанавливается в `Subscription.expireAt + graceDays`.
 4. Логический `Subscription.expireAt` не изменяется.
 5. После `graceUntil` отключаются все компоненты.
@@ -520,13 +529,13 @@ scheduler не создаётся.
 
 ## 15. Reconciliation
 
-Reconciliation является частью `sync.service.ts` и регистрируется как обычная
-задача через существующие `node-cron`, `wrapCronTick` и `cron-registry`.
+Reconciliation вызывается из общего component service и регистрируется как
+обычная задача через существующие `node-cron`, `wrapCronTick` и `cron-registry`.
 
 ```mermaid
 sequenceDiagram
     participant CRON as existing cron infrastructure
-    participant SYNC as sync.service
+    participant SYNC as component service
     participant DB as PostgreSQL
     participant R as Remnawave
 
@@ -559,9 +568,9 @@ sequenceDiagram
 - enabled/disabled status;
 - grace state.
 
-Retry использует ограниченный batch и экспоненциальную задержку с верхним
-пределом. После лимита попыток устанавливается `ERROR`, но ручной retry снова
-переводит запись в `PENDING`.
+Retry использует ограниченный batch, фиксированную задержку пять минут и
+периодическую контрольную сверку раз в шесть часов. Ошибка хранится в
+`syncError`, а успешная сверка сбрасывает счётчик попыток.
 
 ## 16. Импорт и двусторонняя синхронизация
 
@@ -602,10 +611,10 @@ SQL migration не выполняет сетевые запросы в Remnawave
 ### 17.2 Backfill command
 
 ```text
-backfill-composite-subscriptions
+npm run backfill:composite-subscriptions --
   --dry-run
-  --limit <n>
-  --subscription-id <id>
+  --limit=<n>
+  --tariff-id=<id>
 ```
 
 ```mermaid
@@ -634,7 +643,7 @@ flowchart TD
 ### Пользователь
 
 Существующие ответы сохраняют поле `subscriptionUrl`. Дополнительно возвращается
-массив `quotas` без внутренних UUID.
+массив `componentQuotas` без внутренних UUID.
 
 Кабинет показывает:
 

@@ -14,12 +14,12 @@ import {
   extractRemnaUuid,
   remnaUsernameFromClient,
   remnaResetUserTraffic,
-  remnaDeleteUser,
 } from "../remna/remna.client.js";
 import { createAdditionalSubscription, deleteSubscription } from "../gift/gift.service.js";
 import { getSystemConfig } from "../client/client.service.js";
 import { upsertSubscriptionByRemnaUuid } from "../subscription/subscription.helpers.js";
 import {
+  deleteSubscriptionComponents,
   runSubscriptionComponentOperation,
   synchronizeSubscriptionComponents,
 } from "../subscription/subscription-components.service.js";
@@ -362,6 +362,9 @@ export async function activateTariffForClient(
   let workingUuid = client.remnawaveUuid;
   // сохраняем итоговый expireAt чтобы синкнуть его в БД.
   let finalExpireAt: string | null = null;
+  // Основной Remnawave user может быть сброшен до материализации логической
+  // подписки. После materialize повторяем операцию по всем компонентам.
+  let resetAllComponentTraffic = false;
 
   if (workingUuid) {
     const userRes = await remnaGetUser(workingUuid);
@@ -418,6 +421,7 @@ export async function activateTariffForClient(
     // hadActiveSub — иначе у истёкших carry_over лимит рос (90+остаток), а счётчик used не обнулялся.
     if (traffic.resetUsed) {
       await remnaResetUserTraffic(workingUuid);
+      resetAllComponentTraffic = true;
     }
     const finalTrafficLimitBytes = traffic.finalLimitBytes;
 
@@ -508,6 +512,7 @@ export async function activateTariffForClient(
     // T-traffic-expired-fix : used сбрасываем по resetUsed, не завися от истечения.
     if (traffic2.resetUsed) {
       await remnaResetUserTraffic(existingUuid);
+      resetAllComponentTraffic = true;
     }
     await remnaUpdateUser({ uuid: existingUuid, expireAt, trafficLimitBytes: traffic2.finalLimitBytes, trafficLimitStrategy, hwidDeviceLimit, activeInternalSquads });
     await prisma.client.update({ where: { id: client.id }, data: { remnawaveUuid: existingUuid } });
@@ -551,6 +556,12 @@ export async function activateTariffForClient(
       await synchronizeSubscriptionComponents(materialized.id).catch((e) =>
         console.error("[tariff-activation] component sync failed:", e),
       );
+      if (resetAllComponentTraffic) {
+        await runSubscriptionComponentOperation(materialized.id, async ({ remnawaveUuid }) => {
+          const reset = await remnaResetUserTraffic(remnawaveUuid);
+          if (reset.error) throw new Error(reset.error);
+        }).catch((e) => console.error("[tariff-activation] component traffic reset failed:", e));
+      }
     }
   }
 
@@ -1196,13 +1207,8 @@ export async function replaceTrialOnPurchase(clientId: string, requestedTrialSub
   });
   if (trials.length === 0) return null;
   const target = (requestedTrialSubId && trials.find((t) => t.id === requestedTrialSubId)) || trials[0];
-  await runSubscriptionComponentOperation(target.id, async ({ remnawaveUuid }) => {
-    const del = await remnaDeleteUser(remnawaveUuid);
-    if (del.error && del.status !== 404) throw new Error(del.error);
-  }).catch((error) => console.error("[trial-replace] component delete failed:", error));
-  await prisma.subscription.delete({ where: { id: target.id } }).catch((e) => {
-    console.error("[trial-replace] subscription delete failed:", e);
-  });
+  const deletion = await deleteSubscriptionComponents(target.id).catch((error) => ({ deleted: false, error }));
+  if (!deletion.deleted) console.error("[trial-replace] component deletion scheduled for reconciliation", "error" in deletion ? deletion.error : deletion.failures);
   // легаси-указатель клиента мог смотреть на удалённого Remna-юзера.
   await prisma.client.updateMany({
     where: { id: clientId, remnawaveUuid: target.remnawaveUuid ?? undefined },

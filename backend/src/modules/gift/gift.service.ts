@@ -22,13 +22,12 @@ import {
   remnaUsernameFromClient,
   extractRemnaUuid,
   isRemnaConfigured,
-  remnaDeleteUser,
 } from "../remna/remna.client.js";
 import { getSystemConfig } from "../client/client.service.js";
 import { buildPublicSubscriptionUrl, getNextSubscriptionIndex } from "../subscription/subscription.helpers.js";
 import { calcExtrasPrice } from "../tariff/extras-pricing.js";
 import {
-  runSubscriptionComponentOperation,
+  deleteSubscriptionComponents,
   synchronizeSubscriptionComponents,
 } from "../subscription/subscription-components.service.js";
 
@@ -432,25 +431,16 @@ export async function deleteSubscription(
     data: { status: "CANCELLED" },
   });
 
-  // Удаляем все Remnawave-компоненты. 404 идемпотентен; прочие ошибки не
-  // блокируют локальное удаление, как и в прежней логике.
-  await runSubscriptionComponentOperation(subscriptionId, async ({ remnawaveUuid }) => {
-    const deleteRes = await remnaDeleteUser(remnawaveUuid);
-    if (deleteRes.status >= 400 && deleteRes.status !== 404) {
-      throw new Error(deleteRes.error || `Remnawave delete failed (${deleteRes.status})`);
-    }
-  });
-
-  // Логируем ДО удаления (после удаления FK уже не существует)
-  await logGiftEvent(ownerId, "DELETED", subscriptionId, {
+  // Логируем запрос до hard delete: при partial failure запись остаётся tombstone,
+  // а reconciliation завершит удаление без orphan-пользователей Remnawave.
+  await logGiftEvent(ownerId, "DELETION_REQUESTED", subscriptionId, {
     tariffName: sub.tariff?.name ?? null,
     subscriptionIndex: sub.subscriptionIndex,
   });
-
-  // Hard delete
-  await prisma.subscription.delete({
-    where: { id: subscriptionId },
-  });
+  const deletion = await deleteSubscriptionComponents(subscriptionId);
+  if (!deletion.deleted) {
+    return { ok: false, error: "Удаление поставлено в очередь синхронизации", status: 502 };
+  }
 
   return { ok: true, data: undefined };
 }

@@ -29,6 +29,7 @@ export interface ResolvedRemnawaveComponent {
   trafficResetMode: string;
   showQuotaToClient: boolean;
   quotaDisplayName: string | null;
+  lastKnownStatus?: string | null;
 }
 
 export function generatePublicSubscriptionToken(): string {
@@ -50,6 +51,7 @@ export function resolveRemnawaveComponents(subscription: {
 }): ResolvedRemnawaveComponent[] {
   if (subscription.components?.length) {
     return subscription.components
+      .filter((component) => component.lastKnownStatus !== "REMOVING")
       .map((component) => component.required && !component.remnawaveUuid && subscription.remnawaveUuid
         ? { ...component, remnawaveUuid: subscription.remnawaveUuid }
         : component)

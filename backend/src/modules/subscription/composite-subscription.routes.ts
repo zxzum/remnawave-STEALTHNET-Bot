@@ -5,6 +5,7 @@ import {
   type RemnaSubscriptionFetchResult,
 } from "../remna/remna.client.js";
 import {
+  compositeSubscriptionMetrics,
   detectSubscriptionClient,
   extractRemnaSubscriptionUrl,
   mergeSubscriptionBodies,
@@ -22,29 +23,38 @@ export const publicSubscriptionRouter = Router();
 type FetchedComponent = {
   component: ResolvedRemnawaveComponent;
   result: RemnaSubscriptionFetchResult;
+  durationMs: number;
 };
 
 async function fetchComponent(
   component: ResolvedRemnawaveComponent,
   headers: Record<string, string>,
 ): Promise<FetchedComponent> {
+  const startedAt = Date.now();
+  const done = (result: RemnaSubscriptionFetchResult): FetchedComponent => ({
+    component,
+    result,
+    durationMs: Date.now() - startedAt,
+  });
   if (!component.remnawaveUuid) {
-    return { component, result: { status: 404, error: "Remnawave component UUID is missing" } };
+    return done({ status: 404, error: "Remnawave component UUID is missing" });
   }
   const user = await remnaGetUser(component.remnawaveUuid);
   if (user.error) {
-    return { component, result: { status: user.status, error: user.error } };
+    return done({ status: user.status, error: user.error });
   }
   const subscriptionUrl = extractRemnaSubscriptionUrl(user.data);
   if (!subscriptionUrl) {
-    return { component, result: { status: 502, error: "Remnawave subscription URL is missing" } };
+    return done({ status: 502, error: "Remnawave subscription URL is missing" });
   }
-  return { component, result: await remnaFetchSubscription(subscriptionUrl, headers) };
+  return done(await remnaFetchSubscription(subscriptionUrl, headers));
 }
 
 publicSubscriptionRouter.get("/:publicSubscriptionToken", async (req, res) => {
   const subscription = await getSubscriptionByPublicToken(req.params.publicSubscriptionToken);
-  if (!subscription) return res.status(404).type("text/plain").send("Подписка не найдена");
+  if (!subscription || subscription.deletionRequestedAt) {
+    return res.status(404).type("text/plain").send("Подписка не найдена");
+  }
 
   const components = resolveRemnawaveComponents(subscription);
   const main = components.find((component) => component.required) ?? components[0];
@@ -60,6 +70,13 @@ publicSubscriptionRouter.get("/:publicSubscriptionToken", async (req, res) => {
   );
   const mainFetch = fetched.find(({ component }) => component.id === main.id);
   if (!mainFetch?.result.body) {
+    compositeSubscriptionMetrics.record({
+      client: client.name,
+      format: "other",
+      degraded: true,
+      requiredFailure: true,
+      upstreamLatenciesMs: fetched.map((item) => item.durationMs),
+    });
     console.error("[composite-subscription] main component unavailable", {
       subscriptionId: subscription.id,
       status: mainFetch?.result.status,
@@ -85,6 +102,13 @@ publicSubscriptionRouter.get("/:publicSubscriptionToken", async (req, res) => {
     ...fetched.filter(({ result }) => typeof result.body !== "string").map(({ component }) => component.key),
     ...successful.filter(({ component }) => !merged.mergedKeys.includes(component.key)).map(({ component }) => component.key),
   ];
+  compositeSubscriptionMetrics.record({
+    client: client.name,
+    format: merged.format,
+    degraded: degradedKeys.length > 0,
+    requiredFailure: false,
+    upstreamLatenciesMs: fetched.map((item) => item.durationMs),
+  });
 
   const publicUrl = new URL(req.originalUrl, `${req.protocol}://${req.get("host")}`).toString();
   const responseHeaders = mergeSubscriptionResponseHeaders(

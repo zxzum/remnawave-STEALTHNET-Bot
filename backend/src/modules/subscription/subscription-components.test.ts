@@ -30,6 +30,20 @@ test("использует сохранённые компоненты в пор
   assert.deepEqual(result.map((component) => component.key), ["primary", "streaming"]);
 });
 
+test("не выдаёт компонент, который выводится из конфигурации", () => {
+  const resolve = helpers.resolveRemnawaveComponents as (subscription: unknown) => Array<{ key: string }>;
+  const result = resolve({
+    id: "sub-1",
+    remnawaveUuid: "main-uuid",
+    components: [
+      { key: "primary", required: true, mergeOrder: 0, remnawaveUuid: "main-uuid", lastKnownStatus: "ACTIVE" },
+      { key: "retired", required: false, mergeOrder: 10, remnawaveUuid: "retired-uuid", lastKnownStatus: "REMOVING" },
+    ],
+  });
+
+  assert.deepEqual(result.map((component) => component.key), ["primary"]);
+});
+
 test("синтезирует обязательный legacy-компонент до завершения backfill", () => {
   assert.equal(typeof helpers.resolveRemnawaveComponents, "function");
 

@@ -74,7 +74,6 @@ import {
   remnaUpdateUser,
   remnaRevokeUserSubscription,
   remnaDisableUser,
-  remnaDeleteUser,
   remnaEnableUser,
   remnaResetUserTraffic,
   remnaGetUserByTelegramId,
@@ -114,8 +113,10 @@ import { invalidateBrandCache } from "../branding/spa-html.js";
 import { getBroadcastRecipientsCount, startBroadcastJob, getBroadcastJob, cancelBroadcastJob, listBroadcastHistory, getBroadcastHistoryItem, sendDirectTelegramMessage, sendDirectEmail, startListSendJob, getListSendJob } from "../broadcast/broadcast.service.js";
 import { applyDevicesToSubscription, removeAllExtraDevicesForSub } from "../subscription/extras.helper.js";
 import {
+  deleteSubscriptionComponents,
   revokeSubscriptionComponents,
   runSubscriptionComponentOperation,
+  synchronizeSubscriptionComponents,
 } from "../subscription/subscription-components.service.js";
 import { uploadMascotImage, uploadVideo, uploadTicketAttachment, mascotUrl, videoUploadUrl, removeUploadedFile } from "../../lib/upload.js";
 import {
@@ -723,6 +724,11 @@ function tariffToJson(t: {
   createdAt: Date;
   updatedAt: Date;
   priceOptions?: { id: string; durationDays: number; price: number; sortOrder: number }[];
+  remnawaveComponents?: Array<{
+    id: string; key: string; adminName: string; required: boolean; mergeOrder: number;
+    internalSquadUuids: string[]; trafficLimitBytes: bigint | null; trafficResetMode: string;
+    showQuotaToClient: boolean; quotaDisplayName: string | null; enabled: boolean;
+  }>;
 }) {
   return {
     id: t.id,
@@ -755,6 +761,10 @@ function tariffToJson(t: {
       durationDays: o.durationDays,
       price: o.price,
       sortOrder: o.sortOrder,
+    })),
+    remnawaveComponents: (t.remnawaveComponents ?? []).map((component) => ({
+      ...component,
+      trafficLimitBytes: component.trafficLimitBytes != null ? Number(component.trafficLimitBytes) : null,
     })),
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
@@ -881,6 +891,32 @@ const deviceDiscountTierSchema = z.object({
   minExtraDevices: z.number().int().min(1).max(100),
   discountPercent: z.number().min(0).max(90),
 });
+const remnawaveComponentInputSchema = z.object({
+  key: z.string().min(1).max(50).regex(/^[a-zA-Z0-9_-]+$/),
+  adminName: z.string().min(1).max(100),
+  required: z.boolean().optional(),
+  mergeOrder: z.number().int().min(0).max(1000),
+  internalSquadUuids: z.array(z.string().uuid()).min(1).max(50),
+  trafficLimitBytes: z.number().int().nonnegative().nullable().optional(),
+  trafficResetMode: z.enum(TRAFFIC_RESET_MODES).optional(),
+  showQuotaToClient: z.boolean().optional(),
+  quotaDisplayName: z.string().max(100).nullable().optional(),
+  enabled: z.boolean().optional(),
+});
+const remnawaveComponentsSchema = z.array(remnawaveComponentInputSchema).min(1).max(20).superRefine((items, ctx) => {
+  if (new Set(items.map((item) => item.key)).size !== items.length) {
+    ctx.addIssue({ code: "custom", message: "Ключи компонентов должны быть уникальны" });
+  }
+  if (new Set(items.map((item) => item.mergeOrder)).size !== items.length) {
+    ctx.addIssue({ code: "custom", message: "Порядок компонентов должен быть уникальным" });
+  }
+  if (items.filter((item) => item.required).length !== 1) {
+    ctx.addIssue({ code: "custom", message: "Должен быть ровно один обязательный компонент" });
+  }
+  if (items.some((item) => item.required && item.enabled === false)) {
+    ctx.addIssue({ code: "custom", message: "Обязательный компонент должен быть включён" });
+  }
+});
 const createTariffSchema = z.object({
   categoryId: z.string().min(1),
   name: z.string().min(1).max(255),
@@ -906,6 +942,7 @@ const createTariffSchema = z.object({
   /** T-cooldown (13.05.2026) — кулдаун покупки тарифа (дней). null/0 = без ограничения. */
   purchaseCooldownDays: z.number().int().min(0).max(3650).nullable().optional(),
   priceOptions: z.array(priceOptionInputSchema).min(1).max(20).optional(),
+  remnawaveComponents: remnawaveComponentsSchema.optional(),
 });
 const updateTariffSchema = z.object({
   name: z.string().min(1).max(255).optional(),
@@ -930,6 +967,7 @@ const updateTariffSchema = z.object({
   purchaseCooldownDays: z.number().int().min(0).max(3650).nullable().optional(),
   sortOrder: z.number().int().optional(),
   priceOptions: z.array(priceOptionInputSchema).min(1).max(20).optional(),
+  remnawaveComponents: remnawaveComponentsSchema.optional(),
 });
 
 adminRouter.get("/tariffs", async (req, res) => {
@@ -940,6 +978,7 @@ adminRouter.get("/tariffs", async (req, res) => {
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
     include: {
       priceOptions: { orderBy: [{ sortOrder: "asc" }, { durationDays: "asc" }] },
+      remnawaveComponents: { orderBy: { mergeOrder: "asc" } },
     },
   });
   return res.json({ items: list.map(tariffToJson) });
@@ -1002,8 +1041,25 @@ adminRouter.post("/tariffs", async (req, res) => {
           // Если priceOptions не заданы — создаём одну дефолтную из legacy полей
           create: [{ durationDays: legacyDays, price: legacyPrice, sortOrder: 0 }],
         },
+      remnawaveComponents: body.data.remnawaveComponents ? {
+        create: body.data.remnawaveComponents.map((component) => ({
+          key: component.key,
+          adminName: component.adminName,
+          required: component.required ?? false,
+          mergeOrder: component.mergeOrder,
+          internalSquadUuids: component.internalSquadUuids,
+          trafficLimitBytes: component.trafficLimitBytes != null ? BigInt(component.trafficLimitBytes) : null,
+          trafficResetMode: component.trafficResetMode ?? "no_reset",
+          showQuotaToClient: component.showQuotaToClient ?? false,
+          quotaDisplayName: component.quotaDisplayName?.trim() || null,
+          enabled: component.enabled ?? true,
+        })),
+      } : undefined,
     },
-    include: { priceOptions: { orderBy: [{ sortOrder: "asc" }, { durationDays: "asc" }] } },
+    include: {
+      priceOptions: { orderBy: [{ sortOrder: "asc" }, { durationDays: "asc" }] },
+      remnawaveComponents: { orderBy: { mergeOrder: "asc" } },
+    },
   });
   return res.status(201).json(tariffToJson(created));
 });
@@ -1062,12 +1118,39 @@ adminRouter.patch("/tariffs/:id", async (req, res) => {
         })),
       });
     }
+    if (body.data.remnawaveComponents) {
+      await tx.tariffRemnawaveComponent.deleteMany({ where: { tariffId: idParse.data.id } });
+      await tx.tariffRemnawaveComponent.createMany({
+        data: body.data.remnawaveComponents.map((component) => ({
+          tariffId: idParse.data.id,
+          key: component.key,
+          adminName: component.adminName,
+          required: component.required ?? false,
+          mergeOrder: component.mergeOrder,
+          internalSquadUuids: component.internalSquadUuids,
+          trafficLimitBytes: component.trafficLimitBytes != null ? BigInt(component.trafficLimitBytes) : null,
+          trafficResetMode: component.trafficResetMode ?? "no_reset",
+          showQuotaToClient: component.showQuotaToClient ?? false,
+          quotaDisplayName: component.quotaDisplayName?.trim() || null,
+          enabled: component.enabled ?? true,
+        })),
+      });
+    }
     return tx.tariff.update({
       where: { id: idParse.data.id },
       data,
-      include: { priceOptions: { orderBy: [{ sortOrder: "asc" }, { durationDays: "asc" }] } },
+      include: {
+        priceOptions: { orderBy: [{ sortOrder: "asc" }, { durationDays: "asc" }] },
+        remnawaveComponents: { orderBy: { mergeOrder: "asc" } },
+      },
     });
   });
+  if (body.data.remnawaveComponents) {
+    await prisma.subscription.updateMany({
+      where: { tariffId: idParse.data.id },
+      data: { syncStatus: "PENDING", syncRequiredAt: new Date() },
+    });
+  }
   return res.json(tariffToJson(updated));
 });
 
@@ -1105,6 +1188,7 @@ const createTrialSchema = z.object({
   /** тарифы, в которые можно конвертировать триал
    *  (переход на их сквады). Пусто/null — только тариф триала. */
   convertTariffIds: z.array(z.string().min(1)).max(50).nullable().optional(),
+  remnawaveComponents: remnawaveComponentsSchema.optional(),
 }).refine((d) => Boolean(d.tariffId) || (d.squadUuids?.length ?? 0) > 0, {
   message: "Укажите тариф ИЛИ сквады standalone-триала",
 });
@@ -1124,6 +1208,7 @@ const updateTrialSchema = z.object({
   convertAllTariffs: z.boolean().optional(),
   /** тарифы для конвертации триала. */
   convertTariffIds: z.array(z.string().min(1)).max(50).nullable().optional(),
+  remnawaveComponents: remnawaveComponentsSchema.optional(),
 });
 
 function trialToJson(t: {
@@ -1143,6 +1228,11 @@ function trialToJson(t: {
   createdAt: Date;
   updatedAt: Date;
   tariff?: { id: string; name: string } | null;
+  remnawaveComponents?: Array<{
+    id: string; key: string; adminName: string; required: boolean; mergeOrder: number;
+    internalSquadUuids: string[]; trafficLimitBytes: bigint | null; trafficResetMode: string;
+    showQuotaToClient: boolean; quotaDisplayName: string | null; enabled: boolean;
+  }>;
 }) {
   // тарифы для конвертации / сквады хранятся JSON-строкой — наружу массивами.
   const parseArr = (raw: string | null | undefined): string[] => {
@@ -1167,6 +1257,10 @@ function trialToJson(t: {
     convertAllTariffs: t.convertAllTariffs ?? false,
     convertTariffIds: parseArr(t.convertTariffIds),
     tariffName: t.tariff?.name ?? null,
+    remnawaveComponents: (t.remnawaveComponents ?? []).map((component) => ({
+      ...component,
+      trafficLimitBytes: component.trafficLimitBytes != null ? Number(component.trafficLimitBytes) : null,
+    })),
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
   };
@@ -1289,7 +1383,10 @@ adminRouter.delete("/auto-renew-notifications/:id", async (req, res) => {
 adminRouter.get("/trials", async (_req, res) => {
   const list = await prisma.trial.findMany({
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-    include: { tariff: { select: { id: true, name: true } } },
+    include: {
+      tariff: { select: { id: true, name: true } },
+      remnawaveComponents: { orderBy: { mergeOrder: "asc" } },
+    },
   });
   return res.json({ items: list.map(trialToJson) });
 });
@@ -1316,8 +1413,25 @@ adminRouter.post("/trials", async (req, res) => {
       convertEnabled: body.data.convertEnabled ?? true,
       convertAllTariffs: body.data.convertAllTariffs ?? false,
       convertTariffIds: body.data.convertTariffIds?.length ? JSON.stringify(body.data.convertTariffIds) : null,
+      remnawaveComponents: body.data.remnawaveComponents ? {
+        create: body.data.remnawaveComponents.map((component) => ({
+          key: component.key,
+          adminName: component.adminName,
+          required: component.required ?? false,
+          mergeOrder: component.mergeOrder,
+          internalSquadUuids: component.internalSquadUuids,
+          trafficLimitBytes: component.trafficLimitBytes != null ? BigInt(component.trafficLimitBytes) : null,
+          trafficResetMode: component.trafficResetMode ?? "no_reset",
+          showQuotaToClient: component.showQuotaToClient ?? false,
+          quotaDisplayName: component.quotaDisplayName?.trim() || null,
+          enabled: component.enabled ?? true,
+        })),
+      } : undefined,
     },
-    include: { tariff: { select: { id: true, name: true } } },
+    include: {
+      tariff: { select: { id: true, name: true } },
+      remnawaveComponents: { orderBy: { mergeOrder: "asc" } },
+    },
   });
   return res.status(201).json(trialToJson(created));
 });
@@ -1376,11 +1490,40 @@ adminRouter.patch("/trials/:id", async (req, res) => {
   if (!effTariffId && !effSquads) {
     return res.status(400).json({ message: "Укажите тариф ИЛИ сквады standalone-триала" });
   }
-  const updated = await prisma.trial.update({
-    where: { id: idParse.data.id },
-    data: updateData,
-    include: { tariff: { select: { id: true, name: true } } },
+  const updated = await prisma.$transaction(async (tx) => {
+    if (body.data.remnawaveComponents) {
+      await tx.trialRemnawaveComponent.deleteMany({ where: { trialId: idParse.data.id } });
+      await tx.trialRemnawaveComponent.createMany({
+        data: body.data.remnawaveComponents.map((component) => ({
+          trialId: idParse.data.id,
+          key: component.key,
+          adminName: component.adminName,
+          required: component.required ?? false,
+          mergeOrder: component.mergeOrder,
+          internalSquadUuids: component.internalSquadUuids,
+          trafficLimitBytes: component.trafficLimitBytes != null ? BigInt(component.trafficLimitBytes) : null,
+          trafficResetMode: component.trafficResetMode ?? "no_reset",
+          showQuotaToClient: component.showQuotaToClient ?? false,
+          quotaDisplayName: component.quotaDisplayName?.trim() || null,
+          enabled: component.enabled ?? true,
+        })),
+      });
+    }
+    return tx.trial.update({
+      where: { id: idParse.data.id },
+      data: updateData,
+      include: {
+        tariff: { select: { id: true, name: true } },
+        remnawaveComponents: { orderBy: { mergeOrder: "asc" } },
+      },
+    });
   });
+  if (body.data.remnawaveComponents) {
+    await prisma.subscription.updateMany({
+      where: { trialId: idParse.data.id },
+      data: { syncStatus: "PENDING", syncRequiredAt: new Date() },
+    });
+  }
   return res.json(trialToJson(updated));
 });
 
@@ -1642,6 +1785,10 @@ adminRouter.patch("/clients/:id", async (req, res) => {
       _count: { select: { referrals: true } },
     },
   });
+  if (body.data.isBlocked !== undefined) {
+    if (body.data.isBlocked) await bulkDisableClient(parsed.data.id);
+    else await bulkEnableClient(parsed.data.id);
+  }
   return res.json(updated);
 });
 
@@ -2107,6 +2254,11 @@ adminRouter.patch("/clients/:id/remna", async (req, res) => {
         where: { ownerId: parsed.data.id, remnawaveUuid: remnaUuid },
         data: { expireAt: new Date(body.data.expireAt) },
       });
+      const affected = await prisma.subscription.findMany({
+        where: { ownerId: parsed.data.id, remnawaveUuid: remnaUuid },
+        select: { id: true },
+      });
+      await Promise.all(affected.map((subscription) => synchronizeSubscriptionComponents(subscription.id)));
     } catch (e) {
       console.error("[admin/clients/remna] expireAt DB sync failed:", e);
     }
@@ -3100,6 +3252,9 @@ const updateSettingsSchema = z.object({
   giftExpiryNotificationDays: z.number().int().min(0).max(30).optional(),
   giftReferralEnabled: z.boolean().optional(),
   giftMessageMaxLength: z.number().int().min(0).max(1000).optional(),
+  expiredGraceEnabled: z.boolean().optional(),
+  expiredGraceDays: z.number().int().min(0).max(365).optional(),
+  expiredGraceSquadUuid: z.string().max(100).nullable().optional(),
   // Поведение бота
   botAutoDeleteUnknownMessages: z.boolean().optional(),
   botInfoBlock: z.string().max(2000).nullable().optional(),
@@ -4094,6 +4249,9 @@ adminRouter.patch("/settings", async (req, res) => {
     ["giftExpiryNotificationDays", "gift_expiry_notification_days"],
     ["giftReferralEnabled", "gift_referral_enabled"],
     ["giftMessageMaxLength", "gift_message_max_length"],
+    ["expiredGraceEnabled", "expired_grace_enabled"],
+    ["expiredGraceDays", "expired_grace_days"],
+    ["expiredGraceSquadUuid", "expired_grace_squad_uuid"],
     ["botAutoDeleteUnknownMessages", "bot_auto_delete_unknown_messages"],
     ["botInfoBlock", "bot_info_block"],
     // тогглы кнопок на экране «Тарифы» бота
@@ -6074,6 +6232,7 @@ adminRouter.get("/secondary-subscriptions/:id", asyncRoute(async (req, res) => {
         },
         orderBy: { createdAt: "desc" },
       },
+      components: { orderBy: { mergeOrder: "asc" } },
     },
   });
   if (!sub) return res.status(404).json({ message: "Подписка не найдена" });
@@ -6097,7 +6256,15 @@ adminRouter.get("/secondary-subscriptions/:id", asyncRoute(async (req, res) => {
     take: 50,
   });
 
-  return res.json({ ...sub, remnaData, history });
+  return res.json({
+    ...sub,
+    components: sub.components.map((component) => ({
+      ...component,
+      trafficLimitBytes: component.trafficLimitBytes?.toString() ?? null,
+    })),
+    remnaData,
+    history,
+  });
 }));
 
 // PATCH доп. подписки админом — менять дни и лимит трафика.
@@ -6163,6 +6330,9 @@ adminRouter.patch("/secondary-subscriptions/:id", asyncRoute(async (req, res) =>
       where: { id: sub.id },
       data: { expireAt: newExpireAt },
     }).catch(() => {});
+    await synchronizeSubscriptionComponents(sub.id).catch((error) => {
+      console.error("[admin/secondary-subscriptions] component sync failed:", error);
+    });
   }
 
   await prisma.giftHistory.create({
@@ -6188,28 +6358,20 @@ adminRouter.delete("/secondary-subscriptions/:id", asyncRoute(async (req, res) =
   });
   if (!sub) return res.status(404).json({ message: "Подписка не найдена" });
 
-  if (isRemnaConfigured()) {
-    const deletion = await runSubscriptionComponentOperation(sub.id, async ({ remnawaveUuid }) => {
-      const result = await remnaDeleteUser(remnawaveUuid);
-      if (result.error && result.status !== 404) throw new Error(result.error);
-    });
-    if (deletion.requiredFailure) {
-      return res.status(502).json({ message: deletion.failures.map((failure) => failure.error).join("; ") });
-    }
-  }
-
   // Log event
   await prisma.giftHistory.create({
     data: {
       clientId: sub.ownerId,
       subscriptionId: sub.id,
-      eventType: "DELETED",
+      eventType: "DELETION_REQUESTED",
       metadata: { deletedBy: "admin" },
     },
   });
 
-  // Cascade deletes GiftCodes via DB relation
-  await prisma.subscription.delete({ where: { id: sub.id } });
+  const deletion = await deleteSubscriptionComponents(sub.id);
+  if (!deletion.deleted) {
+    return res.status(502).json({ message: "Удаление поставлено в очередь синхронизации", failures: deletion.failures });
+  }
 
   return res.json({ success: true });
 }));
@@ -6225,29 +6387,23 @@ adminRouter.delete("/secondary-subscriptions/bulk", asyncRoute(async (req, res) 
     select: { id: true, remnawaveUuid: true, ownerId: true },
   });
 
-  // Delete every Remnawave component of every logical subscription.
-  if (isRemnaConfigured()) {
-    await Promise.allSettled(
-      subs.map((sub) => runSubscriptionComponentOperation(sub.id, async ({ remnawaveUuid }) => {
-        const result = await remnaDeleteUser(remnawaveUuid);
-        if (result.error && result.status !== 404) throw new Error(result.error);
-      }))
-    );
-  }
-
   // Log events
   await prisma.giftHistory.createMany({
     data: subs.map((s) => ({
       clientId: s.ownerId,
       subscriptionId: s.id,
-      eventType: "DELETED",
+      eventType: "DELETION_REQUESTED",
       metadata: { deletedBy: "admin", bulk: true },
     })),
   });
 
-  await prisma.subscription.deleteMany({ where: { id: { in: ids } } });
-
-  return res.json({ success: true, deleted: subs.length });
+  const results = await Promise.all(subs.map((sub) => deleteSubscriptionComponents(sub.id)));
+  const deleted = results.filter((result) => result.deleted).length;
+  return res.status(deleted === subs.length ? 200 : 207).json({
+    success: deleted === subs.length,
+    deleted,
+    pending: subs.length - deleted,
+  });
 }));
 
 // ────── Gift Analytics ──────
@@ -7052,6 +7208,7 @@ adminRouter.patch("/subscriptions/:subId/remna", asyncRoute(async (req, res) => 
         where: { id: parsed.data.subId },
         data: { expireAt: new Date(body.data.expireAt) },
       });
+      await synchronizeSubscriptionComponents(parsed.data.subId);
     } catch (e) {
       console.error("[admin/subscriptions/remna] expireAt DB sync failed:", e);
     }

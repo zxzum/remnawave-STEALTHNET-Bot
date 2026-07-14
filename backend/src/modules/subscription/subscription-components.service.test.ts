@@ -98,3 +98,65 @@ test("формирует клиентскую квоту компонента и
     status: "LIMITED",
   });
 });
+
+test("нормализует состояние Remnawave для reconciliation", () => {
+  assert.equal(typeof service.extractRemnawaveComponentSnapshot, "function");
+  const extract = service.extractRemnawaveComponentSnapshot as (payload: unknown) => Record<string, unknown>;
+  assert.deepEqual(extract({
+    response: {
+      uuid: "user-1",
+      shortUuid: "shared-token",
+      expireAt: "2026-08-14T12:00:00.000Z",
+      status: "ACTIVE",
+      hwidDeviceLimit: 3,
+      trafficLimitBytes: "53687091200",
+      activeInternalSquads: [{ uuid: "default" }, { uuid: "reserve" }],
+    },
+  }), {
+    uuid: "user-1",
+    shortUuid: "shared-token",
+    expireAt: "2026-08-14T12:00:00.000Z",
+    status: "ACTIVE",
+    hwidDeviceLimit: 3,
+    trafficLimitBytes: 53687091200n,
+    internalSquadUuids: ["default", "reserve"],
+  });
+});
+
+test("распознаёт служебные component usernames при импорте", () => {
+  assert.equal(typeof service.isManagedComponentUsername, "function");
+  const isManaged = service.isManagedComponentUsername as (username: string | null) => boolean;
+  assert.equal(isManaged("alex_c_limited_0"), true);
+  assert.equal(isManaged("alex_WL"), true);
+  assert.equal(isManaged("alex"), false);
+});
+
+test("grace window ограничен числом дней после окончания", () => {
+  assert.equal(typeof service.computeExpiredGraceWindow, "function");
+  const compute = service.computeExpiredGraceWindow as (
+    expireAt: Date,
+    days: number,
+    now: Date,
+  ) => { active: boolean; graceUntil: Date };
+  const inside = compute(new Date("2026-07-10T00:00:00.000Z"), 7, new Date("2026-07-14T00:00:00.000Z"));
+  assert.equal(inside.active, true);
+  assert.equal(inside.graceUntil.toISOString(), "2026-07-17T00:00:00.000Z");
+  assert.equal(compute(new Date("2026-07-10T00:00:00.000Z"), 3, new Date("2026-07-14T00:00:00.000Z")).active, false);
+});
+
+test("в grace only_telegram остаётся только у обязательного компонента", () => {
+  assert.equal(typeof service.expiredGraceComponentPolicy, "function");
+  const policy = service.expiredGraceComponentPolicy as (required: boolean, squadUuid: string) => {
+    activeInternalSquads: string[];
+    enabled: boolean;
+  };
+
+  assert.deepEqual(policy(true, "only-telegram"), {
+    activeInternalSquads: ["only-telegram"],
+    enabled: true,
+  });
+  assert.deepEqual(policy(false, "only-telegram"), {
+    activeInternalSquads: [],
+    enabled: false,
+  });
+});

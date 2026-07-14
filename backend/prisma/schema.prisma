@@ -984,6 +984,7 @@ model Subscription {
   syncRequiredAt           DateTime?              @map("sync_required_at")
   lastReconciledAt         DateTime?              @map("last_reconciled_at")
   graceUntil               DateTime?              @map("grace_until")
+  deletionRequestedAt      DateTime?              @map("deletion_requested_at")
   /// subscriptionIndex=0 — «главная» (бывш. root). 1..N — дополнительные.
   /// Первая созданная любого типа всегда получает 0. После «обнуления» главной
   /// (tariffId=null) запись остаётся, новая покупка продлевает её.
@@ -1060,6 +1061,8 @@ model Subscription {
   @@index([autoRenewEnabled])
   @@index([expireAt])
   @@index([syncStatus, syncRequiredAt])
+  @@index([lastReconciledAt])
+  @@index([deletionRequestedAt])
   @@map("subscriptions")
 }
 

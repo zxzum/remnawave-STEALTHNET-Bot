@@ -7,6 +7,7 @@ const schema = await readFile(new URL("../../../prisma/schema.prisma", import.me
 test("Prisma schema хранит публичный токен и sync-состояние Subscription", () => {
   assert.match(schema, /publicSubscriptionToken\s+String\s+@unique/);
   assert.match(schema, /syncStatus\s+SubscriptionSyncStatus/);
+  assert.match(schema, /deletionRequestedAt\s+DateTime\?/);
   assert.match(schema, /enum SubscriptionSyncStatus/);
 });
 

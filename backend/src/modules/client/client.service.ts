@@ -949,6 +949,9 @@ async function loadSystemConfigFromDb() {
     giftExpiryNotificationDays: parseInt(map.gift_expiry_notification_days || "3", 10) || 3,
     giftReferralEnabled: map.gift_referral_enabled !== "false" && map.gift_referral_enabled !== "0",
     giftMessageMaxLength: parseInt(map.gift_message_max_length || "200", 10) || 200,
+    expiredGraceEnabled: map.expired_grace_enabled === "true" || map.expired_grace_enabled === "1",
+    expiredGraceDays: Math.max(0, parseInt(map.expired_grace_days || "7", 10) || 0),
+    expiredGraceSquadUuid: (map.expired_grace_squad_uuid ?? "").trim() || null,
     botAutoDeleteUnknownMessages: map.bot_auto_delete_unknown_messages === "true" || map.bot_auto_delete_unknown_messages === "1",
     botInfoBlock: (map.bot_info_block ?? "").trim() || null,
   };
