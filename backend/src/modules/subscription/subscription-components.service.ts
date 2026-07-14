@@ -20,6 +20,10 @@ type ComponentOperationTarget = {
   mergeOrder: number;
 };
 
+export function generateUpstreamShortUuid(): string {
+  return generatePublicSubscriptionToken().slice(0, 32);
+}
+
 export function subscriptionRemnawaveUuids(subscription: {
   remnawaveUuid?: string | null;
   components?: Array<{ remnawaveUuid: string | null; mergeOrder: number }>;
@@ -199,22 +203,20 @@ export async function runSubscriptionComponentOperation(
   return result;
 }
 
-/**
- * Перевыпускает upstream-ссылки всех компонентов одним shortUuid и только после
- * успешного обязательного компонента меняет публичный токен STEALTHNET.
- */
+/** Перевыпускает уникальную upstream-ссылку каждого компонента и общий публичный токен STEALTHNET. */
 export async function revokeSubscriptionComponents(subscriptionId: string) {
-  const upstreamShortUuid = generatePublicSubscriptionToken().slice(0, 32);
-  const succeededKeys: string[] = [];
+  const succeededShortUuids = new Map<string, string>();
   const result = await runSubscriptionComponentOperation(
     subscriptionId,
     async ({ key, remnawaveUuid }) => {
+      const upstreamShortUuid = generateUpstreamShortUuid();
       const response = await remnaRevokeUserSubscription(remnawaveUuid, { shortUuid: upstreamShortUuid });
       if (response.error) throw new Error(response.error);
-      succeededKeys.push(key);
+      succeededShortUuids.set(key, upstreamShortUuid);
     },
   );
-  if (result.requiredFailure) return { ...result, publicSubscriptionToken: null, upstreamShortUuid };
+  const upstreamShortUuids = Object.fromEntries(succeededShortUuids);
+  if (result.requiredFailure) return { ...result, publicSubscriptionToken: null, upstreamShortUuids };
 
   const publicSubscriptionToken = generatePublicSubscriptionToken();
   await prisma.$transaction([
@@ -230,12 +232,12 @@ export async function revokeSubscriptionComponents(subscriptionId: string) {
             syncRequiredAt: null,
           },
     }),
-    prisma.remnawaveComponent.updateMany({
-      where: { subscriptionId, key: { in: succeededKeys } },
+    ...[...succeededShortUuids].map(([key, upstreamShortUuid]) => prisma.remnawaveComponent.updateMany({
+      where: { subscriptionId, key },
       data: { upstreamShortUuid },
-    }),
+    })),
   ]);
-  return { ...result, publicSubscriptionToken, upstreamShortUuid };
+  return { ...result, publicSubscriptionToken, upstreamShortUuids };
 }
 
 /**
@@ -494,12 +496,6 @@ export async function synchronizeSubscriptionComponents(subscriptionId: string):
       snapshot: extractRemnawaveComponentSnapshot(response.data),
     });
   }));
-  const requiredComponent = components.find((component) => component.required);
-  const requiredState = requiredComponent ? upstreamState.get(requiredComponent.id) : undefined;
-  const sharedShortUuid = requiredState?.snapshot.shortUuid
-    ?? requiredComponent?.upstreamShortUuid
-    ?? generatePublicSubscriptionToken().slice(0, 32);
-
   const result = await runComponentOperations(components, async (component) => {
     // Legacy system-config Trial does not have a persisted template. Its main user
     // was already configured by the caller, so an empty synthesized squad list
@@ -520,6 +516,9 @@ export async function synchronizeSubscriptionComponents(subscriptionId: string):
 
     let remnawaveUuid = component.remnawaveUuid;
     const previousState = upstreamState.get(component.id);
+    const upstreamShortUuid = previousState?.snapshot.shortUuid
+      ?? component.upstreamShortUuid
+      ?? generateUpstreamShortUuid();
     let lastKnownStatus = previousState?.snapshot.status ?? null;
     if (remnawaveUuid && previousState?.status !== 404) {
       const updated = await remnaUpdateUser({ uuid: remnawaveUuid, ...payload, ...identityPayload });
@@ -531,7 +530,7 @@ export async function synchronizeSubscriptionComponents(subscriptionId: string):
         username: buildComponentUsername(baseUsername, component.key, subscription.subscriptionIndex),
         ...payload,
         ...identityPayload,
-        ...(sharedShortUuid ? { shortUuid: sharedShortUuid } : {}),
+        shortUuid: upstreamShortUuid,
       });
       remnawaveUuid = extractRemnaUuid(created.data);
       if (!remnawaveUuid) throw new Error(created.error || "Remnawave не вернул UUID компонента");
@@ -539,11 +538,10 @@ export async function synchronizeSubscriptionComponents(subscriptionId: string):
     }
 
     if (
-      sharedShortUuid
-      && previousState
-      && previousState.snapshot.shortUuid !== sharedShortUuid
+      previousState
+      && previousState.snapshot.shortUuid !== upstreamShortUuid
     ) {
-      const revoked = await remnaRevokeUserSubscription(remnawaveUuid, { shortUuid: sharedShortUuid });
+      const revoked = await remnaRevokeUserSubscription(remnawaveUuid, { shortUuid: upstreamShortUuid });
       if (revoked.error) throw new Error(revoked.error);
     }
     if (
@@ -564,7 +562,7 @@ export async function synchronizeSubscriptionComponents(subscriptionId: string):
       where: { id: component.id },
       data: {
         remnawaveUuid,
-        upstreamShortUuid: sharedShortUuid,
+        upstreamShortUuid,
         lastKnownStatus,
         lastSyncError: null,
         lastSyncedAt: new Date(),

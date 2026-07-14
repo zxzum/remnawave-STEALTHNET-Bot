@@ -54,6 +54,17 @@ test("имя компонента детерминировано и помеща
   assert.equal(username, build("very-long-existing-remnawave-username", "Corporate Streaming", 12));
 });
 
+test("каждый Remnawave-компонент получает уникальный upstream shortUuid", () => {
+  assert.equal(typeof service.generateUpstreamShortUuid, "function");
+  const generate = service.generateUpstreamShortUuid as () => string;
+  const main = generate();
+  const whitelist = generate();
+
+  assert.equal(main.length, 32);
+  assert.equal(whitelist.length, 32);
+  assert.notEqual(main, whitelist);
+});
+
 test("собирает уникальные Remnawave UUID обязательного и дополнительных компонентов", () => {
   assert.equal(typeof service.subscriptionRemnawaveUuids, "function");
   const collect = service.subscriptionRemnawaveUuids as (subscription: unknown) => string[];
