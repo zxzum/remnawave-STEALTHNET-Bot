@@ -158,9 +158,31 @@ export async function runComponentOperations<T extends ComponentOperationTarget>
   return { failures, requiredFailure: failures.some((failure) => failure.required) };
 }
 
+export function selectComponentTargets(subscription: {
+  remnawaveUuid: string | null;
+  components: Array<{
+    key: string;
+    required: boolean;
+    mergeOrder: number;
+    remnawaveUuid: string | null;
+  }>;
+}, componentKey?: string): Array<ComponentOperationTarget & { remnawaveUuid: string }> {
+  const targets = subscription.components.length
+    ? subscription.components.map((component) => ({
+        ...component,
+        remnawaveUuid: component.remnawaveUuid
+          ?? (component.required ? subscription.remnawaveUuid : null),
+      }))
+    : [{ key: "primary", required: true, mergeOrder: 0, remnawaveUuid: subscription.remnawaveUuid }];
+
+  return targets.filter((target): target is ComponentOperationTarget & { remnawaveUuid: string } =>
+    Boolean(target.remnawaveUuid) && (!componentKey || target.key === componentKey));
+}
+
 export async function runSubscriptionComponentOperation(
   subscriptionId: string,
   operation: (target: { key: string; required: boolean; mergeOrder: number; remnawaveUuid: string }) => Promise<void>,
+  componentKey?: string,
 ) {
   const subscription = await prisma.subscription.findUnique({
     where: { id: subscriptionId },
@@ -176,16 +198,9 @@ export async function runSubscriptionComponentOperation(
     return { failures: [{ key: "subscription", required: true, error: "Подписка не найдена" }], requiredFailure: true };
   }
 
-  const targets = subscription.components.length
-    ? subscription.components.map((component) => ({
-        ...component,
-        remnawaveUuid: component.remnawaveUuid
-          ?? (component.required ? subscription.remnawaveUuid : null),
-      }))
-    : [{ key: "primary", required: true, mergeOrder: 0, remnawaveUuid: subscription.remnawaveUuid }];
-  const available = targets.filter((target): target is typeof target & { remnawaveUuid: string } => Boolean(target.remnawaveUuid));
+  const available = selectComponentTargets(subscription, componentKey);
   if (!available.length) {
-    return { failures: [{ key: "subscription", required: true, error: "Подписка не привязана к Remnawave" }], requiredFailure: true };
+    return { failures: [{ key: componentKey ?? "subscription", required: true, error: "Компонент не привязан к Remnawave" }], requiredFailure: true };
   }
 
   const result = await runComponentOperations(available, operation);

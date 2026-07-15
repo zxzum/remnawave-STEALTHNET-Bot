@@ -50,6 +50,24 @@ test("snapshot триала имеет приоритет над компоне�
   assert.equal(result.find((item) => item.key === "whitelist")?.trafficLimitBytes, 5n * 1024n ** 3n);
 });
 
+test("выбирает один компонент для component action и все для logical action", () => {
+  assert.equal(typeof service.selectComponentTargets, "function");
+  const select = service.selectComponentTargets as (
+    subscription: unknown,
+    componentKey?: string,
+  ) => Array<{ key: string; remnawaveUuid: string }>;
+  const subscription = {
+    remnawaveUuid: "main",
+    components: [
+      { key: "primary", required: true, mergeOrder: 0, remnawaveUuid: "main" },
+      { key: "whitelist", required: false, mergeOrder: 10, remnawaveUuid: "white" },
+    ],
+  };
+
+  assert.deepEqual(select(subscription).map((item) => item.key), ["primary", "whitelist"]);
+  assert.deepEqual(select(subscription, "whitelist").map((item) => item.key), ["whitelist"]);
+});
+
 test("частичная ошибка необязательного компонента не становится required failure", async () => {
   assert.equal(typeof service.runComponentOperations, "function");
 
