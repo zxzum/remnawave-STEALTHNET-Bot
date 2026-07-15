@@ -16,6 +16,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   api,
   type AdminClientSubscriptionItem,
+  type AdminSubscriptionRemnaResponse,
   type RemnaUserFull,
   type UpdateClientRemnaPayload,
 } from "@/lib/api";
@@ -122,6 +123,9 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [editForm, setEditForm] = useState<UpdateClientRemnaPayload>({});
+  const [components, setComponents] = useState<AdminSubscriptionRemnaResponse["components"]>([]);
+  const [selectedComponentKey, setSelectedComponentKey] = useState("");
+  const [subscriptionUrl, setSubscriptionUrl] = useState(subscription.subscriptionUrl ?? "");
 
   const loadRemna = useCallback(async () => {
     if (!subscription.remnawaveUuid) {
@@ -132,7 +136,15 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
     setLoading(true);
     try {
       const raw = await api.getSubscriptionRemna(token, subscription.id);
-      const user = unwrapRemnaUser(raw);
+      setComponents(raw.components);
+      setSubscriptionUrl(raw.subscriptionUrl);
+      const componentKey = selectedComponentKey
+        || raw.components.find((component) => component.required)?.key
+        || raw.components[0]?.key
+        || "";
+      if (componentKey !== selectedComponentKey) setSelectedComponentKey(componentKey);
+      const selected = raw.components.find((component) => component.key === componentKey);
+      const user = unwrapRemnaUser(selected?.data ?? raw);
       setRemnaUser(user);
       const ids = (user?.activeInternalSquads ?? []).map((s) => s.uuid);
       setActiveSquads(ids);
@@ -149,7 +161,7 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
     } finally {
       setLoading(false);
     }
-  }, [subscription.id, subscription.remnawaveUuid, token]);
+  }, [selectedComponentKey, subscription.id, subscription.remnawaveUuid, token]);
 
   useEffect(() => {
     loadRemna();
@@ -164,7 +176,7 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
       if (editForm.hwidDeviceLimit !== undefined) payload.hwidDeviceLimit = editForm.hwidDeviceLimit;
       if (editForm.trafficLimitStrategy) payload.trafficLimitStrategy = editForm.trafficLimitStrategy;
       if (editForm.expireAt) payload.expireAt = editForm.expireAt;
-      await api.updateSubscriptionRemna(token, subscription.id, payload);
+      await api.updateSubscriptionRemna(token, subscription.id, payload, selectedComponentKey || undefined);
       setActionMsg("✅ Лимиты применены");
       await loadRemna();
       onChanged?.();
@@ -178,8 +190,13 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
   async function runAction(successLabel: string, fn: () => Promise<unknown>) {
     setActionMsg(null);
     try {
-      await fn();
-      setActionMsg(`✅ ${successLabel}`);
+      const response = await fn();
+      const result = response && typeof response === "object"
+        ? response as { degraded?: boolean; failures?: Array<{ key: string; error: string }> }
+        : null;
+      setActionMsg(result?.degraded
+        ? `⚠️ ${result.failures?.map((failure) => `${failure.key}: ${failure.error}`).join("; ") || "Часть компонентов ожидает retry"}`
+        : `✅ ${successLabel}`);
       await loadRemna();
       onChanged?.();
     } catch (e) {
@@ -188,17 +205,17 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
   }
 
   async function squadAdd(uuid: string) {
-    await runAction("Сквад добавлен", () => api.subscriptionRemnaSquadAdd(token, subscription.id, uuid));
+    await runAction("Сквад добавлен", () => api.subscriptionRemnaSquadAdd(token, subscription.id, uuid, selectedComponentKey || undefined));
     setActiveSquads((prev) => (prev.includes(uuid) ? prev : [...prev, uuid]));
   }
 
   async function squadRemove(uuid: string) {
-    await runAction("Сквад удалён", () => api.subscriptionRemnaSquadRemove(token, subscription.id, uuid));
+    await runAction("Сквад удалён", () => api.subscriptionRemnaSquadRemove(token, subscription.id, uuid, selectedComponentKey || undefined));
     setActiveSquads((prev) => prev.filter((u) => u !== uuid));
   }
 
   // Нет привязки к Remna → плашка.
-  if (!subscription.remnawaveUuid) {
+  if (!subscription.remnawaveUuid && !subscription.components?.some((component) => component.remnawaveUuid)) {
     return (
       <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/[0.06] p-4 text-sm text-yellow-200">
         ⚠️ Эта подписка ещё не привязана к Remna (`remnawaveUuid = null`).
@@ -212,6 +229,23 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
 
   return (
     <div className="space-y-3">
+      {subscriptionUrl && (
+        <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-foreground/[0.03] px-3 py-2 text-xs">
+          <span className="text-muted-foreground">Объединённая ссылка</span>
+          <code className="min-w-0 flex-1 truncate">{subscriptionUrl}</code>
+          <CopyButton text={subscriptionUrl} />
+        </div>
+      )}
+      {components.length > 1 && (
+        <MiniSelect
+          value={selectedComponentKey}
+          onChange={setSelectedComponentKey}
+          options={components.map((component) => ({
+            value: component.key,
+            label: `${component.required ? "★ " : ""}${subscription.components?.find((item) => item.key === component.key)?.adminName ?? component.key}${component.error ? " — ошибка" : ""}`,
+          }))}
+        />
+      )}
       <Tabs value={innerTab} onValueChange={(v) => setInnerTab(v as InnerTab)}>
         <TabsList className="grid grid-cols-3 gap-1 bg-foreground/[0.03] dark:bg-white/[0.03] p-1 rounded-xl border border-white/5">
           <TabsTrigger value="overview" className="text-xs rounded-lg data-[state=active]:bg-primary/15 data-[state=active]:text-primary">

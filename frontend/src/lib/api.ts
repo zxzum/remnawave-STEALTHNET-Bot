@@ -1086,11 +1086,12 @@ export const api = {
   async getClientSubscriptionsList(token: string, clientId: string): Promise<{ items: AdminClientSubscriptionItem[] }> {
     return request(`/admin/clients/${clientId}/subscriptions`, { token });
   },
-  async getSubscriptionRemna(token: string, subId: string): Promise<unknown> {
+  async getSubscriptionRemna(token: string, subId: string): Promise<AdminSubscriptionRemnaResponse> {
     return request(`/admin/subscriptions/${subId}/remna`, { token });
   },
-  async updateSubscriptionRemna(token: string, subId: string, data: UpdateClientRemnaPayload): Promise<unknown> {
-    return request(`/admin/subscriptions/${subId}/remna`, { method: "PATCH", body: JSON.stringify(data), token });
+  async updateSubscriptionRemna(token: string, subId: string, data: UpdateClientRemnaPayload, componentKey?: string): Promise<unknown> {
+    const query = componentKey ? `?componentKey=${encodeURIComponent(componentKey)}` : "";
+    return request(`/admin/subscriptions/${subId}/remna${query}`, { method: "PATCH", body: JSON.stringify(data), token });
   },
   async subscriptionRemnaUnlink(token: string, subId: string): Promise<{ ok: boolean }> {
     return request(`/admin/subscriptions/${subId}/remna/unlink`, { method: "POST", token });
@@ -1107,11 +1108,13 @@ export const api = {
   async subscriptionRemnaResetTraffic(token: string, subId: string): Promise<unknown> {
     return request(`/admin/subscriptions/${subId}/remna/reset-traffic`, { method: "POST", token });
   },
-  async subscriptionRemnaSquadAdd(token: string, subId: string, squadUuid: string): Promise<unknown> {
-    return request(`/admin/subscriptions/${subId}/remna/squads/add`, { method: "POST", body: JSON.stringify({ squadUuid }), token });
+  async subscriptionRemnaSquadAdd(token: string, subId: string, squadUuid: string, componentKey?: string): Promise<unknown> {
+    const query = componentKey ? `?componentKey=${encodeURIComponent(componentKey)}` : "";
+    return request(`/admin/subscriptions/${subId}/remna/squads/add${query}`, { method: "POST", body: JSON.stringify({ squadUuid }), token });
   },
-  async subscriptionRemnaSquadRemove(token: string, subId: string, squadUuid: string): Promise<unknown> {
-    return request(`/admin/subscriptions/${subId}/remna/squads/remove`, { method: "POST", body: JSON.stringify({ squadUuid }), token });
+  async subscriptionRemnaSquadRemove(token: string, subId: string, squadUuid: string, componentKey?: string): Promise<unknown> {
+    const query = componentKey ? `?componentKey=${encodeURIComponent(componentKey)}` : "";
+    return request(`/admin/subscriptions/${subId}/remna/squads/remove${query}`, { method: "POST", body: JSON.stringify({ squadUuid }), token });
   },
   async getSubscriptionRemnaDevices(token: string, subId: string): Promise<RemnaHwidDevicesResponse> {
     return request(`/admin/subscriptions/${subId}/remna/devices`, { token });
@@ -3558,6 +3561,8 @@ export interface AdminClientSubscriptionItem {
   subscriptionIndex: number;
   isPrimary: boolean;
   remnawaveUuid: string | null;
+  subscriptionUrl?: string;
+  components?: AdminSubscriptionComponentItem[];
   tariffId: string | null;
   tariffName: string | null;
   giftStatus: string | null;
@@ -3569,6 +3574,32 @@ export interface AdminClientSubscriptionItem {
   expireAt: string | null;
   createdAt: string;
 }
+
+export interface AdminSubscriptionComponentItem {
+  key: string;
+  adminName: string;
+  required: boolean;
+  mergeOrder: number;
+  remnawaveUuid: string | null;
+  trafficLimitBytes: string | null;
+  trafficResetMode: string;
+  internalSquadUuids: string[];
+  lastKnownStatus: string | null;
+  lastSyncError: string | null;
+}
+
+export type AdminSubscriptionRemnaResponse = {
+  response?: RemnaUserFull;
+  subscriptionUrl: string;
+  components: Array<{
+    key: string;
+    required: boolean;
+    mergeOrder: number;
+    remnawaveUuid: string;
+    data: { response?: RemnaUserFull } | RemnaUserFull | null;
+    error: string | null;
+  }>;
+};
 
 export interface RemnaUserFull {
   uuid: string;
