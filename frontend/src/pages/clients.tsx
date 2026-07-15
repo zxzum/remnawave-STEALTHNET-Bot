@@ -778,6 +778,7 @@ function ClientEditModal({
   // ownerId + giftedToClientId, возвращает ВСЕ subs клиента (включая root index=0).
   const [secondarySubs, setSecondarySubs] = useState<AdminClientSubscriptionItem[]>([]);
   const [secondarySubsLoading, setSecondarySubsLoading] = useState(false);
+  const primarySubscriptionUrl = secondarySubs.find((subscription) => subscription.isPrimary)?.subscriptionUrl ?? null;
 
   const [tariffCategories, setTariffCategories] = useState<TariffCategoryWithTariffs[]>([]);
   const [selectedGrantTariffId, setSelectedGrantTariffId] = useState<string>("");
@@ -1370,12 +1371,12 @@ function ClientEditModal({
                       </div>
                       {referrerMessage && <p className="text-[11px] text-muted-foreground">{referrerMessage}</p>}
                     </div>
-                    {remnaUser?.subscriptionUrl && (
+                    {primarySubscriptionUrl && (
                       <div className="flex justify-between sm:col-span-2">
                         <span className="text-muted-foreground flex items-center gap-1"><Link className="h-3 w-3" /> {t("admin.clients.subscription")}</span>
                         <span className="flex items-center gap-1 max-w-[60%]">
-                          <code className="text-xs truncate">{remnaUser.subscriptionUrl}</code>
-                          <CopyButton text={remnaUser.subscriptionUrl} />
+                          <code className="text-xs truncate">{primarySubscriptionUrl}</code>
+                          <CopyButton text={primarySubscriptionUrl} />
                         </span>
                       </div>
                     )}
