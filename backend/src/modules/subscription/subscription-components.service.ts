@@ -218,16 +218,30 @@ export async function runSubscriptionComponentOperation(
   return result;
 }
 
+/** Remnawave сам генерирует совместимый shortUuid и возвращает его в обновлённом пользователе. */
+export async function revokeRemnawaveComponent(
+  remnawaveUuid: string,
+  request: typeof remnaRevokeUserSubscription = remnaRevokeUserSubscription,
+  getUser: typeof remnaGetUser = remnaGetUser,
+): Promise<string | null> {
+  const response = await request(remnawaveUuid);
+  if (response.error) throw new Error(response.error);
+  const revokedShortUuid = extractRemnawaveComponentSnapshot(response.data).shortUuid;
+  if (revokedShortUuid) return revokedShortUuid;
+
+  const fresh = await getUser(remnawaveUuid);
+  if (fresh.error) return null;
+  return extractRemnawaveComponentSnapshot(fresh.data).shortUuid;
+}
+
 /** Перевыпускает уникальную upstream-ссылку каждого компонента и общий публичный токен STEALTHNET. */
 export async function revokeSubscriptionComponents(subscriptionId: string) {
   const succeededShortUuids = new Map<string, string>();
   const result = await runSubscriptionComponentOperation(
     subscriptionId,
     async ({ key, remnawaveUuid }) => {
-      const upstreamShortUuid = generateUpstreamShortUuid();
-      const response = await remnaRevokeUserSubscription(remnawaveUuid, { shortUuid: upstreamShortUuid });
-      if (response.error) throw new Error(response.error);
-      succeededShortUuids.set(key, upstreamShortUuid);
+      const upstreamShortUuid = await revokeRemnawaveComponent(remnawaveUuid);
+      if (upstreamShortUuid) succeededShortUuids.set(key, upstreamShortUuid);
     },
   );
   const upstreamShortUuids = Object.fromEntries(succeededShortUuids);
@@ -532,7 +546,7 @@ export async function synchronizeSubscriptionComponents(subscriptionId: string):
 
     let remnawaveUuid = component.remnawaveUuid;
     const previousState = upstreamState.get(component.id);
-    const upstreamShortUuid = previousState?.snapshot.shortUuid
+    let upstreamShortUuid = previousState?.snapshot.shortUuid
       ?? component.upstreamShortUuid
       ?? generateUpstreamShortUuid();
     let lastKnownStatus = previousState?.snapshot.status ?? null;
@@ -557,8 +571,7 @@ export async function synchronizeSubscriptionComponents(subscriptionId: string):
       previousState
       && previousState.snapshot.shortUuid !== upstreamShortUuid
     ) {
-      const revoked = await remnaRevokeUserSubscription(remnawaveUuid, { shortUuid: upstreamShortUuid });
-      if (revoked.error) throw new Error(revoked.error);
+      upstreamShortUuid = await revokeRemnawaveComponent(remnawaveUuid) ?? upstreamShortUuid;
     }
     if (
       subscription.owner.isBlocked

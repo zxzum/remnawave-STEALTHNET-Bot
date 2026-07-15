@@ -120,6 +120,31 @@ test("каждый Remnawave-компонент получает уникаль�
   assert.notEqual(main, whitelist);
 });
 
+test("при отзыве Remnawave генерирует shortUuid, который затем сохраняется", async () => {
+  assert.equal(typeof service.revokeRemnawaveComponent, "function");
+  const revoke = service.revokeRemnawaveComponent as (
+    uuid: string,
+    request: (...args: unknown[]) => Promise<unknown>,
+    getUser: (...args: unknown[]) => Promise<unknown>,
+  ) => Promise<string | null>;
+  const calls: unknown[][] = [];
+
+  const shortUuid = await revoke(
+    "remna-user",
+    async (...args: unknown[]) => {
+      calls.push(args);
+      return { status: 200, data: { response: { ok: true } } };
+    },
+    async (uuid: unknown) => ({
+      status: 200,
+      data: { response: { uuid, shortUuid: "fresh-from-remnawave" } },
+    }),
+  );
+
+  assert.deepEqual(calls, [["remna-user"]]);
+  assert.equal(shortUuid, "fresh-from-remnawave");
+});
+
 test("собирает уникальные Remnawave UUID обязательного и дополнительных компонентов", () => {
   assert.equal(typeof service.subscriptionRemnawaveUuids, "function");
   const collect = service.subscriptionRemnawaveUuids as (subscription: unknown) => string[];
