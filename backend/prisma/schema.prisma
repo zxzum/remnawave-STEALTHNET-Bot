@@ -14,6 +14,13 @@ enum SubscriptionSyncStatus {
   ERROR
 }
 
+/// Для tombstone-записи важно знать, какую именно операцию надо повторить.
+/// NULL сохраняет семантику старых записей: обычное удаление upstream user.
+enum SubscriptionDeletionOperation {
+  DELETE
+  REVOKE
+}
+
 model Admin {
   id                 String         @id @default(cuid())
   email              String         @unique
@@ -985,6 +992,7 @@ model Subscription {
   lastReconciledAt         DateTime?              @map("last_reconciled_at")
   graceUntil               DateTime?              @map("grace_until")
   deletionRequestedAt      DateTime?              @map("deletion_requested_at")
+  deletionOperation        SubscriptionDeletionOperation? @map("deletion_operation")
   /// subscriptionIndex=0 — «главная» (бывш. root). 1..N — дополнительные.
   /// Первая созданная любого типа всегда получает 0. После «обнуления» главной
   /// (tariffId=null) запись остаётся, новая покупка продлевает её.
@@ -1063,6 +1071,7 @@ model Subscription {
   @@index([syncStatus, syncRequiredAt])
   @@index([lastReconciledAt])
   @@index([deletionRequestedAt])
+  @@index([deletionOperation])
   @@map("subscriptions")
 }
 

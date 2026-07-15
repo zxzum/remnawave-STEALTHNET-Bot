@@ -24,7 +24,8 @@ type AdminNotificationEventType =
   | "withdrawal_request"
   | "promo_activated"
   | "gift_redeemed"
-  | "auto_renew_failed";
+  | "auto_renew_failed"
+  | "subscription_revoked";
 
 type AdminNotificationPreferenceRow = {
   telegramId: string;
@@ -709,6 +710,38 @@ export async function notifyAdminsAboutSubscriptionConverted(
   if (convertedDays != null && convertedDays > 0) lines.push(`📅 Конвертировано дней: <b>+${convertedDays}</b>`);
   lines.push(`🕐 ${formatDate(new Date())}`);
   await sendTelegramToAdminsForEvent("subscription_converted", lines.join("\n"));
+}
+
+/** Уведомить владельца и служебный Telegram-канал после полного отзыва одной логической подписки. */
+export async function notifySubscriptionRevoked(params: {
+  clientId: string;
+  subscriptionIndex: number;
+}): Promise<void> {
+  const client = await prisma.client.findUnique({
+    where: { id: params.clientId },
+    select: { id: true, email: true, telegramId: true, telegramUsername: true },
+  });
+  if (!client) return;
+
+  const subscriptionLabel = `Подписка №${params.subscriptionIndex}`;
+  if (client.telegramId) {
+    await sendTelegramToUser(
+      client.telegramId,
+      `⛔ <b>${escapeHtml(subscriptionLabel)} аннулирована</b>\n\nДоступ по этой подписке отключён. Остальные ваши подписки не изменены.`,
+      undefined,
+      backToMenuMarkup(),
+    );
+  }
+
+  const lines = [
+    `⛔ <b>Подписка аннулирована</b>`,
+    ``,
+    `👤 Клиент: ${escapeHtml(formatClientLabel(client))}`,
+    `📋 ${escapeHtml(subscriptionLabel)}`,
+    `🕐 ${formatDate(new Date())}`,
+  ];
+  if (client.telegramId) lines.push(`🆔 TG ID: <code>${escapeHtml(client.telegramId)}</code>`);
+  await sendTelegramToAdminsForEvent("subscription_revoked", lines.join("\n"));
 }
 
 /**

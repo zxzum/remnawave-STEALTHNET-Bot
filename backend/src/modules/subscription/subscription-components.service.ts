@@ -158,6 +158,16 @@ export async function runComponentOperations<T extends ComponentOperationTarget>
   return { failures, requiredFailure: failures.some((failure) => failure.required) };
 }
 
+/**
+ * Отзыв — атомарная для логической подписки операция: пока не отозван
+ * каждый компонент, запись и public URL остаются tombstone для повторной попытки.
+ */
+export function isLogicalSubscriptionRevoked(result: {
+  failures: Array<{ key: string; required: boolean; error: string }>;
+}): boolean {
+  return result.failures.length === 0;
+}
+
 export function selectComponentTargets(subscription: {
   remnawaveUuid: string | null;
   components: Array<{
@@ -278,6 +288,7 @@ export async function deleteSubscriptionComponents(subscriptionId: string) {
     where: { id: subscriptionId },
     data: {
       deletionRequestedAt: new Date(),
+      deletionOperation: "DELETE",
       syncStatus: "PENDING",
       syncRequiredAt: new Date(),
     },
@@ -312,6 +323,54 @@ export async function deleteSubscriptionComponents(subscriptionId: string) {
     await prisma.subscription.delete({ where: { id: subscriptionId } });
   }
   return { deleted: result.failures.length === 0, ...result };
+}
+
+/**
+ * Аннулирует одну логическую подписку: для каждого Remnawave-компонента
+ * выполняется штатный revoke, затем удаляется только эта запись Subscription.
+ * Другие subscriptionIndex пользователя не затрагиваются.
+ */
+export async function revokeLogicalSubscription(subscriptionId: string) {
+  const marked = await prisma.subscription.updateMany({
+    where: { id: subscriptionId },
+    data: {
+      deletionRequestedAt: new Date(),
+      deletionOperation: "REVOKE",
+      syncStatus: "PENDING",
+      syncRequiredAt: new Date(),
+    },
+  });
+  if (!marked.count) {
+    return {
+      deleted: true,
+      failures: [] as Array<{ key: string; required: boolean; error: string }>,
+      requiredFailure: false,
+    };
+  }
+
+  const links = await prisma.subscription.findUnique({
+    where: { id: subscriptionId },
+    select: {
+      remnawaveUuid: true,
+      components: { select: { remnawaveUuid: true, mergeOrder: true } },
+    },
+  });
+  if (links && !subscriptionRemnawaveUuids(links).length) {
+    await prisma.subscription.delete({ where: { id: subscriptionId } });
+    return {
+      deleted: true,
+      failures: [] as Array<{ key: string; required: boolean; error: string }>,
+      requiredFailure: false,
+    };
+  }
+
+  const result = await runSubscriptionComponentOperation(subscriptionId, async ({ remnawaveUuid }) => {
+    await revokeRemnawaveComponent(remnawaveUuid);
+  });
+  if (isLogicalSubscriptionRevoked(result)) {
+    await prisma.subscription.delete({ where: { id: subscriptionId } });
+  }
+  return { deleted: isLogicalSubscriptionRevoked(result), ...result };
 }
 
 export function buildComponentUsername(base: string, key: string, subscriptionIndex: number): string {
@@ -669,7 +728,7 @@ export async function reconcileSubscriptionComponents(limit = 50) {
     },
     orderBy: [{ syncRequiredAt: "asc" }, { lastReconciledAt: "asc" }],
     take: Math.max(1, Math.min(500, Math.trunc(limit))),
-    select: { id: true, deletionRequestedAt: true },
+    select: { id: true, deletionRequestedAt: true, deletionOperation: true },
   });
 
   let synced = 0;
@@ -677,7 +736,9 @@ export async function reconcileSubscriptionComponents(limit = 50) {
   let failed = 0;
   for (const subscription of subscriptions) {
     const result = await (subscription.deletionRequestedAt
-      ? deleteSubscriptionComponents(subscription.id)
+      ? subscription.deletionOperation === "REVOKE"
+        ? revokeLogicalSubscription(subscription.id)
+        : deleteSubscriptionComponents(subscription.id)
       : synchronizeSubscriptionComponents(subscription.id)).catch((error) => ({
       ok: false,
       deleted: false,

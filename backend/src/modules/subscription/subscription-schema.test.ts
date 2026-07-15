@@ -9,6 +9,8 @@ test("Prisma schema хранит публичный токен и sync-сост�
   assert.match(schema, /publicSubscriptionToken\s+String\s+@unique/);
   assert.match(schema, /syncStatus\s+SubscriptionSyncStatus/);
   assert.match(schema, /deletionRequestedAt\s+DateTime\?/);
+  assert.match(schema, /deletionOperation\s+SubscriptionDeletionOperation\?/);
+  assert.match(schema, /enum SubscriptionDeletionOperation/);
   assert.match(schema, /enum SubscriptionSyncStatus/);
 });
 

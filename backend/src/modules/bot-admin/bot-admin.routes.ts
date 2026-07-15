@@ -25,7 +25,11 @@ import {
   resetAllSubscriptionsTraffic,
   revokeAllSubscriptionsUrls,
 } from "../client/client-bulk-ops.service.js";
-import { selectComponentTargets } from "../subscription/subscription-components.service.js";
+import {
+  revokeLogicalSubscription,
+  selectComponentTargets,
+} from "../subscription/subscription-components.service.js";
+import { notifySubscriptionRevoked } from "../notification/telegram-notify.service.js";
 
 async function getClientPrimaryRemnaTarget(clientId: string) {
   const subscription = await prisma.subscription.findUnique({
@@ -340,6 +344,31 @@ botAdminRouter.post("/clients/:id/remna/revoke-subscription", async (req, res) =
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
   const report = await revokeAllSubscriptionsUrls(parsed.data.id);
   return res.status(report.failed ? 502 : 200).json(report);
+});
+
+/** Аннулировать одну логическую подписку и все её Remnawave-компоненты. */
+botAdminRouter.post("/subscriptions/:subId/remna/revoke-subscription", async (req, res) => {
+  const admin = await requireBotAdmin(req, res);
+  if (!admin) return;
+  const subId = String(req.params.subId ?? "").trim();
+  if (!subId) return res.status(400).json({ message: "Invalid subscription id" });
+  const subscription = await prisma.subscription.findUnique({
+    where: { id: subId },
+    select: { ownerId: true, subscriptionIndex: true },
+  });
+  if (!subscription) return res.status(404).json({ message: "Подписка не найдена" });
+
+  const result = await revokeLogicalSubscription(subId);
+  if (!result.deleted) {
+    return res.status(502).json({
+      message: "Отзыв поставлен в очередь синхронизации",
+      failures: result.failures,
+    });
+  }
+  void notifySubscriptionRevoked({ clientId: subscription.ownerId, subscriptionIndex: subscription.subscriptionIndex }).catch((error) => {
+    console.warn("[bot-admin subscription revoke] notification failed", error);
+  });
+  return res.json({ ok: true, revoked: true, subscriptionIndex: subscription.subscriptionIndex });
 });
 
 /** POST /api/bot-admin/clients/:id/remna/disable */

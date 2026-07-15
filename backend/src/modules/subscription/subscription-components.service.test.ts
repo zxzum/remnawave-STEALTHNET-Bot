@@ -98,6 +98,18 @@ test("ошибка обязательного компонента помеча�
   assert.deepEqual(result.failures.map((failure) => failure.key), ["primary"]);
 });
 
+test("отзыв логической подписки не удаляет её при ошибке любого компонента", async () => {
+  assert.equal(typeof service.isLogicalSubscriptionRevoked, "function");
+  const isRevoked = service.isLogicalSubscriptionRevoked as (result: {
+    failures: Array<{ key: string; required: boolean; error: string }>;
+  }) => boolean;
+
+  assert.equal(isRevoked({ failures: [] }), true);
+  assert.equal(isRevoked({
+    failures: [{ key: "limited", required: false, error: "Remnawave unavailable" }],
+  }), false);
+});
+
 test("имя компонента детерминировано и помещается в лимит Remnawave", () => {
   assert.equal(typeof service.buildComponentUsername, "function");
 

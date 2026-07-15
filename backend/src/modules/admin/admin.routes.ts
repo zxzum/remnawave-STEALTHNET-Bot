@@ -115,6 +115,7 @@ import { applyDevicesToSubscription, removeAllExtraDevicesForSub } from "../subs
 import {
   deleteSubscriptionComponents,
   mergeComponentDevices,
+  revokeLogicalSubscription,
   revokeSubscriptionComponents,
   runSubscriptionComponentOperation,
   selectComponentTargets,
@@ -132,6 +133,7 @@ import {
 import {
   notifyAdminsAboutSupportReply,
   notifyAdminsAboutTicketStatusChange,
+  notifySubscriptionRevoked,
 } from "../notification/telegram-notify.service.js";
 import { runRule, runAllRules, getEligibleClientIds } from "../auto-broadcast/auto-broadcast.service.js";
 import { testNalogConnection } from "../nalog/nalog.service.js";
@@ -7380,9 +7382,23 @@ adminRouter.post("/subscriptions/:subId/remna/unlink", asyncRoute(async (req, re
 adminRouter.post("/subscriptions/:subId/remna/revoke-subscription", asyncRoute(async (req, res) => {
   const parsed = subIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid subscription id" });
-  const result = await revokeSubscriptionComponents(parsed.data.subId);
-  if (result.requiredFailure) return res.status(502).json({ message: result.failures.map((failure) => failure.error).join("; ") });
-  return res.json({ ok: true, degraded: result.failures.length > 0 });
+  const subscription = await prisma.subscription.findUnique({
+    where: { id: parsed.data.subId },
+    select: { ownerId: true, subscriptionIndex: true },
+  });
+  if (!subscription) return res.status(404).json({ message: "Подписка не найдена" });
+
+  const result = await revokeLogicalSubscription(parsed.data.subId);
+  if (!result.deleted) {
+    return res.status(502).json({
+      message: "Отзыв поставлен в очередь синхронизации",
+      failures: result.failures,
+    });
+  }
+  void notifySubscriptionRevoked({ clientId: subscription.ownerId, subscriptionIndex: subscription.subscriptionIndex }).catch((error) => {
+    console.warn("[subscription revoke] notification failed", error);
+  });
+  return res.json({ ok: true, revoked: true });
 }));
 
 adminRouter.post("/subscriptions/:subId/remna/disable", asyncRoute(async (req, res) => {
