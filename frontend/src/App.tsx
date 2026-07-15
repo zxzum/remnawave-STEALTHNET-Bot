@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 
 const routerFutureFlags = {
@@ -13,7 +13,6 @@ import { PwaUpdatePrompt } from "@/components/pwa/pwa-update-prompt";
 import { api } from "@/lib/api";
 import { LoginPage } from "@/pages/login";
 import { ChangePasswordPage } from "@/pages/change-password";
-import { DashboardPage } from "@/pages/dashboard";
 import { ClientsPage } from "@/pages/clients";
 import { TariffsPage } from "@/pages/tariffs";
 import { TrialsPage } from "@/pages/trials"; // T15 (11.05.2026)
@@ -25,7 +24,6 @@ import { LandingPreviewPage } from "@/pages/landing-preview";
 import { AdminAuditPage } from "@/pages/admin-audit";
 import { AdminWebhookInboxPage } from "@/pages/admin-webhook-inbox";
 import { AdminDiagnosticsPage } from "@/pages/admin-diagnostics";
-import { AdminBusinessAnalyticsPage } from "@/pages/admin-business-analytics";
 import { AdminAntiFraudPage } from "@/pages/admin-anti-fraud";
 import { AdminEmailTemplatesPage } from "@/pages/admin-email-templates";
 import { AdminBotMessagesPage } from "@/pages/admin-bot-messages";
@@ -38,7 +36,6 @@ import { RemnaSquadsPage } from "@/pages/remna-squads";
 import { RemnaHostsPage } from "@/pages/remna-hosts";
 import { RemnaProfilesPage } from "@/pages/remna-profiles";
 import { RemnaSubTemplatesPage } from "@/pages/remna-sub-templates";
-import { AnalyticsPage } from "@/pages/analytics";
 import { MarketingPage } from "@/pages/marketing";
 import { AdminsPage } from "@/pages/admins";
 import { SalesReportPage } from "@/pages/sales-report";
@@ -49,16 +46,13 @@ import { ContestsPage } from "@/pages/contests";
 import { AdminTicketsPage } from "@/pages/admin-tickets";
 import { BroadcastPage } from "@/pages/broadcast";
 import { AutoBroadcastPage } from "@/pages/auto-broadcast";
-import { ReferralNetworkPage } from "@/pages/referral-network";
 import { AdminReferralsPage } from "@/pages/admin-referrals";
 import { GramadsPromoPage } from "@/pages/gramads-promo";
 import { TrafficAbusePage } from "@/pages/traffic-abuse";
 import { ApiKeysPage } from "@/pages/api-keys";
 import { AntibotPage } from "@/pages/antibot";
 import { ApiDocsPage } from "@/pages/api-docs";
-import { GeoMapPage } from "@/pages/geo-map";
 import { AdminSecondarySubscriptionsPage } from "@/pages/admin-secondary-subscriptions";
-import { ProxyPage } from "@/pages/proxy";
 import { SingboxPage } from "@/pages/singbox";
 import LanguagesPage from "@/pages/languages";
 import { TourConstructorPage } from "@/pages/tour-constructor";
@@ -94,6 +88,14 @@ import { ClientGiftsPage } from "@/pages/cabinet/client-gifts";
 import { GiftActivatePage } from "@/pages/gift-activate";
 import { LandingPage } from "@/pages/landing";
 import type { PublicConfig } from "@/lib/api";
+
+const DashboardPage = lazy(() => import("@/pages/dashboard").then(({ DashboardPage }) => ({ default: DashboardPage })));
+const AdminBusinessAnalyticsPage = lazy(() => import("@/pages/admin-business-analytics").then(({ AdminBusinessAnalyticsPage }) => ({ default: AdminBusinessAnalyticsPage })));
+const AnalyticsPage = lazy(() => import("@/pages/analytics").then(({ AnalyticsPage }) => ({ default: AnalyticsPage })));
+const ReferralNetworkPage = lazy(() => import("@/pages/referral-network").then(({ ReferralNetworkPage }) => ({ default: ReferralNetworkPage })));
+const GeoMapPage = lazy(() => import("@/pages/geo-map").then(({ GeoMapPage }) => ({ default: GeoMapPage })));
+const ProxyPage = lazy(() => import("@/pages/proxy").then(({ ProxyPage }) => ({ default: ProxyPage })));
+const lazyPageFallback = <div className="min-h-48 flex items-center justify-center text-sm text-muted-foreground">Загрузка раздела…</div>;
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { state } = useAuth();
@@ -229,7 +231,7 @@ function AppRoutes() {
           index
           element={
             <ForceChangePassword>
-              <DashboardPage />
+              <Suspense fallback={lazyPageFallback}><DashboardPage /></Suspense>
             </ForceChangePassword>
           }
         />
@@ -247,7 +249,7 @@ function AppRoutes() {
         <Route path="audit" element={<ForceChangePassword><AdminAuditPage /></ForceChangePassword>} />
         <Route path="webhook-inbox" element={<ForceChangePassword><AdminWebhookInboxPage /></ForceChangePassword>} />
         <Route path="diagnostics" element={<ForceChangePassword><AdminDiagnosticsPage /></ForceChangePassword>} />
-        <Route path="business-analytics" element={<ForceChangePassword><AdminBusinessAnalyticsPage /></ForceChangePassword>} />
+        <Route path="business-analytics" element={<ForceChangePassword><Suspense fallback={lazyPageFallback}><AdminBusinessAnalyticsPage /></Suspense></ForceChangePassword>} />
         <Route path="anti-fraud" element={<ForceChangePassword><AdminAntiFraudPage /></ForceChangePassword>} />
         <Route path="email-templates" element={<ForceChangePassword><AdminEmailTemplatesPage /></ForceChangePassword>} />
         <Route path="bot-messages" element={<ForceChangePassword><AdminBotMessagesPage /></ForceChangePassword>} />
@@ -259,7 +261,7 @@ function AppRoutes() {
         <Route path="remna-hosts" element={<ForceChangePassword><RemnaHostsPage /></ForceChangePassword>} />
         <Route path="remna-profiles" element={<ForceChangePassword><RemnaProfilesPage /></ForceChangePassword>} />
         <Route path="remna-sub-templates" element={<ForceChangePassword><RemnaSubTemplatesPage /></ForceChangePassword>} />
-        <Route path="analytics" element={<ForceChangePassword><AnalyticsPage /></ForceChangePassword>} />
+        <Route path="analytics" element={<ForceChangePassword><Suspense fallback={lazyPageFallback}><AnalyticsPage /></Suspense></ForceChangePassword>} />
         <Route path="marketing" element={<ForceChangePassword><MarketingPage /></ForceChangePassword>} />
         <Route path="admins" element={<ForceChangePassword><AdminsPage /></ForceChangePassword>} />
         <Route path="sales-report" element={<ForceChangePassword><SalesReportPage /></ForceChangePassword>} />
@@ -267,19 +269,19 @@ function AppRoutes() {
         <Route path="video-instructions" element={<ForceChangePassword><VideoInstructionsPage /></ForceChangePassword>} />
         <Route path="broadcast" element={<ForceChangePassword><BroadcastPage /></ForceChangePassword>} />
         <Route path="auto-broadcast" element={<ForceChangePassword><AutoBroadcastPage /></ForceChangePassword>} />
-        <Route path="proxy" element={<ForceChangePassword><ProxyPage /></ForceChangePassword>} />
+        <Route path="proxy" element={<ForceChangePassword><Suspense fallback={lazyPageFallback}><ProxyPage /></Suspense></ForceChangePassword>} />
         <Route path="singbox" element={<ForceChangePassword><SingboxPage /></ForceChangePassword>} />
         <Route path="backup" element={<ForceChangePassword><BackupPage /></ForceChangePassword>} />
         <Route path="contests" element={<ForceChangePassword><ContestsPage /></ForceChangePassword>} />
         <Route path="tickets" element={<ForceChangePassword><AdminTicketsPage /></ForceChangePassword>} />
-        <Route path="referral-network" element={<ForceChangePassword><ReferralNetworkPage /></ForceChangePassword>} />
+        <Route path="referral-network" element={<ForceChangePassword><Suspense fallback={lazyPageFallback}><ReferralNetworkPage /></Suspense></ForceChangePassword>} />
         <Route path="referrals" element={<ForceChangePassword><AdminReferralsPage /></ForceChangePassword>} />
         <Route path="traffic-abuse" element={<ForceChangePassword><TrafficAbusePage /></ForceChangePassword>} />
         <Route path="api-keys" element={<ForceChangePassword><ApiKeysPage /></ForceChangePassword>} />
         <Route path="antibot" element={<ForceChangePassword><AntibotPage /></ForceChangePassword>} />
         <Route path="languages" element={<ForceChangePassword><LanguagesPage /></ForceChangePassword>} />
         <Route path="api-docs" element={<ForceChangePassword><ApiDocsPage /></ForceChangePassword>} />
-        <Route path="geo-map" element={<ForceChangePassword><GeoMapPage /></ForceChangePassword>} />
+        <Route path="geo-map" element={<ForceChangePassword><Suspense fallback={lazyPageFallback}><GeoMapPage /></Suspense></ForceChangePassword>} />
         <Route path="secondary-subscriptions" element={<ForceChangePassword><AdminSecondarySubscriptionsPage /></ForceChangePassword>} />
         <Route path="tour-constructor" element={<ForceChangePassword><TourConstructorPage /></ForceChangePassword>} />
         <Route path="promo-vpn" element={<ForceChangePassword><GramadsPromoPage /></ForceChangePassword>} />
