@@ -13,6 +13,43 @@ const components: ComponentTarget[] = [
   { key: "limited", required: false, mergeOrder: 10 },
 ];
 
+test("snapshot триала имеет приоритет над компонентами тарифа", () => {
+  assert.equal(typeof service.templatesForSubscription, "function");
+  const templatesFor = service.templatesForSubscription as (subscription: unknown) => Array<{
+    key: string;
+    trafficLimitBytes: bigint | null;
+  }>;
+  const component = (key: string, required: boolean, trafficLimitBytes: bigint | null) => ({
+    key,
+    adminName: key,
+    required,
+    mergeOrder: required ? 0 : 10,
+    internalSquadUuids: [key],
+    trafficLimitBytes,
+    trafficResetMode: "no_reset",
+    showQuotaToClient: !required,
+    quotaDisplayName: null,
+    enabled: true,
+  });
+
+  const result = templatesFor({
+    tariff: {
+      internalSquadUuids: ["default"],
+      trafficLimitBytes: null,
+      trafficResetMode: "no_reset",
+      remnawaveComponents: [component("primary", true, null), component("whitelist", false, 20n * 1024n ** 3n)],
+    },
+    trial: {
+      squadUuids: null,
+      trafficLimitBytes: null,
+      remnawaveComponents: [component("primary", true, null), component("whitelist", false, 5n * 1024n ** 3n)],
+    },
+  });
+
+  assert.equal(result.find((item) => item.key === "primary")?.trafficLimitBytes, null);
+  assert.equal(result.find((item) => item.key === "whitelist")?.trafficLimitBytes, 5n * 1024n ** 3n);
+});
+
 test("частичная ошибка необязательного компонента не становится required failure", async () => {
   assert.equal(typeof service.runComponentOperations, "function");
 

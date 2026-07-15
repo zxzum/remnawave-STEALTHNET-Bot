@@ -51,9 +51,9 @@ async function main() {
   let skipped = 0;
   let failed = 0;
   for (const subscription of subscriptions) {
-    const templates = subscription.tariff?.remnawaveComponents.length
-      ? subscription.tariff.remnawaveComponents
-      : subscription.trial?.remnawaveComponents ?? [];
+    const templates = subscription.trial?.remnawaveComponents.length
+      ? subscription.trial.remnawaveComponents
+      : subscription.tariff?.remnawaveComponents ?? [];
     const desiredKeys = templates.length ? templates.map((component) => component.key) : ["primary"];
     const present = new Map(subscription.components.map((component) => [component.key, component.remnawaveUuid]));
     const missing = desiredKeys.filter((key) => !present.get(key));

@@ -337,7 +337,7 @@ function trafficStrategy(mode: string): "NO_RESET" | "MONTH" | "MONTH_ROLLING" {
   return "NO_RESET";
 }
 
-function templatesForSubscription(subscription: {
+export function templatesForSubscription(subscription: {
   tariff: null | {
     internalSquadUuids: string[];
     trafficLimitBytes: bigint | null;
@@ -350,9 +350,10 @@ function templatesForSubscription(subscription: {
     remnawaveComponents: Array<ComponentTemplate & { enabled: boolean }>;
   };
 }): ComponentTemplate[] {
-  const configured = subscription.tariff?.remnawaveComponents.length
-    ? subscription.tariff.remnawaveComponents
-    : subscription.trial?.remnawaveComponents ?? [];
+  const trialComponents = subscription.trial?.remnawaveComponents ?? [];
+  const configured = trialComponents.length
+    ? trialComponents
+    : subscription.tariff?.remnawaveComponents ?? [];
   const enabled = configured.filter((component) => component.enabled);
   if (enabled.some((component) => component.required)) {
     return enabled.map((component) => ({
@@ -362,7 +363,7 @@ function templatesForSubscription(subscription: {
       mergeOrder: component.mergeOrder,
       internalSquadUuids: component.internalSquadUuids,
       trafficLimitBytes:
-        subscription.trial?.trafficLimitBytes != null && component.required
+        trialComponents.length === 0 && subscription.trial?.trafficLimitBytes != null && component.required
           ? subscription.trial.trafficLimitBytes
           : component.trafficLimitBytes,
       trafficResetMode: component.trafficResetMode,

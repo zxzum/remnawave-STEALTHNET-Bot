@@ -2419,7 +2419,13 @@ clientRouter.post("/trials/:id/activate", async (req, res) => {
   await prisma.subscription.update({
     where: { id: subResult.data.subscriptionId },
     data: { trialId: trial.id },
-  }).catch(() => {});
+  });
+  const componentSync = await synchronizeSubscriptionComponents(subResult.data.subscriptionId);
+  if (componentSync.requiredFailure) {
+    return res.status(502).json({
+      message: componentSync.failures.map((failure) => `${failure.key}: ${failure.error}`).join("; "),
+    });
+  }
 
   // если триал стал primary (subscriptionIndex=0) и у клиента
   // ещё пустой Client.remnawaveUuid — синкаем туда remnawaveUuid подписки для legacy-чтения.
