@@ -326,19 +326,9 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
     if (payment?.subscriptionId) {
       const sub = await prisma.subscription.findUnique({
         where: { id: payment.subscriptionId },
-        select: { remnawaveUuid: true, publicSubscriptionToken: true },
+        select: { publicSubscriptionToken: true },
       });
       publicSubscriptionToken = sub?.publicSubscriptionToken ?? null;
-      if (sub?.remnawaveUuid) {
-        try {
-          const { remnaGetUser } = await import("../remna/remna.client.js");
-          const r = await remnaGetUser(sub.remnawaveUuid);
-          const inner = (r.data as { response?: Record<string, unknown>; data?: Record<string, unknown> } | null)?.response
-            ?? (r.data as { response?: Record<string, unknown>; data?: Record<string, unknown> } | null)?.data
-            ?? (r.data as Record<string, unknown> | null);
-          subscriptionUrl = (inner as { subscriptionUrl?: string } | null)?.subscriptionUrl ?? null;
-        } catch { /* ignore */ }
-      }
     }
     const cfg = await getSystemConfig();
     if (publicSubscriptionToken && cfg.publicAppUrl) {

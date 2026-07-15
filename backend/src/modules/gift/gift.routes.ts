@@ -304,7 +304,7 @@ giftRouter.post("/redeem", async (req: Request, res: Response) => {
     return res.status(400).json({ message: "Некорректные данные", errors: body.error.flatten() });
   }
 
-  const result = await redeemGiftCode(clientId, body.data.code);
+  const result = await redeemGiftCode(clientId, body.data.code, `${req.protocol}://${req.get("host")}`);
   if (!result.ok) {
     return res.status(result.status).json({ message: result.error });
   }
@@ -401,7 +401,7 @@ giftRouter.get("/subscription-url/:id", async (req: Request, res: Response) => {
   const clientId = (req as AuthedReq).clientId;
   const subscriptionId = req.params.id;
 
-  const result = await getSubscriptionUrl(subscriptionId, clientId);
+  const result = await getSubscriptionUrl(subscriptionId, clientId, `${req.protocol}://${req.get("host")}`);
   if (!result.ok) {
     return res.status(result.status).json({ message: result.error });
   }

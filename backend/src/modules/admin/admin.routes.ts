@@ -1942,20 +1942,22 @@ adminRouter.delete("/clients/:id", async (req, res) => {
   return res.json({ success: true });
 });
 
-// сначала смотрим primary-подписку (subscriptionIndex=0),
-// fallback на legacy Client.remnawaveUuid. После унификации UUID у новых клиентов живёт в
-// Subscription, legacy field остался ради старых юзеров до бэкфилла.
-async function getClientRemnaUuid(clientId: string): Promise<string | null> {
+async function getClientPrimarySubscriptionId(clientId: string): Promise<string | null> {
   const primary = await prisma.subscription.findUnique({
     where: { ownerId_subscriptionIndex: { ownerId: clientId, subscriptionIndex: 0 } },
-    select: { remnawaveUuid: true },
+    select: { id: true },
   });
-  if (primary?.remnawaveUuid) return primary.remnawaveUuid;
-  const client = await prisma.client.findUnique({
-    where: { id: clientId },
-    select: { remnawaveUuid: true },
-  });
-  return client?.remnawaveUuid ?? null;
+  return primary?.id ?? null;
+}
+
+async function getClientPrimaryComponentTarget(clientId: string) {
+  const subscriptionId = await getClientPrimarySubscriptionId(clientId);
+  if (!subscriptionId) return null;
+  const subscription = await getAdminSubscription(subscriptionId);
+  if (!subscription) return null;
+  const targets = selectComponentTargets(subscription);
+  const target = targets.find((component) => component.required) ?? targets[0];
+  return target ? { subscriptionId, ...target } : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2064,6 +2066,10 @@ adminRouter.get("/clients/:id/all-devices", asyncRoute(async (req, res) => {
       id: true,
       subscriptionIndex: true,
       remnawaveUuid: true,
+      components: {
+        orderBy: { mergeOrder: "asc" },
+        select: { key: true, required: true, mergeOrder: true, remnawaveUuid: true },
+      },
       tariff: { select: { name: true, menuEmoji: true } },
     },
   });
@@ -2078,10 +2084,9 @@ adminRouter.get("/clients/:id/all-devices", asyncRoute(async (req, res) => {
     deviceLimit: number | null;
   }> = [];
   let totalDevices = 0;
-  const seenUuids = new Set<string>();
-
   for (const sub of subs) {
-    if (!sub.remnawaveUuid) {
+    const targets = selectComponentTargets(sub);
+    if (!targets.length) {
       groups.push({
         subscriptionId: sub.id,
         subscriptionIndex: sub.subscriptionIndex,
@@ -2093,15 +2098,13 @@ adminRouter.get("/clients/:id/all-devices", asyncRoute(async (req, res) => {
       });
       continue;
     }
-    if (seenUuids.has(sub.remnawaveUuid)) continue; // дедуп
-    seenUuids.add(sub.remnawaveUuid);
-    const r = await remnaGetUserHwidDevices(sub.remnawaveUuid);
-    const d = (r.data as Record<string, unknown> | null)?.response as Record<string, unknown> | undefined;
-    const devices = Array.isArray(d?.devices) ? (d.devices as unknown[]) : [];
+    const deviceResults = await Promise.all(targets.map((target) => remnaGetUserHwidDevices(target.remnawaveUuid)));
+    const devices = mergeComponentDevices(deviceResults.map((result) => result.data));
     totalDevices += devices.length;
 
     let deviceLimit: number | null = null;
-    const userRes = await remnaGetUser(sub.remnawaveUuid);
+    const required = targets.find((target) => target.required) ?? targets[0];
+    const userRes = await remnaGetUser(required.remnawaveUuid);
     const u = (userRes.data as Record<string, unknown> | null);
     const inner = (u?.response ?? u) as Record<string, unknown> | undefined;
     if (typeof inner?.hwidDeviceLimit === "number") deviceLimit = inner.hwidDeviceLimit;
@@ -2111,7 +2114,7 @@ adminRouter.get("/clients/:id/all-devices", asyncRoute(async (req, res) => {
       subscriptionIndex: sub.subscriptionIndex,
       tariffName: sub.tariff?.name ?? null,
       tariffEmoji: sub.tariff?.menuEmoji ?? null,
-      remnawaveUuid: sub.remnawaveUuid,
+      remnawaveUuid: required.remnawaveUuid,
       devices,
       deviceLimit,
     });
@@ -2135,6 +2138,11 @@ adminRouter.get("/clients/:id/subscriptions-overview", asyncRoute(async (req, re
       id: true,
       subscriptionIndex: true,
       remnawaveUuid: true,
+      publicSubscriptionToken: true,
+      components: {
+        orderBy: { mergeOrder: "asc" },
+        select: { key: true, required: true, mergeOrder: true, remnawaveUuid: true },
+      },
       tariffId: true,
       trialId: true,
       purchasedAsGift: true,
@@ -2172,17 +2180,21 @@ adminRouter.get("/clients/:id/subscriptions-overview", asyncRoute(async (req, re
     } | null;
   }>;
 
+  const config = await getSystemConfig();
+  const publicBaseUrl = config.publicAppUrl?.trim() || `${req.protocol}://${req.get("host") ?? "localhost"}`;
   for (const sub of subs) {
     let remna: typeof items[number]["remna"] = null;
-    if (sub.remnawaveUuid) {
-      const r = await remnaGetUser(sub.remnawaveUuid);
+    const targets = selectComponentTargets(sub);
+    const required = targets.find((target) => target.required) ?? targets[0];
+    if (required) {
+      const r = await remnaGetUser(required.remnawaveUuid);
       const u = (r.data as Record<string, unknown> | null);
       const inner = (u?.response ?? u) as Record<string, unknown> | undefined;
       const traffic = (inner?.userTraffic ?? {}) as Record<string, unknown>;
       const squads = Array.isArray(inner?.activeInternalSquads) ? (inner.activeInternalSquads as unknown[]) : [];
-      const devicesRes = await remnaGetUserHwidDevices(sub.remnawaveUuid).catch(() => ({ data: null }));
-      const d = (devicesRes.data as Record<string, unknown> | null)?.response as Record<string, unknown> | undefined;
-      const devices = Array.isArray(d?.devices) ? (d.devices as unknown[]) : [];
+      const deviceResults = await Promise.all(targets.map((target) =>
+        remnaGetUserHwidDevices(target.remnawaveUuid).catch(() => ({ data: null }))));
+      const devices = mergeComponentDevices(deviceResults.map((result) => result.data));
       remna = {
         username: typeof inner?.username === "string" ? inner.username : null,
         status: typeof inner?.status === "string" ? inner.status : null,
@@ -2192,7 +2204,7 @@ adminRouter.get("/clients/:id/subscriptions-overview", asyncRoute(async (req, re
         hwidDeviceLimit: typeof inner?.hwidDeviceLimit === "number" ? inner.hwidDeviceLimit : null,
         deviceCount: devices.length,
         activeSquadsCount: squads.length,
-        subscriptionUrl: typeof inner?.subscriptionUrl === "string" ? inner.subscriptionUrl : null,
+        subscriptionUrl: buildPublicSubscriptionUrl(publicBaseUrl, sub.publicSubscriptionToken),
         onlineAt: typeof inner?.onlineAt === "string" ? inner.onlineAt : null,
       };
     }
@@ -2219,11 +2231,24 @@ adminRouter.get("/clients/:id/subscriptions-overview", asyncRoute(async (req, re
 adminRouter.get("/clients/:id/remna", async (req, res) => {
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
-  const result = await remnaGetUser(remnaUuid);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? {});
+  const subscriptionId = await getClientPrimarySubscriptionId(parsed.data.id);
+  const subscription = subscriptionId ? await getAdminSubscription(subscriptionId) : null;
+  const targets = subscription ? selectComponentTargets(subscription) : [];
+  if (!subscription || !targets.length) return res.status(400).json({ message: "Клиент не привязан к Remna" });
+  const components = await Promise.all(targets.map(async (target) => ({ ...target, result: await remnaGetUser(target.remnawaveUuid) })));
+  const required = components.find((component) => component.required) ?? components[0];
+  if (required.result.error) return res.status(required.result.status >= 400 ? required.result.status : 500).json({ message: required.result.error });
+  const config = await getSystemConfig();
+  const baseUrl = config.publicAppUrl?.trim() || `${req.protocol}://${req.get("host") ?? "localhost"}`;
+  const primary = required.result.data && typeof required.result.data === "object"
+    ? required.result.data as Record<string, unknown>
+    : {};
+  return res.json({
+    ...primary,
+    subscriptionUrl: buildPublicSubscriptionUrl(baseUrl, subscription.publicSubscriptionToken),
+    components: components.map(({ result, ...target }) => ({ ...target, data: result.data ?? null, error: result.error ?? null })),
+    degraded: components.some((component) => Boolean(component.result.error)),
+  });
 });
 
 const remnaUpdateBodySchema = z.object({
@@ -2257,42 +2282,89 @@ function getRemnaUserFieldsForMerge(data: unknown): { activeInternalSquads: stri
   };
 }
 
+async function applyCompositeRemnaPatch(
+  subscriptionId: string,
+  data: z.infer<typeof remnaUpdateBodySchema>,
+  requestedComponentKey?: string,
+) {
+  const subscription = await getAdminSubscription(subscriptionId);
+  if (!subscription) {
+    return { notFound: true, failures: [], requiredFailure: true };
+  }
+  const componentFields = ["trafficLimitBytes", "trafficLimitStrategy", "activeInternalSquads"] as const;
+  const hasComponentPatch = componentFields.some((key) => data[key] !== undefined);
+  const componentKey = requestedComponentKey
+    ?? (hasComponentPatch ? subscription.components.find((component) => component.required)?.key ?? "primary" : undefined);
+
+  const commonPatch: Record<string, unknown> = {};
+  for (const key of ["hwidDeviceLimit", "expireAt", "status", "telegramId", "email"] as const) {
+    if (data[key] !== undefined) commonPatch[key] = data[key];
+  }
+  if (data.expireAt && data.status === undefined && new Date(data.expireAt).getTime() > Date.now()) {
+    commonPatch.status = "ACTIVE";
+  }
+  if (data.expireAt) {
+    await prisma.subscription.update({
+      where: { id: subscriptionId },
+      data: { expireAt: new Date(data.expireAt) },
+    });
+  }
+
+  const commonResult = Object.keys(commonPatch).length
+    ? await runSubscriptionComponentOperation(subscriptionId, async ({ remnawaveUuid }) => {
+        const response = await remnaUpdateUser({ uuid: remnawaveUuid, ...commonPatch });
+        if (response.error) throw new Error(response.error);
+      })
+    : { failures: [] as Array<{ key: string; required: boolean; error: string }>, requiredFailure: false };
+
+  let componentResult = { failures: [] as Array<{ key: string; required: boolean; error: string }>, requiredFailure: false };
+  if (hasComponentPatch && componentKey) {
+    const snapshotData: {
+      trafficLimitBytes?: bigint;
+      trafficResetMode?: string;
+      internalSquadUuids?: string[];
+    } = {};
+    if (data.trafficLimitBytes !== undefined) snapshotData.trafficLimitBytes = BigInt(data.trafficLimitBytes);
+    if (data.trafficLimitStrategy !== undefined) {
+      snapshotData.trafficResetMode = data.trafficLimitStrategy === "MONTH"
+        ? "monthly"
+        : data.trafficLimitStrategy === "MONTH_ROLLING" ? "monthly_rolling" : "no_reset";
+    }
+    if (data.activeInternalSquads !== undefined) snapshotData.internalSquadUuids = data.activeInternalSquads;
+    await prisma.remnawaveComponent.updateMany({
+      where: { subscriptionId, key: componentKey },
+      data: snapshotData,
+    });
+    const componentPatch = Object.fromEntries(componentFields
+      .filter((key) => data[key] !== undefined)
+      .map((key) => [key, data[key]]));
+    componentResult = await runSubscriptionComponentOperation(subscriptionId, async ({ remnawaveUuid }) => {
+      const response = await remnaUpdateUser({ uuid: remnawaveUuid, ...componentPatch });
+      if (response.error) throw new Error(response.error);
+    }, componentKey);
+  }
+
+  const failures = [...commonResult.failures, ...componentResult.failures];
+  return {
+    notFound: false,
+    failures,
+    requiredFailure: commonResult.requiredFailure || componentResult.requiredFailure,
+  };
+}
+
 adminRouter.patch("/clients/:id/remna", async (req, res) => {
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
   const body = remnaUpdateBodySchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Invalid input", errors: body.error.flatten() });
-  const getRes = await remnaGetUser(remnaUuid);
-  if (getRes.error) return res.status(getRes.status >= 400 ? getRes.status : 500).json({ message: getRes.error });
-  const current = getRemnaUserFieldsForMerge(getRes.data);
-  const patchBody: Record<string, unknown> = { uuid: remnaUuid };
-  if (body.data.activeInternalSquads === undefined && current.activeInternalSquads.length > 0) patchBody.activeInternalSquads = current.activeInternalSquads;
-  if (body.data.telegramId === undefined && current.telegramId !== undefined) patchBody.telegramId = current.telegramId;
-  if (body.data.email === undefined && current.email !== undefined) patchBody.email = current.email;
-  Object.assign(patchBody, body.data);
-  const result = await remnaUpdateUser(patchBody);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  // после успешного PATCH в Remna зеркалим expireAt
-  // в БД (Subscription.expireAt у любой подписки с этим uuid). Раньше изменения
-  // через admin UI расходились с БД.
-  if (body.data.expireAt) {
-    try {
-      await prisma.subscription.updateMany({
-        where: { ownerId: parsed.data.id, remnawaveUuid: remnaUuid },
-        data: { expireAt: new Date(body.data.expireAt) },
-      });
-      const affected = await prisma.subscription.findMany({
-        where: { ownerId: parsed.data.id, remnawaveUuid: remnaUuid },
-        select: { id: true },
-      });
-      await Promise.all(affected.map((subscription) => synchronizeSubscriptionComponents(subscription.id)));
-    } catch (e) {
-      console.error("[admin/clients/remna] expireAt DB sync failed:", e);
-    }
-  }
-  return res.json(result.data ?? {});
+  const subscriptionId = await getClientPrimarySubscriptionId(parsed.data.id);
+  if (!subscriptionId) return res.status(400).json({ message: "У клиента нет основной подписки" });
+  const result = await applyCompositeRemnaPatch(subscriptionId, body.data);
+  return res.status(result.requiredFailure ? 502 : 200).json({
+    ok: !result.requiredFailure,
+    degraded: result.failures.length > 0,
+    failures: result.failures,
+  });
 });
 
 /**
@@ -2306,13 +2378,27 @@ adminRouter.patch("/clients/:id/remna", async (req, res) => {
 adminRouter.post("/clients/:id/remna/unlink", async (req, res) => {
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const client = await prisma.client.findUnique({
-    where: { id: parsed.data.id },
-    select: { id: true, remnawaveUuid: true },
-  });
+  const client = await prisma.client.findUnique({ where: { id: parsed.data.id }, select: { id: true } });
   if (!client) return res.status(404).json({ message: "Клиент не найден" });
-  if (!client.remnawaveUuid) return res.status(400).json({ message: "Клиент уже не привязан к Remna" });
-  await prisma.client.update({ where: { id: client.id }, data: { remnawaveUuid: null } });
+  const subscriptions = await prisma.subscription.findMany({
+    where: { ownerId: client.id },
+    select: { id: true, remnawaveUuid: true, components: { select: { remnawaveUuid: true } } },
+  });
+  const linked = subscriptions.some((subscription) =>
+    Boolean(subscription.remnawaveUuid || subscription.components.some((component) => component.remnawaveUuid)));
+  if (!linked) return res.status(400).json({ message: "Клиент уже не привязан к Remna" });
+  const subscriptionIds = subscriptions.map((subscription) => subscription.id);
+  await prisma.$transaction(async (tx) => {
+    await tx.remnawaveComponent.updateMany({
+      where: { subscriptionId: { in: subscriptionIds } },
+      data: { remnawaveUuid: null, upstreamShortUuid: null, lastKnownStatus: null, lastSyncError: null },
+    });
+    await tx.subscription.updateMany({
+      where: { id: { in: subscriptionIds } },
+      data: { remnawaveUuid: null, syncStatus: "PENDING", syncRequiredAt: new Date() },
+    });
+    await tx.client.update({ where: { id: client.id }, data: { remnawaveUuid: null } });
+  });
   return res.json({ ok: true });
 });
 
@@ -2730,6 +2816,13 @@ adminRouter.post("/clients/:id/attach-remna-subscription", asyncRoute(async (req
     });
     if (rebind.error) console.error("[admin/attach-remna] rebind tg/email failed:", rebind.error);
   }
+  const componentSync = await synchronizeSubscriptionComponents(created.id);
+  if (componentSync.requiredFailure) {
+    return res.status(502).json({
+      message: "Подписка привязана, но обязательный компонент не синхронизирован",
+      failures: componentSync.failures,
+    });
+  }
 
   await logAdmin(req, "subscription.attach_remna", { type: "subscription", id: created.id }, {
     clientId,
@@ -2751,12 +2844,12 @@ const squadActionSchema = z.object({ squadUuid: z.string().uuid() });
 adminRouter.post("/clients/:id/remna/squads/add", async (req, res) => {
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
+  const target = await getClientPrimaryComponentTarget(parsed.data.id);
+  if (!target) return res.status(400).json({ message: "Клиент не привязан к Remna" });
   const body = squadActionSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Invalid input" });
   // Получаем текущие сквады пользователя, чтобы добавить новый без потери существующих
-  const userRes = await remnaGetUser(remnaUuid);
+  const userRes = await remnaGetUser(target.remnawaveUuid);
   const userData = userRes.data as Record<string, unknown> | undefined;
   const resp = (userData?.response ?? userData) as Record<string, unknown> | undefined;
   const currentSquads: string[] = [];
@@ -2770,36 +2863,50 @@ adminRouter.post("/clients/:id/remna/squads/add", async (req, res) => {
   if (!currentSquads.includes(body.data.squadUuid)) {
     currentSquads.push(body.data.squadUuid);
   }
-  const result = await remnaUpdateUser({ uuid: remnaUuid, activeInternalSquads: currentSquads });
+  const result = await remnaUpdateUser({ uuid: target.remnawaveUuid, activeInternalSquads: currentSquads });
   if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
+  await prisma.remnawaveComponent.updateMany({
+    where: { subscriptionId: target.subscriptionId, key: target.key },
+    data: { internalSquadUuids: currentSquads },
+  });
   return res.json(result.data ?? {});
 });
 
 adminRouter.post("/clients/:id/remna/squads/remove", async (req, res) => {
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
+  const target = await getClientPrimaryComponentTarget(parsed.data.id);
+  if (!target) return res.status(400).json({ message: "Клиент не привязан к Remna" });
   const body = squadActionSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Invalid input" });
   // По api-1.yaml у DELETE .../remove-users нет requestBody — только uuid сквада в path; эндпоинт может убирать всех из сквада. Поэтому убираем сквад только у этого пользователя через PATCH user (как при add).
-  const userRes = await remnaGetUser(remnaUuid);
+  const userRes = await remnaGetUser(target.remnawaveUuid);
   if (userRes.error) return res.status(userRes.status >= 400 ? userRes.status : 500).json({ message: userRes.error });
   const current = getRemnaUserFieldsForMerge(userRes.data);
   const currentSquads = current.activeInternalSquads.filter((u) => u !== body.data.squadUuid);
-  const result = await remnaUpdateUser({ uuid: remnaUuid, activeInternalSquads: currentSquads });
+  const result = await remnaUpdateUser({ uuid: target.remnawaveUuid, activeInternalSquads: currentSquads });
   if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
+  await prisma.remnawaveComponent.updateMany({
+    where: { subscriptionId: target.subscriptionId, key: target.key },
+    data: { internalSquadUuids: currentSquads },
+  });
   return res.json(result.data ?? {});
 });
 
 adminRouter.get("/clients/:id/remna/devices", async (req, res) => {
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
-  const result = await remnaGetUserHwidDevices(remnaUuid);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? {});
+  const subscriptionId = await getClientPrimarySubscriptionId(parsed.data.id);
+  const subscription = subscriptionId ? await getAdminSubscription(subscriptionId) : null;
+  const targets = subscription ? selectComponentTargets(subscription) : [];
+  if (!targets.length) return res.status(400).json({ message: "Клиент не привязан к Remna" });
+  const results = await Promise.all(targets.map((target) => remnaGetUserHwidDevices(target.remnawaveUuid)));
+  const requiredError = results.find((result, index) => result.error && targets[index]?.required);
+  if (requiredError) return res.status(requiredError.status >= 400 ? requiredError.status : 500).json({ message: requiredError.error });
+  return res.json({
+    response: { devices: mergeComponentDevices(results.map((result) => result.data)) },
+    degraded: results.some((result) => Boolean(result.error)),
+  });
 });
 
 const deleteDeviceSchema = z.object({ hwid: z.string().min(1) });
@@ -2807,27 +2914,42 @@ const deleteDeviceSchema = z.object({ hwid: z.string().min(1) });
 adminRouter.post("/clients/:id/remna/devices/delete", requireAction("delete_device"), async (req, res) => {
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
   const body = deleteDeviceSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Invalid input" });
-  const result = await remnaDeleteUserHwidDevice(remnaUuid, body.data.hwid);
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? { success: true });
+  const subscriptionId = await getClientPrimarySubscriptionId(parsed.data.id);
+  if (!subscriptionId) return res.status(400).json({ message: "Клиент не привязан к Remna" });
+  const result = await runSubscriptionComponentOperation(subscriptionId, async ({ remnawaveUuid }) => {
+    const response = await remnaDeleteUserHwidDevice(remnawaveUuid, body.data.hwid);
+    if (response.error && response.status !== 404) throw new Error(response.error);
+  });
+  return res.status(result.requiredFailure ? 502 : 200).json({ success: !result.requiredFailure, ...result });
 });
 
 adminRouter.get("/clients/:id/remna/usage", async (req, res) => {
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
+  const subscriptionId = await getClientPrimarySubscriptionId(parsed.data.id);
+  const subscription = subscriptionId ? await getAdminSubscription(subscriptionId) : null;
+  const targets = subscription ? selectComponentTargets(subscription) : [];
+  if (!targets.length) return res.status(400).json({ message: "Клиент не привязан к Remna" });
   const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 90);
   const end = new Date();
   const start = new Date(end.getTime() - days * 86400000);
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  const result = await remnaGetUserBandwidthStats(remnaUuid, fmt(start), fmt(end));
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-  return res.json(result.data ?? {});
+  const components = await Promise.all(targets.map(async (target) => ({
+    ...target,
+    result: await remnaGetUserBandwidthStats(target.remnawaveUuid, fmt(start), fmt(end)),
+  })));
+  const required = components.find((component) => component.required) ?? components[0];
+  if (required.result.error) return res.status(required.result.status >= 400 ? required.result.status : 500).json({ message: required.result.error });
+  const primary = required.result.data && typeof required.result.data === "object"
+    ? required.result.data as Record<string, unknown>
+    : {};
+  return res.json({
+    ...primary,
+    components: components.map(({ result, ...target }) => ({ ...target, data: result.data ?? null, error: result.error ?? null })),
+    degraded: components.some((component) => Boolean(component.result.error)),
+  });
 });
 
 // Настройки (языки, валюты, название сервиса) — для бота, mini app, сайта
@@ -6313,55 +6435,25 @@ adminRouter.patch("/secondary-subscriptions/:id", asyncRoute(async (req, res) =>
   }
   const sub = await prisma.subscription.findUnique({
     where: { id: req.params.id },
-    select: { id: true, remnawaveUuid: true, ownerId: true },
+    select: { id: true, ownerId: true, expireAt: true },
   });
   if (!sub) return res.status(404).json({ message: "Подписка не найдена" });
-  if (!sub.remnawaveUuid) return res.status(400).json({ message: "Подписка не привязана к Remnawave" });
   if (!isRemnaConfigured()) return res.status(503).json({ message: "Remnawave не настроен" });
-
-  // Читаем текущее состояние user в Remna — нам нужен expireAt для расчёта.
-  const userRes = await remnaGetUser(sub.remnawaveUuid);
-  if (userRes.error || !userRes.data) {
-    return res.status(404).json({ message: "Пользователь Remnawave не найден" });
-  }
-  const inner = (userRes.data as Record<string, unknown>) ?? {};
-  const responseObj = (inner.response ?? inner.data ?? inner) as Record<string, unknown>;
-  const currentExpireAtRaw = responseObj.expireAt ?? responseObj.expire_at;
-
-  const updatePayload: { uuid: string; expireAt?: string; trafficLimitBytes?: number } = { uuid: sub.remnawaveUuid };
 
   let newExpireAt: Date | null = null;
   if (parsed.data.addDays != null && parsed.data.addDays !== 0) {
-    let baseDate: Date;
-    if (typeof currentExpireAtRaw === "string" || typeof currentExpireAtRaw === "number") {
-      const d = typeof currentExpireAtRaw === "number" ? new Date(currentExpireAtRaw * 1000) : new Date(currentExpireAtRaw);
-      // Если подписка истекла — стартуем от now, иначе стек от текущего expireAt.
-      baseDate = !isNaN(d.getTime()) && d.getTime() > Date.now() ? d : new Date();
-    } else {
-      baseDate = new Date();
-    }
+    const baseDate = sub.expireAt && sub.expireAt.getTime() > Date.now() ? sub.expireAt : new Date();
     newExpireAt = new Date(baseDate.getTime() + parsed.data.addDays * 24 * 60 * 60 * 1000);
-    updatePayload.expireAt = newExpireAt.toISOString();
   }
 
-  if (parsed.data.trafficLimitBytes !== undefined) {
-    updatePayload.trafficLimitBytes = parsed.data.trafficLimitBytes ?? 0; // null → 0 (безлимит)
-  }
-
-  const updateRes = await remnaUpdateUser(updatePayload);
-  if (updateRes.error) {
-    return res.status(updateRes.status >= 400 ? updateRes.status : 500).json({ message: updateRes.error });
-  }
-
-  // синкаем expireAt в БД для broadcast-фильтра.
-  if (newExpireAt) {
-    await prisma.subscription.update({
-      where: { id: sub.id },
-      data: { expireAt: newExpireAt },
-    }).catch(() => {});
-    await synchronizeSubscriptionComponents(sub.id).catch((error) => {
-      console.error("[admin/secondary-subscriptions] component sync failed:", error);
-    });
+  const update = await applyCompositeRemnaPatch(sub.id, {
+    ...(newExpireAt ? { expireAt: newExpireAt.toISOString() } : {}),
+    ...(parsed.data.trafficLimitBytes !== undefined
+      ? { trafficLimitBytes: parsed.data.trafficLimitBytes ?? 0 }
+      : {}),
+  });
+  if (update.requiredFailure) {
+    return res.status(502).json({ message: update.failures.map((failure) => failure.error).join("; ") });
   }
 
   await prisma.giftHistory.create({
@@ -7248,64 +7340,13 @@ adminRouter.patch("/subscriptions/:subId/remna", asyncRoute(async (req, res) => 
     }
   }
 
-  const subscription = await getAdminSubscription(parsed.data.subId);
-  if (!subscription) return res.status(404).json({ message: "Подписка не найдена" });
-  const componentFields = ["trafficLimitBytes", "trafficLimitStrategy", "activeInternalSquads"] as const;
-  const hasComponentPatch = componentFields.some((key) => body.data[key] !== undefined);
-  const componentKey = query.data.componentKey
-    ?? (hasComponentPatch ? subscription.components.find((component) => component.required)?.key ?? "primary" : undefined);
-
-  const commonPatch: Record<string, unknown> = {};
-  for (const key of ["hwidDeviceLimit", "expireAt", "status", "telegramId", "email"] as const) {
-    if (body.data[key] !== undefined) commonPatch[key] = body.data[key];
-  }
-  if (body.data.expireAt && body.data.status === undefined && new Date(body.data.expireAt).getTime() > Date.now()) {
-    commonPatch.status = "ACTIVE";
-  }
-  if (body.data.expireAt) {
-    await prisma.subscription.update({
-      where: { id: parsed.data.subId },
-      data: { expireAt: new Date(body.data.expireAt) },
-    });
-  }
-
-  const commonResult = Object.keys(commonPatch).length
-    ? await runSubscriptionComponentOperation(parsed.data.subId, async ({ remnawaveUuid }) => {
-        const response = await remnaUpdateUser({ uuid: remnawaveUuid, ...commonPatch });
-        if (response.error) throw new Error(response.error);
-      })
-    : { failures: [], requiredFailure: false };
-
-  let componentResult = { failures: [] as Array<{ key: string; required: boolean; error: string }>, requiredFailure: false };
-  if (hasComponentPatch && componentKey) {
-    const snapshotData: {
-      trafficLimitBytes?: bigint;
-      trafficResetMode?: string;
-      internalSquadUuids?: string[];
-    } = {};
-    if (body.data.trafficLimitBytes !== undefined) snapshotData.trafficLimitBytes = BigInt(body.data.trafficLimitBytes);
-    if (body.data.trafficLimitStrategy !== undefined) {
-      snapshotData.trafficResetMode = body.data.trafficLimitStrategy === "MONTH"
-        ? "monthly"
-        : body.data.trafficLimitStrategy === "MONTH_ROLLING" ? "monthly_rolling" : "no_reset";
-    }
-    if (body.data.activeInternalSquads !== undefined) snapshotData.internalSquadUuids = body.data.activeInternalSquads;
-    await prisma.remnawaveComponent.updateMany({
-      where: { subscriptionId: parsed.data.subId, key: componentKey },
-      data: snapshotData,
-    });
-    const componentPatch = Object.fromEntries(componentFields
-      .filter((key) => body.data[key] !== undefined)
-      .map((key) => [key, body.data[key]]));
-    componentResult = await runSubscriptionComponentOperation(parsed.data.subId, async ({ remnawaveUuid }) => {
-      const response = await remnaUpdateUser({ uuid: remnawaveUuid, ...componentPatch });
-      if (response.error) throw new Error(response.error);
-    }, componentKey);
-  }
-
-  const failures = [...commonResult.failures, ...componentResult.failures];
-  const requiredFailure = commonResult.requiredFailure || componentResult.requiredFailure;
-  return res.status(requiredFailure ? 502 : 200).json({ ok: !requiredFailure, degraded: failures.length > 0, failures });
+  const result = await applyCompositeRemnaPatch(parsed.data.subId, body.data, query.data.componentKey);
+  if (result.notFound) return res.status(404).json({ message: "Подписка не найдена" });
+  return res.status(result.requiredFailure ? 502 : 200).json({
+    ok: !result.requiredFailure,
+    degraded: result.failures.length > 0,
+    failures: result.failures,
+  });
 }));
 
 /** Отвязать логическую подписку и все её Remnawave-компоненты. */

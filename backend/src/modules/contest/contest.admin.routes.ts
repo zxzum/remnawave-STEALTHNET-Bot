@@ -9,6 +9,7 @@ import { prisma } from "../../db.js";
 import { requireAuth, requireAdminSection } from "../auth/middleware.js";
 import { getEligibleParticipants, runDraw, undoDraw, parseConditions, logContestEvent } from "./contest.service.js";
 import { sendContestStartNotification, sendContestDrawResults } from "./contest-daily-reminder.service.js";
+import { runSubscriptionComponentOperation } from "../subscription/subscription-components.service.js";
 
 function asyncRoute(fn: (req: express.Request, res: express.Response) => Promise<void | express.Response>) {
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -299,22 +300,25 @@ contestAdminRouter.post("/:id/winners/:winnerId/apply", asyncRoute(async (req, r
     if (!Number.isFinite(days) || days <= 0) {
       return res.status(400).json({ message: "Некорректное значение vpn_days" });
     }
-    if (!winner.client.remnawaveUuid) {
-      return res.status(400).json({ message: "У клиента нет Remna UUID — нельзя продлить подписку. Сначала клиент должен активировать подписку." });
+    const subscription = await prisma.subscription.findUnique({
+      where: { ownerId_subscriptionIndex: { ownerId: winner.clientId, subscriptionIndex: 0 } },
+      select: { id: true, expireAt: true },
+    });
+    if (!subscription) {
+      return res.status(400).json({ message: "У клиента нет основной подписки. Сначала клиент должен активировать подписку." });
     }
-    // Динамический импорт чтобы не таскать remna во всех путях service.
-    const { remnaGetUser, remnaUpdateUser } = await import("../remna/remna.client.js");
-    const user = await remnaGetUser(winner.client.remnawaveUuid);
-    if (user.error) return res.status(502).json({ message: `Remna: ${user.error}` });
-    const userResp = (user.data && typeof user.data === "object"
-      ? ((user.data as Record<string, unknown>).response ?? (user.data as Record<string, unknown>).data ?? user.data)
-      : null) as Record<string, unknown> | null;
-    const currentExpireRaw = userResp?.expireAt;
-    const currentExpireAt = currentExpireRaw ? new Date(String(currentExpireRaw)) : null;
+    const { remnaUpdateUser } = await import("../remna/remna.client.js");
+    const currentExpireAt = subscription.expireAt;
     const baseDate = currentExpireAt && currentExpireAt > new Date() ? currentExpireAt : new Date();
     const newExpireAt = new Date(baseDate.getTime() + days * 24 * 60 * 60 * 1000);
-    const upd = await remnaUpdateUser({ uuid: winner.client.remnawaveUuid, expireAt: newExpireAt });
-    if (upd.error) return res.status(502).json({ message: `Remna update: ${upd.error}` });
+    const update = await runSubscriptionComponentOperation(subscription.id, async ({ remnawaveUuid }) => {
+      const result = await remnaUpdateUser({ uuid: remnawaveUuid, expireAt: newExpireAt });
+      if (result.error) throw new Error(result.error);
+    });
+    if (update.requiredFailure) {
+      return res.status(502).json({ message: `Remna update: ${update.failures.map((failure) => failure.error).join("; ")}` });
+    }
+    await prisma.subscription.update({ where: { id: subscription.id }, data: { expireAt: newExpireAt } });
     await prisma.contestWinner.update({ where: { id: winnerId }, data: { appliedAt: new Date() } });
     await logContestEvent(id, "prize_applied", actorOf(req), { winnerId, kind: "vpn_days", days, newExpireAt: newExpireAt.toISOString() });
     return res.json({ message: `Подписка продлена на ${days} дн.`, newExpireAt: newExpireAt.toISOString() });

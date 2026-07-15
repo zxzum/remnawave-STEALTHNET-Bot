@@ -90,3 +90,15 @@ test("строит публичный URL без зависимости от ф�
     "https://cabinet.example.com/api/sub/opaque_token-1",
   );
 });
+
+test("выбирает настроенный публичный домен или origin текущего запроса", () => {
+  assert.equal(typeof helpers.resolvePublicSubscriptionBaseUrl, "function");
+
+  const resolve = helpers.resolvePublicSubscriptionBaseUrl as (
+    configured: string | null | undefined,
+    requestOrigin?: string,
+  ) => string | null;
+  assert.equal(resolve("https://bot.lazeika.xyz/", "https://old.example"), "https://bot.lazeika.xyz");
+  assert.equal(resolve(null, "https://new-domain.example/"), "https://new-domain.example");
+  assert.equal(resolve(null), null);
+});

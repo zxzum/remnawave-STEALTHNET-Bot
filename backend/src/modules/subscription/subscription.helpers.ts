@@ -40,6 +40,14 @@ export function buildPublicSubscriptionUrl(baseUrl: string, token: string): stri
   return new URL(`/api/sub/${encodeURIComponent(token)}`, baseUrl).toString();
 }
 
+export function resolvePublicSubscriptionBaseUrl(
+  configuredUrl: string | null | undefined,
+  requestOrigin?: string,
+): string | null {
+  const value = configuredUrl?.trim() || requestOrigin?.trim();
+  return value ? value.replace(/\/+$/, "") : null;
+}
+
 /**
  * Возвращает единый список Remnawave-компонентов. Пока backfill не завершён,
  * существующий Subscription.remnawaveUuid представляется обязательным компонентом.

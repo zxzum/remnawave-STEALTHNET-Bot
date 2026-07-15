@@ -4,6 +4,10 @@
 
 import { prisma } from "../../db.js";
 import { remnaGetUser, remnaUpdateUser, isRemnaConfigured } from "../remna/remna.client.js";
+import {
+  runSubscriptionComponentOperation,
+  selectComponentTargets,
+} from "../subscription/subscription-components.service.js";
 
 export type ApplyExtraOptionResult = { ok: true } | { ok: false; error: string; status: number };
 
@@ -106,11 +110,21 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
   // Это исправляет кейс: юзер выбирал secondary, но extra-option применялась к primary
   // потому что бот не пробрасывал targetSubscriptionId в платёжных хэндлерах.
   const targetSecondaryId = getTargetSubscriptionId(payment.metadata);
-  let targetSub: { id: string; remnawaveUuid: string | null; ownerId: string; customPrice: number | null; subscriptionIndex: number } | null = null;
+  let targetSub: {
+    id: string;
+    remnawaveUuid: string | null;
+    ownerId: string;
+    customPrice: number | null;
+    subscriptionIndex: number;
+    components: Array<{ key: string; required: boolean; mergeOrder: number; remnawaveUuid: string | null }>;
+  } | null = null;
   if (targetSecondaryId) {
     targetSub = await prisma.subscription.findUnique({
       where: { id: targetSecondaryId },
-      select: { id: true, remnawaveUuid: true, ownerId: true, customPrice: true, subscriptionIndex: true },
+      select: {
+        id: true, remnawaveUuid: true, ownerId: true, customPrice: true, subscriptionIndex: true,
+        components: { orderBy: { mergeOrder: "asc" }, select: { key: true, required: true, mergeOrder: true, remnawaveUuid: true } },
+      },
     });
     if (!targetSub || targetSub.ownerId !== payment.clientId) {
       return { ok: false, error: "Подписка для опции не найдена / не принадлежит клиенту", status: 404 };
@@ -119,16 +133,21 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
     // Fallback: primary подписка клиента (subscriptionIndex=0).
     targetSub = await prisma.subscription.findUnique({
       where: { ownerId_subscriptionIndex: { ownerId: payment.clientId, subscriptionIndex: 0 } },
-      select: { id: true, remnawaveUuid: true, ownerId: true, customPrice: true, subscriptionIndex: true },
+      select: {
+        id: true, remnawaveUuid: true, ownerId: true, customPrice: true, subscriptionIndex: true,
+        components: { orderBy: { mergeOrder: "asc" }, select: { key: true, required: true, mergeOrder: true, remnawaveUuid: true } },
+      },
     });
     if (!targetSub) {
       return { ok: false, error: "У клиента нет подписки для применения опции. Сначала оформите подписку.", status: 400 };
     }
   }
-  if (!targetSub.remnawaveUuid) {
+  const componentTargets = selectComponentTargets(targetSub);
+  const primaryTarget = componentTargets.find((component) => component.required) ?? componentTargets[0];
+  if (!primaryTarget) {
     return { ok: false, error: "Подписка не привязана к VPN", status: 400 };
   }
-  const uuid = targetSub.remnawaveUuid;
+  const uuid = primaryTarget.remnawaveUuid;
   // Для совместимости с существующей логикой bumpCustomPrice/extraDevices ниже —
   // обе ветки (primary/secondary) теперь используют один объект подписки.
   const secondaryDb = targetSub;
@@ -157,13 +176,15 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
   if (option.kind === "traffic") {
     const limits = getRemnaLimits(userRes.data);
     const newTraffic = limits.trafficLimitBytes + option.trafficBytes;
-    const updateRes = await remnaUpdateUser({
-      uuid,
-      trafficLimitBytes: newTraffic,
+    const update = await runSubscriptionComponentOperation(targetSub.id, async ({ remnawaveUuid }) => {
+      const result = await remnaUpdateUser({ uuid: remnawaveUuid, trafficLimitBytes: newTraffic });
+      if (result.error) throw new Error(result.error);
+    }, primaryTarget.key);
+    if (update.requiredFailure) return { ok: false, error: update.failures.map((failure) => failure.error).join("; "), status: 502 };
+    await prisma.remnawaveComponent.updateMany({
+      where: { subscriptionId: targetSub.id, key: primaryTarget.key },
+      data: { trafficLimitBytes: BigInt(newTraffic) },
     });
-    if (updateRes.error) {
-      return { ok: false, error: updateRes.error, status: updateRes.status >= 400 ? updateRes.status : 500 };
-    }
     await bumpCustomPrice();
     return { ok: true };
   }
@@ -172,13 +193,11 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
     const limits = getRemnaLimits(userRes.data);
     const current = limits.hwidDeviceLimit ?? 0;
     const newDevices = current + option.deviceCount;
-    const updateRes = await remnaUpdateUser({
-      uuid,
-      hwidDeviceLimit: newDevices,
+    const update = await runSubscriptionComponentOperation(targetSub.id, async ({ remnawaveUuid }) => {
+      const result = await remnaUpdateUser({ uuid: remnawaveUuid, hwidDeviceLimit: newDevices });
+      if (result.error) throw new Error(result.error);
     });
-    if (updateRes.error) {
-      return { ok: false, error: updateRes.error, status: updateRes.status >= 400 ? updateRes.status : 500 };
-    }
+    if (update.requiredFailure) return { ok: false, error: update.failures.map((failure) => failure.error).join("; "), status: 502 };
     // запоминаем количество + цену за 30 дней.
     // цена должна быть БАЗОВОЙ (productPriceMonthly из metadata),
     // а не payment.amount (которая может быть масштабирована). Для пакета «+2 за 99» это всегда 99,
@@ -214,17 +233,24 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
       trafficLimitBytes += option.trafficBytes;
     }
     const newSquads = currentSquads.includes(option.squadUuid) ? currentSquads : [...currentSquads, option.squadUuid];
-    const updatePayload: { uuid: string; activeInternalSquads: string[]; trafficLimitBytes?: number } = {
-      uuid,
+    const updatePayload: { activeInternalSquads: string[]; trafficLimitBytes?: number } = {
       activeInternalSquads: newSquads,
     };
     if (trafficLimitBytes !== limits.trafficLimitBytes) {
       updatePayload.trafficLimitBytes = trafficLimitBytes;
     }
-    const updateRes = await remnaUpdateUser(updatePayload);
-    if (updateRes.error) {
-      return { ok: false, error: updateRes.error, status: updateRes.status >= 400 ? updateRes.status : 500 };
-    }
+    const update = await runSubscriptionComponentOperation(targetSub.id, async ({ remnawaveUuid }) => {
+      const result = await remnaUpdateUser({ uuid: remnawaveUuid, ...updatePayload });
+      if (result.error) throw new Error(result.error);
+    }, primaryTarget.key);
+    if (update.requiredFailure) return { ok: false, error: update.failures.map((failure) => failure.error).join("; "), status: 502 };
+    await prisma.remnawaveComponent.updateMany({
+      where: { subscriptionId: targetSub.id, key: primaryTarget.key },
+      data: {
+        internalSquadUuids: newSquads,
+        ...(updatePayload.trafficLimitBytes !== undefined ? { trafficLimitBytes: BigInt(updatePayload.trafficLimitBytes) } : {}),
+      },
+    });
     await bumpCustomPrice();
     return { ok: true };
   }

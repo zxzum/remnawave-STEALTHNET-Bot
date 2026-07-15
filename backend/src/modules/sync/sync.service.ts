@@ -7,7 +7,6 @@ import {
   isRemnaConfigured,
   remnaGetUsers,
   remnaGetUser,
-  remnaUpdateUser,
   remnaCreateUser,
   remnaGetUserByTelegramId,
   remnaGetUserByEmail,
@@ -176,50 +175,7 @@ export async function syncFromRemna(): Promise<{
 }
 
 /** Извлечь telegramId, email и activeInternalSquads из ответа Remna (getUser) — чтобы не затирать при PATCH. */
-function extractRemnaUserFields(data: unknown): {
-  telegramId?: number;
-  email?: string | null;
-  activeInternalSquads: string[];
-} {
-  if (!data || typeof data !== "object") return { activeInternalSquads: [] };
-  const o = data as Record<string, unknown>;
-  const resp = (o.response ?? o) as Record<string, unknown> | undefined;
-  const telegramId = resp?.telegramId;
-  const email = resp?.email;
-  const ais = resp?.activeInternalSquads;
-  const squads: string[] = [];
-  if (Array.isArray(ais)) {
-    for (const x of ais) {
-      if (typeof x === "string" && x.trim()) squads.push(x.trim());
-      else if (x && typeof x === "object" && typeof (x as { uuid?: string }).uuid === "string")
-        squads.push((x as { uuid: string }).uuid);
-    }
-  }
-  return {
-    ...(typeof telegramId === "number" && { telegramId }),
-    ...(email !== undefined && { email: email != null ? String(email) : null }),
-    activeInternalSquads: squads,
-  };
-}
-
-/** Проверка, что ошибка Remna — «пользователь не найден» (удалён в Remna или не существует). */
-function isRemnaNotFoundError(status: number, error?: string): boolean {
-  return status === 404 || (typeof error === "string" && /not found|not exist/i.test(error));
-}
-
-/** Повторить запрос к Remna один раз при сетевой ошибке («fetch failed» и подобные). */
-async function remnaGetUserWithRetry(uuid: string): Promise<Awaited<ReturnType<typeof remnaGetUser>>> {
-  const first = await remnaGetUser(uuid);
-  if (!first.error || first.status !== 500) return first;
-  // Сетевая/транзитная ошибка — даём Remna секунду и пробуем ещё раз перед тем как сбить синхру.
-  await new Promise((r) => setTimeout(r, 1000));
-  return remnaGetUser(uuid);
-}
-
-/** Синхронизация в Remna: отправляем telegramId и email наших клиентов.
- *  Текущие activeInternalSquads из GET подставляем в PATCH явно, чтобы Remna не обнулял сквады при «частичном» PATCH
- *  (иначе один запуск синхронизации мог бы сбросить сквады всем пользователям).
- *  Если пользователь в Remna не найден (404) — отвязываем клиента (remnawaveUuid = null) и считаем как unlinked. */
+/** Синхронизация в Remna всех логических подписок и каждого их компонента. */
 export async function syncToRemna(): Promise<{
   ok: boolean;
   updated: number;
@@ -233,55 +189,13 @@ export async function syncToRemna(): Promise<{
     return { ok: false, ...result };
   }
 
-  const clients = await prisma.client.findMany({
-    where: { remnawaveUuid: { not: null } },
-    select: { id: true, remnawaveUuid: true, telegramId: true, email: true },
-  });
-
-  for (const c of clients) {
-    const uuid = c.remnawaveUuid;
-    if (!uuid) continue;
-    try {
-      const getRes = await remnaGetUserWithRetry(uuid);
-      if (getRes.error) {
-        if (isRemnaNotFoundError(getRes.status, getRes.error)) {
-          await prisma.client.update({ where: { id: c.id }, data: { remnawaveUuid: null } });
-          result.unlinked++;
-        } else {
-          result.errors.push(`${uuid}: ${getRes.error}`);
-        }
-        continue;
-      }
-      const currentRemna = extractRemnaUserFields(getRes.data);
-      const body: Record<string, unknown> = { uuid };
-      body.telegramId = c.telegramId != null ? parseInt(c.telegramId, 10) : (currentRemna.telegramId ?? undefined);
-      body.email = c.email != null ? c.email : (currentRemna.email ?? undefined);
-      if (currentRemna.activeInternalSquads.length > 0)
-        body.activeInternalSquads = currentRemna.activeInternalSquads;
-      const res = await remnaUpdateUser(body);
-      if (res.error) {
-        if (isRemnaNotFoundError(res.status, res.error)) {
-          await prisma.client.update({ where: { id: c.id }, data: { remnawaveUuid: null } });
-          result.unlinked++;
-        } else {
-          result.errors.push(`${uuid}: ${res.error}`);
-        }
-      } else {
-        result.updated++;
-      }
-    } catch (e) {
-      result.errors.push(`${uuid}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
-  // Дополнительные пользователи Remnawave синхронизируются как части
-  // Subscription, а не как самостоятельные Client.
   const subscriptions = await prisma.subscription.findMany({
-    where: { ownerId: { in: clients.map((client) => client.id) } },
+    where: { deletionRequestedAt: null },
     select: { id: true },
   });
   for (const subscription of subscriptions) {
     const sync = await synchronizeSubscriptionComponents(subscription.id);
+    if (!sync.requiredFailure) result.updated++;
     if (sync.failures.length) {
       result.errors.push(...sync.failures.map((failure) => `${subscription.id}/${failure.key}: ${failure.error}`));
     }

@@ -18,13 +18,16 @@ import { prisma } from "../../db.js";
 import { sendTelegramNotification } from "./telegram-notify.js";
 import {
   remnaCreateUser,
-  remnaUpdateUser,
   remnaUsernameFromClient,
   extractRemnaUuid,
   isRemnaConfigured,
 } from "../remna/remna.client.js";
 import { getSystemConfig } from "../client/client.service.js";
-import { buildPublicSubscriptionUrl, getNextSubscriptionIndex } from "../subscription/subscription.helpers.js";
+import {
+  buildPublicSubscriptionUrl,
+  getNextSubscriptionIndex,
+  resolvePublicSubscriptionBaseUrl,
+} from "../subscription/subscription.helpers.js";
 import { calcExtrasPrice } from "../tariff/extras-pricing.js";
 import {
   deleteSubscriptionComponents,
@@ -623,6 +626,7 @@ export async function createGiftCode(
 export async function redeemGiftCode(
   recipientRootClientId: string,
   rawCode: string,
+  requestOrigin?: string,
 ): Promise<GiftResult<{
   subscriptionId: string;
   subscriptionIndex: number;
@@ -769,17 +773,7 @@ export async function redeemGiftCode(
     throw err;
   }
 
-  // перепривязываем Remna-юзера на получателя (TG/email),
-  // иначе подаренная подписка остаётся в панели Remna без привязки. Best-effort:
-  // ошибка Remna не должна ронять redeem (подписка уже передана в БД).
-  if (sub.remnawaveUuid && (recipient.telegramId?.trim() || recipient.email?.trim())) {
-    const rebind = await remnaUpdateUser({
-      uuid: sub.remnawaveUuid,
-      ...(recipient.telegramId?.trim() && { telegramId: parseInt(recipient.telegramId, 10) }),
-      ...(recipient.email?.trim() && { email: recipient.email.trim() }),
-    });
-    if (rebind.error) console.error("[gift] redeem: rebind remna tg/email failed:", rebind.error);
-  }
+  // Синхронизация ниже перепривязывает TG/email сразу у всех компонентов.
   await synchronizeSubscriptionComponents(giftCode.subscriptionId).catch((e) =>
     console.error("[gift] redeem: component sync failed:", e),
   );
@@ -842,17 +836,9 @@ export async function redeemGiftCode(
     where: { id: giftCode.subscriptionId },
     select: { remnawaveUuid: true, publicSubscriptionToken: true },
   });
-  if (updatedSub?.publicSubscriptionToken && config.publicAppUrl) {
-    subscriptionUrl = buildPublicSubscriptionUrl(config.publicAppUrl, updatedSub.publicSubscriptionToken);
-  } else if (updatedSub?.remnawaveUuid) {
-    try {
-      const { remnaGetUser } = await import("../remna/remna.client.js");
-      const r = await remnaGetUser(updatedSub.remnawaveUuid);
-      const inner = (r.data as { response?: Record<string, unknown>; data?: Record<string, unknown> } | null)?.response
-        ?? (r.data as { response?: Record<string, unknown>; data?: Record<string, unknown> } | null)?.data
-        ?? (r.data as Record<string, unknown> | null);
-      subscriptionUrl = (inner as { subscriptionUrl?: string } | null)?.subscriptionUrl ?? null;
-    } catch { /* ignore */ }
+  const publicBaseUrl = resolvePublicSubscriptionBaseUrl(config.publicAppUrl, requestOrigin);
+  if (updatedSub?.publicSubscriptionToken && publicBaseUrl) {
+    subscriptionUrl = buildPublicSubscriptionUrl(publicBaseUrl, updatedSub.publicSubscriptionToken);
   }
 
   // уведомление админам в TG-группу: подарок активирован получателем (best-effort).
@@ -1011,6 +997,7 @@ export async function listGiftCodes(
 export async function getSubscriptionUrl(
   subscriptionId: string,
   rootClientId: string,
+  requestOrigin?: string,
 ): Promise<GiftResult<{ uuid: string; subscriptionUrl: string | null }>> {
   const sub = await prisma.subscription.findUnique({
     where: { id: subscriptionId },
@@ -1028,12 +1015,13 @@ export async function getSubscriptionUrl(
   }
 
   const config = await getSystemConfig();
+  const publicBaseUrl = resolvePublicSubscriptionBaseUrl(config.publicAppUrl, requestOrigin);
   return {
     ok: true,
     data: {
       uuid: sub.remnawaveUuid,
-      subscriptionUrl: config.publicAppUrl
-        ? buildPublicSubscriptionUrl(config.publicAppUrl, sub.publicSubscriptionToken)
+      subscriptionUrl: publicBaseUrl
+        ? buildPublicSubscriptionUrl(publicBaseUrl, sub.publicSubscriptionToken)
         : null,
     },
   };

@@ -25,13 +25,24 @@ import {
   resetAllSubscriptionsTraffic,
   revokeAllSubscriptionsUrls,
 } from "../client/client-bulk-ops.service.js";
+import { selectComponentTargets } from "../subscription/subscription-components.service.js";
 
-async function getClientRemnaUuid(clientId: string): Promise<string | null> {
-  const c = await prisma.client.findUnique({
-    where: { id: clientId },
-    select: { remnawaveUuid: true },
+async function getClientPrimaryRemnaTarget(clientId: string) {
+  const subscription = await prisma.subscription.findUnique({
+    where: { ownerId_subscriptionIndex: { ownerId: clientId, subscriptionIndex: 0 } },
+    select: {
+      id: true,
+      remnawaveUuid: true,
+      components: {
+        orderBy: { mergeOrder: "asc" },
+        select: { key: true, required: true, mergeOrder: true, remnawaveUuid: true },
+      },
+    },
   });
-  return c?.remnawaveUuid ?? null;
+  if (!subscription) return null;
+  const targets = selectComponentTargets(subscription);
+  const target = targets.find((component) => component.required) ?? targets[0];
+  return target ? { subscriptionId: subscription.id, ...target } : null;
 }
 
 /** Извлечь activeInternalSquads (uuid[]) из ответа Remna getUser */
@@ -387,12 +398,12 @@ botAdminRouter.get("/clients/:id/remna", async (req, res) => {
   if (!admin) return;
   const parsed = clientIdParam.safeParse(req.params);
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
-  const result = await remnaGetUser(remnaUuid);
+  const target = await getClientPrimaryRemnaTarget(parsed.data.id);
+  if (!target) return res.status(400).json({ message: "Клиент не привязан к Remna" });
+  const result = await remnaGetUser(target.remnawaveUuid);
   if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
   const activeInternalSquads = getRemnaUserSquads(result.data);
-  return res.json({ remnaUuid, activeInternalSquads });
+  return res.json({ remnaUuid: target.remnawaveUuid, componentKey: target.key, activeInternalSquads });
 });
 
 const squadActionSchema = z.object({ squadUuid: z.string().uuid() });
@@ -405,14 +416,18 @@ botAdminRouter.post("/clients/:id/remna/squads/add", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
   const body = squadActionSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Invalid input" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
-  const userRes = await remnaGetUser(remnaUuid);
+  const target = await getClientPrimaryRemnaTarget(parsed.data.id);
+  if (!target) return res.status(400).json({ message: "Клиент не привязан к Remna" });
+  const userRes = await remnaGetUser(target.remnawaveUuid);
   if (userRes.error) return res.status(userRes.status >= 400 ? userRes.status : 500).json({ message: userRes.error });
   const currentSquads = getRemnaUserSquads(userRes.data);
   if (!currentSquads.includes(body.data.squadUuid)) currentSquads.push(body.data.squadUuid);
-  const updateRes = await remnaUpdateUser({ uuid: remnaUuid, activeInternalSquads: currentSquads });
+  const updateRes = await remnaUpdateUser({ uuid: target.remnawaveUuid, activeInternalSquads: currentSquads });
   if (updateRes.error) return res.status(updateRes.status >= 400 ? updateRes.status : 500).json({ message: updateRes.error });
+  await prisma.remnawaveComponent.updateMany({
+    where: { subscriptionId: target.subscriptionId, key: target.key },
+    data: { internalSquadUuids: currentSquads },
+  });
   return res.json({ ok: true, activeInternalSquads: currentSquads });
 });
 
@@ -424,13 +439,17 @@ botAdminRouter.post("/clients/:id/remna/squads/remove", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
   const body = squadActionSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Invalid input" });
-  const remnaUuid = await getClientRemnaUuid(parsed.data.id);
-  if (!remnaUuid) return res.status(400).json({ message: "Клиент не привязан к Remna" });
-  const userRes = await remnaGetUser(remnaUuid);
+  const target = await getClientPrimaryRemnaTarget(parsed.data.id);
+  if (!target) return res.status(400).json({ message: "Клиент не привязан к Remna" });
+  const userRes = await remnaGetUser(target.remnawaveUuid);
   if (userRes.error) return res.status(userRes.status >= 400 ? userRes.status : 500).json({ message: userRes.error });
   const currentSquads = getRemnaUserSquads(userRes.data).filter((u) => u !== body.data.squadUuid);
-  const updateRes = await remnaUpdateUser({ uuid: remnaUuid, activeInternalSquads: currentSquads });
+  const updateRes = await remnaUpdateUser({ uuid: target.remnawaveUuid, activeInternalSquads: currentSquads });
   if (updateRes.error) return res.status(updateRes.status >= 400 ? updateRes.status : 500).json({ message: updateRes.error });
+  await prisma.remnawaveComponent.updateMany({
+    where: { subscriptionId: target.subscriptionId, key: target.key },
+    data: { internalSquadUuids: currentSquads },
+  });
   return res.json({ ok: true, activeInternalSquads: currentSquads });
 });
 
