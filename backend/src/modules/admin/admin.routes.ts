@@ -118,6 +118,7 @@ import {
   runSubscriptionComponentOperation,
   synchronizeSubscriptionComponents,
 } from "../subscription/subscription-components.service.js";
+import { copyTrialComponents } from "../subscription/trial-components.js";
 import { uploadMascotImage, uploadVideo, uploadTicketAttachment, mascotUrl, videoUploadUrl, removeUploadedFile } from "../../lib/upload.js";
 import {
   filesToAttachments,
@@ -1395,10 +1396,20 @@ adminRouter.get("/trials", async (_req, res) => {
 adminRouter.post("/trials", async (req, res) => {
   const body = createTrialSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Неверные данные", errors: body.error.flatten() });
+  let inheritedComponents: Array<{
+    key: string; adminName: string; required: boolean; mergeOrder: number;
+    internalSquadUuids: string[]; trafficLimitBytes: bigint | null; trafficResetMode: string;
+    showQuotaToClient: boolean; quotaDisplayName: string | null; enabled: boolean;
+  }> = [];
   if (body.data.tariffId) {
-    const tariff = await prisma.tariff.findUnique({ where: { id: body.data.tariffId } });
+    const tariff = await prisma.tariff.findUnique({
+      where: { id: body.data.tariffId },
+      include: { remnawaveComponents: { orderBy: { mergeOrder: "asc" } } },
+    });
     if (!tariff) return res.status(400).json({ message: "Тариф не найден" });
+    inheritedComponents = copyTrialComponents(tariff.remnawaveComponents);
   }
+  const trialComponents = body.data.remnawaveComponents ?? inheritedComponents;
   const created = await prisma.trial.create({
     data: {
       name: body.data.name,
@@ -1414,8 +1425,8 @@ adminRouter.post("/trials", async (req, res) => {
       convertEnabled: body.data.convertEnabled ?? true,
       convertAllTariffs: body.data.convertAllTariffs ?? false,
       convertTariffIds: body.data.convertTariffIds?.length ? JSON.stringify(body.data.convertTariffIds) : null,
-      remnawaveComponents: body.data.remnawaveComponents ? {
-        create: body.data.remnawaveComponents.map((component) => ({
+      remnawaveComponents: trialComponents.length ? {
+        create: trialComponents.map((component) => ({
           key: component.key,
           adminName: component.adminName,
           required: component.required ?? false,
@@ -1442,10 +1453,22 @@ adminRouter.patch("/trials/:id", async (req, res) => {
   if (!idParse.success) return res.status(400).json({ message: "Invalid id" });
   const body = updateTrialSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Неверные данные", errors: body.error.flatten() });
+  let inheritedComponents: Array<{
+    key: string; adminName: string; required: boolean; mergeOrder: number;
+    internalSquadUuids: string[]; trafficLimitBytes: bigint | null; trafficResetMode: string;
+    showQuotaToClient: boolean; quotaDisplayName: string | null; enabled: boolean;
+  }> | undefined;
   if (body.data.tariffId) {
-    const tariff = await prisma.tariff.findUnique({ where: { id: body.data.tariffId } });
+    const tariff = await prisma.tariff.findUnique({
+      where: { id: body.data.tariffId },
+      include: { remnawaveComponents: { orderBy: { mergeOrder: "asc" } } },
+    });
     if (!tariff) return res.status(400).json({ message: "Тариф не найден" });
+    if (body.data.tariffId !== undefined && body.data.remnawaveComponents === undefined) {
+      inheritedComponents = copyTrialComponents(tariff.remnawaveComponents);
+    }
   }
+  const replacementComponents = body.data.remnawaveComponents ?? inheritedComponents;
   // T16 (12.05.2026) — BigInt из number / null.
   const updateData: {
     name?: string;
@@ -1492,23 +1515,25 @@ adminRouter.patch("/trials/:id", async (req, res) => {
     return res.status(400).json({ message: "Укажите тариф ИЛИ сквады standalone-триала" });
   }
   const updated = await prisma.$transaction(async (tx) => {
-    if (body.data.remnawaveComponents) {
+    if (replacementComponents) {
       await tx.trialRemnawaveComponent.deleteMany({ where: { trialId: idParse.data.id } });
-      await tx.trialRemnawaveComponent.createMany({
-        data: body.data.remnawaveComponents.map((component) => ({
-          trialId: idParse.data.id,
-          key: component.key,
-          adminName: component.adminName,
-          required: component.required ?? false,
-          mergeOrder: component.mergeOrder,
-          internalSquadUuids: component.internalSquadUuids,
-          trafficLimitBytes: component.trafficLimitBytes != null ? BigInt(component.trafficLimitBytes) : null,
-          trafficResetMode: component.trafficResetMode ?? "no_reset",
-          showQuotaToClient: component.showQuotaToClient ?? false,
-          quotaDisplayName: component.quotaDisplayName?.trim() || null,
-          enabled: component.enabled ?? true,
-        })),
-      });
+      if (replacementComponents.length) {
+        await tx.trialRemnawaveComponent.createMany({
+          data: replacementComponents.map((component) => ({
+            trialId: idParse.data.id,
+            key: component.key,
+            adminName: component.adminName,
+            required: component.required ?? false,
+            mergeOrder: component.mergeOrder,
+            internalSquadUuids: component.internalSquadUuids,
+            trafficLimitBytes: component.trafficLimitBytes != null ? BigInt(component.trafficLimitBytes) : null,
+            trafficResetMode: component.trafficResetMode ?? "no_reset",
+            showQuotaToClient: component.showQuotaToClient ?? false,
+            quotaDisplayName: component.quotaDisplayName?.trim() || null,
+            enabled: component.enabled ?? true,
+          })),
+        });
+      }
     }
     return tx.trial.update({
       where: { id: idParse.data.id },
@@ -1519,7 +1544,7 @@ adminRouter.patch("/trials/:id", async (req, res) => {
       },
     });
   });
-  if (body.data.remnawaveComponents) {
+  if (replacementComponents) {
     await prisma.subscription.updateMany({
       where: { trialId: idParse.data.id },
       data: { syncStatus: "PENDING", syncRequiredAt: new Date() },
