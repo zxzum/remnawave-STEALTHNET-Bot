@@ -71,6 +71,7 @@ import {
   remnaUpdateConfigProfile,
   remnaDeleteConfigProfile,
   remnaGetUser,
+  remnaDeleteUser,
   remnaUpdateUser,
   remnaRevokeUserSubscription,
   remnaDisableUser,
@@ -7230,6 +7231,11 @@ async function getAdminSubscription(subId: string) {
 
 const subIdParam = z.object({ subId: z.string().min(1) });
 const componentKeyQuery = z.object({ componentKey: z.string().min(1).max(50).optional() });
+const manualComponentSchema = z.object({
+  key: z.string().trim().min(1).max(50).regex(/^[a-zA-Z0-9_-]+$/),
+  adminName: z.string().trim().min(1).max(100),
+  mergeOrder: z.number().int().min(1).max(10_000),
+});
 
 /** Список всех подписок клиента (primary + secondary) — для нового UI «Подписки клиента». */
 adminRouter.get("/clients/:id/subscriptions", asyncRoute(async (req, res) => {
@@ -7263,6 +7269,7 @@ adminRouter.get("/clients/:id/subscriptions", asyncRoute(async (req, res) => {
       components: s.components.map((component) => ({
         key: component.key,
         adminName: component.adminName,
+        managedManually: component.managedManually,
         required: component.required,
         mergeOrder: component.mergeOrder,
         remnawaveUuid: component.remnawaveUuid,
@@ -7285,6 +7292,55 @@ adminRouter.get("/clients/:id/subscriptions", asyncRoute(async (req, res) => {
       createdAt: s.createdAt.toISOString(),
     })),
   });
+}));
+
+/** Добавить самостоятельный компонент к одной логической подписке. */
+adminRouter.post("/subscriptions/:subId/components", asyncRoute(async (req, res) => {
+  const parsed = subIdParam.safeParse(req.params);
+  const body = manualComponentSchema.safeParse(req.body);
+  if (!parsed.success || !body.success) return res.status(400).json({ message: "Invalid component" });
+  const subscription = await getAdminSubscription(parsed.data.subId);
+  if (!subscription) return res.status(404).json({ message: "Подписка не найдена" });
+  try {
+    await prisma.remnawaveComponent.create({
+      data: {
+        subscriptionId: subscription.id,
+        key: body.data.key,
+        adminName: body.data.adminName,
+        mergeOrder: body.data.mergeOrder,
+        required: false,
+        managedManually: true,
+        internalSquadUuids: [],
+      },
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return res.status(409).json({ message: "Компонент с таким key или порядком уже существует" });
+    }
+    throw error;
+  }
+  const result = await synchronizeSubscriptionComponents(subscription.id);
+  return res.status(result.requiredFailure ? 502 : 201).json({ ok: !result.requiredFailure, degraded: result.failures.length > 0, failures: result.failures });
+}));
+
+/** Удалить только ручной дополнительный компонент, не затрагивая остальные компоненты подписки. */
+adminRouter.delete("/subscriptions/:subId/components/:key", asyncRoute(async (req, res) => {
+  const parsed = subIdParam.safeParse(req.params);
+  const key = String(req.params.key ?? "").trim();
+  if (!parsed.success || !key) return res.status(400).json({ message: "Invalid component" });
+  const component = await prisma.remnawaveComponent.findUnique({
+    where: { subscriptionId_key: { subscriptionId: parsed.data.subId, key } },
+  });
+  if (!component) return res.status(404).json({ message: "Компонент не найден" });
+  if (!component.managedManually || component.required) {
+    return res.status(409).json({ message: "Можно удалить только дополнительный ручной компонент" });
+  }
+  if (component.remnawaveUuid) {
+    const response = await remnaDeleteUser(component.remnawaveUuid);
+    if (response.error && response.status !== 404) return res.status(502).json({ message: response.error });
+  }
+  await prisma.remnawaveComponent.delete({ where: { id: component.id } });
+  return res.json({ ok: true });
 }));
 
 /** GET Remna user данных для подписки (Username, лимиты, трафик, expireAt, сквады). */

@@ -110,6 +110,19 @@ test("отзыв логической подписки не удаляет её 
   }), false);
 });
 
+test("ручные компоненты сохраняются при синхронизации с шаблоном тарифа", () => {
+  assert.equal(typeof service.mergeSubscriptionComponentTemplates, "function");
+  const merge = service.mergeSubscriptionComponentTemplates as (
+    configured: Array<{ key: string; mergeOrder: number }>,
+    manual: Array<{ key: string; mergeOrder: number }>,
+  ) => Array<{ key: string }>;
+
+  assert.deepEqual(merge(
+    [{ key: "primary", mergeOrder: 0 }],
+    [{ key: "whitelist", mergeOrder: 10 }],
+  ).map((component) => component.key), ["primary", "whitelist"]);
+});
+
 test("имя компонента детерминировано и помещается в лимит Remnawave", () => {
   assert.equal(typeof service.buildComponentUsername, "function");
 

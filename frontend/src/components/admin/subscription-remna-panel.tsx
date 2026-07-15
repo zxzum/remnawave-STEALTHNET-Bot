@@ -34,6 +34,8 @@ import {
   Unlink,
   Copy,
   Check,
+  Plus,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -126,9 +128,14 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
   const [components, setComponents] = useState<AdminSubscriptionRemnaResponse["components"]>([]);
   const [selectedComponentKey, setSelectedComponentKey] = useState("");
   const [subscriptionUrl, setSubscriptionUrl] = useState(subscription.subscriptionUrl ?? "");
+  const [newComponent, setNewComponent] = useState(() => ({
+    key: "",
+    adminName: "",
+    mergeOrder: String(Math.max(0, ...(subscription.components ?? []).map((component) => component.mergeOrder)) + 10),
+  }));
 
   const loadRemna = useCallback(async () => {
-    if (!subscription.remnawaveUuid) {
+    if (!subscription.remnawaveUuid && !subscription.components?.some((component) => component.remnawaveUuid)) {
       setRemnaUser(null);
       setActiveSquads([]);
       return;
@@ -187,7 +194,7 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
     }
   }
 
-  async function runAction(successLabel: string, fn: () => Promise<unknown>) {
+  async function runAction(successLabel: string, fn: () => Promise<unknown>, refresh = true) {
     setActionMsg(null);
     try {
       const response = await fn();
@@ -197,7 +204,7 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
       setActionMsg(result?.degraded
         ? `⚠️ ${result.failures?.map((failure) => `${failure.key}: ${failure.error}`).join("; ") || "Часть компонентов ожидает retry"}`
         : `✅ ${successLabel}`);
-      await loadRemna();
+      if (refresh) await loadRemna();
       onChanged?.();
     } catch (e) {
       setActionMsg(`❌ ${e instanceof Error ? e.message : "Ошибка"}`);
@@ -214,6 +221,29 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
     setActiveSquads((prev) => prev.filter((u) => u !== uuid));
   }
 
+  async function addManualComponent() {
+    const mergeOrder = Number(newComponent.mergeOrder);
+    if (!newComponent.key.trim() || !newComponent.adminName.trim() || !Number.isInteger(mergeOrder)) {
+      setActionMsg("❌ Заполните key, название и порядок компонента");
+      return;
+    }
+    await runAction("Ручной компонент добавлен", async () => {
+      await api.createSubscriptionManualComponent(token, subscription.id, {
+        key: newComponent.key.trim(),
+        adminName: newComponent.adminName.trim(),
+        mergeOrder,
+      });
+      setNewComponent({ key: "", adminName: "", mergeOrder: String(mergeOrder + 10) });
+    });
+  }
+
+  async function deleteManualComponent() {
+    const component = components.find((item) => item.key === selectedComponentKey);
+    if (!component?.managedManually) return;
+    if (!confirm(`Удалить ручной компонент «${component.adminName}»? Его доступ в Remnawave будет удалён.`)) return;
+    await runAction("Ручной компонент удалён", () => api.deleteSubscriptionManualComponent(token, subscription.id, component.key));
+  }
+
   // Нет привязки к Remna → плашка.
   if (!subscription.remnawaveUuid && !subscription.components?.some((component) => component.remnawaveUuid)) {
     return (
@@ -226,6 +256,7 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
 
   const trafficUsed = remnaUser?.userTraffic?.usedTrafficBytes ?? 0;
   const trafficLimit = remnaUser?.trafficLimitBytes ?? 0;
+  const selectedComponent = components.find((component) => component.key === selectedComponentKey);
 
   return (
     <div className="space-y-3">
@@ -246,6 +277,25 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
           }))}
         />
       )}
+      <div className="rounded-xl border border-white/10 bg-foreground/[0.03] p-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <span className="text-xs font-medium">Ручные компоненты</span>
+          {selectedComponent?.managedManually && (
+            <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs text-destructive" onClick={deleteManualComponent}>
+              <Trash2 className="h-3.5 w-3.5" /> Удалить выбранный
+            </Button>
+          )}
+        </div>
+        <div className="grid gap-2 sm:grid-cols-[1fr_1fr_90px_auto]">
+          <Input value={newComponent.key} onChange={(e) => setNewComponent((value) => ({ ...value, key: e.target.value }))} placeholder="key, например whitelist" />
+          <Input value={newComponent.adminName} onChange={(e) => setNewComponent((value) => ({ ...value, adminName: e.target.value }))} placeholder="Название для админа" />
+          <Input type="number" min={1} value={newComponent.mergeOrder} onChange={(e) => setNewComponent((value) => ({ ...value, mergeOrder: e.target.value }))} placeholder="Порядок" />
+          <Button variant="outline" size="sm" className="gap-1" onClick={addManualComponent}>
+            <Plus className="h-3.5 w-3.5" /> Добавить
+          </Button>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">Выберите добавленный компонент выше, затем задайте ему лимиты и сквады.</p>
+      </div>
       <Tabs value={innerTab} onValueChange={(v) => setInnerTab(v as InnerTab)}>
         <TabsList className="grid grid-cols-3 gap-1 bg-foreground/[0.03] dark:bg-white/[0.03] p-1 rounded-xl border border-white/5">
           <TabsTrigger value="overview" className="text-xs rounded-lg data-[state=active]:bg-primary/15 data-[state=active]:text-primary">
@@ -455,10 +505,13 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <Button
               variant="outline"
-              className="justify-start gap-2 rounded-xl border-white/10 bg-foreground/[0.03] dark:bg-white/[0.03] hover:bg-foreground/[0.06] dark:hover:bg-white/[0.08]"
-              onClick={() => runAction("Подписка отозвана", () => api.subscriptionRemnaRevokeSubscription(token, subscription.id))}
+              className="justify-start gap-2 text-destructive border-destructive/30 hover:bg-destructive/10 rounded-xl"
+              onClick={() => {
+                if (!confirm("Аннулировать эту подписку и все её компоненты? Остальные подписки клиента останутся без изменений.")) return;
+                runAction("Подписка аннулирована", () => api.subscriptionRemnaRevokeSubscription(token, subscription.id), false);
+              }}
             >
-              <Ticket className="h-4 w-4" /> Отозвать подписку
+              <Ticket className="h-4 w-4" /> Аннулировать подписку
             </Button>
             <Button
               variant="outline"

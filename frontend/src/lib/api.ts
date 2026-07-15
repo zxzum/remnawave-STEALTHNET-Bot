@@ -1093,6 +1093,12 @@ export const api = {
     const query = componentKey ? `?componentKey=${encodeURIComponent(componentKey)}` : "";
     return request(`/admin/subscriptions/${subId}/remna${query}`, { method: "PATCH", body: JSON.stringify(data), token });
   },
+  async createSubscriptionManualComponent(token: string, subId: string, data: { key: string; adminName: string; mergeOrder: number }): Promise<unknown> {
+    return request(`/admin/subscriptions/${subId}/components`, { method: "POST", body: JSON.stringify(data), token });
+  },
+  async deleteSubscriptionManualComponent(token: string, subId: string, key: string): Promise<{ ok: boolean }> {
+    return request(`/admin/subscriptions/${subId}/components/${encodeURIComponent(key)}`, { method: "DELETE", token });
+  },
   async subscriptionRemnaUnlink(token: string, subId: string): Promise<{ ok: boolean }> {
     return request(`/admin/subscriptions/${subId}/remna/unlink`, { method: "POST", token });
   },
@@ -3578,6 +3584,7 @@ export interface AdminClientSubscriptionItem {
 export interface AdminSubscriptionComponentItem {
   key: string;
   adminName: string;
+  managedManually: boolean;
   required: boolean;
   mergeOrder: number;
   remnawaveUuid: string | null;
@@ -3593,6 +3600,8 @@ export type AdminSubscriptionRemnaResponse = {
   subscriptionUrl: string;
   components: Array<{
     key: string;
+    adminName: string;
+    managedManually: boolean;
     required: boolean;
     mergeOrder: number;
     remnawaveUuid: string;

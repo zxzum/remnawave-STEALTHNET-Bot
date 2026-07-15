@@ -168,6 +168,16 @@ export function isLogicalSubscriptionRevoked(result: {
   return result.failures.length === 0;
 }
 
+/** Дополняет шаблон тарифа ручными компонентами, не давая reconciliation их удалить. */
+export function mergeSubscriptionComponentTemplates<T extends { key: string; mergeOrder: number }>(
+  configured: T[],
+  manual: T[],
+): T[] {
+  const configuredKeys = new Set(configured.map((component) => component.key));
+  return [...configured, ...manual.filter((component) => !configuredKeys.has(component.key))]
+    .sort((a, b) => a.mergeOrder - b.mergeOrder);
+}
+
 export function selectComponentTargets(subscription: {
   remnawaveUuid: string | null;
   components: Array<{
@@ -519,7 +529,21 @@ export async function synchronizeSubscriptionComponents(subscriptionId: string):
     await prisma.subscription.update({ where: { id: subscriptionId }, data: { graceUntil: null } });
   }
 
-  const templates = templatesForSubscription(subscription);
+  const configuredTemplates = templatesForSubscription(subscription);
+  const manualTemplates = subscription.components
+    .filter((component) => component.managedManually)
+    .map((component) => ({
+      key: component.key,
+      adminName: component.adminName,
+      required: component.required,
+      mergeOrder: component.mergeOrder,
+      internalSquadUuids: component.internalSquadUuids,
+      trafficLimitBytes: component.trafficLimitBytes,
+      trafficResetMode: component.trafficResetMode,
+      showQuotaToClient: component.showQuotaToClient,
+      quotaDisplayName: component.quotaDisplayName,
+    }));
+  const templates = mergeSubscriptionComponentTemplates(configuredTemplates, manualTemplates);
   const templateKeys = templates.map((template) => template.key);
   const subscriptionUuidIsFree = Boolean(
     subscription.remnawaveUuid

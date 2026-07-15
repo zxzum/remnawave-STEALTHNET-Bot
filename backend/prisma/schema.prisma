@@ -1091,6 +1091,8 @@ model RemnawaveComponent {
   trafficResetMode   String    @default("no_reset") @map("traffic_reset_mode")
   showQuotaToClient  Boolean   @default(false) @map("show_quota_to_client")
   quotaDisplayName   String?   @map("quota_display_name")
+  /// Ручной компонент не удаляется reconciliation'ом при обновлении шаблона тарифа.
+  managedManually    Boolean   @default(false) @map("managed_manually")
   lastKnownStatus    String?   @map("last_known_status")
   lastSyncError      String?   @map("last_sync_error") @db.Text
   lastSyncedAt       DateTime? @map("last_synced_at")
