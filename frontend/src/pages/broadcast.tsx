@@ -218,6 +218,10 @@ export function BroadcastPage() {
       listPollRef.current = true;
       const poll = async () => {
         if (!listPollRef.current) return;
+        if (document.visibilityState !== "visible") {
+          setTimeout(poll, 5000);
+          return;
+        }
         try {
           const st = await api.getSendToListStatus(token, jobId);
           setListJob(st);
@@ -317,6 +321,10 @@ export function BroadcastPage() {
   async function pollBroadcastJob(jobId: string): Promise<BroadcastResult> {
     const deadline = Date.now() + 30 * 60 * 1000;
     while (Date.now() < deadline) {
+      if (document.visibilityState !== "visible") {
+        await new Promise((r) => setTimeout(r, 5000));
+        continue;
+      }
       try {
         const s = await api.broadcastStatus(token, jobId);
         if (s.progress) setBroadcastProgress(s.progress);
