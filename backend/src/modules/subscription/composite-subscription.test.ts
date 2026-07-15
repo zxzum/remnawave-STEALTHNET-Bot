@@ -101,13 +101,15 @@ test("определяет основные клиенты и оставляет
   assert.deepEqual(detect("SomeFutureClient/1"), { name: "default", mergeMode: "main-only" });
 });
 
-test("проксирует HWID и клиентские заголовки, но не секреты и proxy-заголовки", () => {
+test("проксирует только разрешённые заголовки устройства, но не секреты и произвольные X-заголовки", () => {
   assert.equal(typeof merge.selectForwardHeaders, "function");
   const select = merge.selectForwardHeaders as (headers: Record<string, string | string[] | undefined>) => Record<string, string>;
   assert.deepEqual(select({
     "user-agent": "Happ/3",
     "x-hwid": "device-1",
     "x-device-os": "iOS",
+    "x-app-version": "3.2.1",
+    "x-ver-os": "17.5",
     "x-client-feature": "json",
     authorization: "Bearer secret",
     cookie: "secret=1",
@@ -117,7 +119,8 @@ test("проксирует HWID и клиентские заголовки, но
     "user-agent": "Happ/3",
     "x-hwid": "device-1",
     "x-device-os": "iOS",
-    "x-client-feature": "json",
+    "x-app-version": "3.2.1",
+    "x-ver-os": "17.5",
   });
 });
 
@@ -141,12 +144,11 @@ test("извлекает upstream subscription URL из вариантов от�
   assert.equal(extract({ response: {} }), null);
 });
 
-test("объединяет служебные response headers и сохраняет публичную ссылку", () => {
+test("объединяет безопасные response headers и не раскрывает внутренние компоненты", () => {
   assert.equal(typeof merge.mergeSubscriptionResponseHeaders, "function");
   const combine = merge.mergeSubscriptionResponseHeaders as (
     sources: Array<{ key: string; headers: Record<string, string> }>,
     publicUrl: string,
-    degradedKeys: string[],
   ) => Record<string, string>;
   const result = combine([
     {
@@ -164,13 +166,13 @@ test("объединяет служебные response headers и сохраня
         "x-hwid-active": "true",
       },
     },
-  ], "https://stealth.example/api/sub/token", ["streaming"]);
+  ], "https://stealth.example/api/sub/token");
 
   assert.equal(result["profile-title"], "base64:U1RFQUxUSE5FVA==");
   assert.equal(result["profile-web-page-url"], "https://stealth.example/api/sub/token");
   assert.equal(result["subscription-userinfo"], "upload=13; download=27; total=100; expire=2000000000");
   assert.equal(result["x-hwid-active"], "true");
-  assert.equal(result["x-stealthnet-degraded-components"], "streaming");
+  assert.equal(result["x-stealthnet-degraded-components"], undefined);
 });
 
 test("подменяет upstream URL в существующем Remnawave payload без изменения API-контракта", () => {

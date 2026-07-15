@@ -80,7 +80,14 @@ export function detectSubscriptionClient(userAgent: string): DetectedSubscriptio
 }
 
 const FORWARDED_STANDARD_HEADERS = new Set(["accept", "accept-language", "user-agent"]);
-const BLOCKED_X_HEADERS = ["x-api-key", "x-forwarded-", "x-real-ip", "x-remna", "x-internal-"];
+const FORWARDED_DEVICE_HEADERS = new Set([
+  "x-hwid",
+  "x-device-os",
+  "x-device-model",
+  "x-device-locale",
+  "x-app-version",
+  "x-ver-os",
+]);
 
 export function selectForwardHeaders(
   headers: Record<string, string | string[] | undefined>,
@@ -89,8 +96,7 @@ export function selectForwardHeaders(
   for (const [rawName, rawValue] of Object.entries(headers)) {
     if (rawValue == null) continue;
     const name = rawName.toLowerCase();
-    const isSafeXHeader = name.startsWith("x-") && !BLOCKED_X_HEADERS.some((blocked) => name.startsWith(blocked));
-    if (!FORWARDED_STANDARD_HEADERS.has(name) && !isSafeXHeader) continue;
+    if (!FORWARDED_STANDARD_HEADERS.has(name) && !FORWARDED_DEVICE_HEADERS.has(name)) continue;
     selected[name] = Array.isArray(rawValue) ? rawValue.join(", ") : rawValue;
   }
   return selected;
@@ -280,7 +286,6 @@ const RESPONSE_HEADERS_FROM_MAIN = [
 export function mergeSubscriptionResponseHeaders(
   sources: Array<{ key: string; headers: Record<string, string> }>,
   publicUrl: string,
-  degradedKeys: string[],
 ): Record<string, string> {
   const result: Record<string, string> = {};
   const mainHeaders = Object.fromEntries(
@@ -302,6 +307,5 @@ export function mergeSubscriptionResponseHeaders(
     }
   }
   result["profile-web-page-url"] = publicUrl;
-  if (degradedKeys.length) result["x-stealthnet-degraded-components"] = degradedKeys.join(",");
   return result;
 }

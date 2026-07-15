@@ -169,7 +169,6 @@ publicSubscriptionRouter.get("/:publicSubscriptionToken", async (req, res) => {
   const responseHeaders = mergeSubscriptionResponseHeaders(
     successful.map(({ component, result }) => ({ key: component.key, headers: result.headers })),
     publicUrl,
-    [...new Set(degradedKeys)],
   );
   for (const [name, value] of Object.entries(responseHeaders)) res.setHeader(name, value);
   res.setHeader("Content-Type", merged.contentType);
