@@ -5,6 +5,7 @@ import { useAuth } from "@/contexts/auth";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { usePageVisibility } from "@/hooks/use-page-visibility";
 
 type Node = {
   id: string;
@@ -37,6 +38,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 export function ReferralNetworkPage() {
   const token = useAuth().state.accessToken!;
+  const pageVisible = usePageVisibility();
   const fgRef = useRef<ForceGraphMethods<Node, Link>>();
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [dims, setDims] = useState({ width: window.innerWidth, height: window.innerHeight - 56 });
@@ -216,7 +218,7 @@ export function ReferralNetworkPage() {
               : "Нет данных по клиентам"}
           </CardContent></Card>
         </div>
-      ) : (
+      ) : pageVisible ? (
         <ForceGraph2D
           ref={fgRef}
           graphData={graph}
@@ -269,7 +271,7 @@ export function ReferralNetworkPage() {
           }}
           onEngineStop={() => fgRef.current?.zoomToFit(400, 40)}
         />
-      )}
+      ) : null}
     </div>
   );
 }
