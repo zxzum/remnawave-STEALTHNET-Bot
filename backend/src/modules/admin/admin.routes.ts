@@ -134,7 +134,7 @@ import {
 import {
   notifyAdminsAboutSupportReply,
   notifyAdminsAboutTicketStatusChange,
-  notifySubscriptionRevoked,
+  notifySubscriptionRevokeFailed,
 } from "../notification/telegram-notify.service.js";
 import { runRule, runAllRules, getEligibleClientIds } from "../auto-broadcast/auto-broadcast.service.js";
 import { testNalogConnection } from "../nalog/nalog.service.js";
@@ -7446,14 +7446,17 @@ adminRouter.post("/subscriptions/:subId/remna/revoke-subscription", asyncRoute(a
 
   const result = await revokeLogicalSubscription(parsed.data.subId);
   if (!result.deleted) {
+    void notifySubscriptionRevokeFailed({
+      clientId: subscription.ownerId,
+      subscriptionId: parsed.data.subId,
+      subscriptionIndex: subscription.subscriptionIndex,
+      failures: result.failures,
+    }).catch((error) => console.warn("[subscription revoke] failure notification failed", error));
     return res.status(502).json({
       message: "Отзыв поставлен в очередь синхронизации",
       failures: result.failures,
     });
   }
-  void notifySubscriptionRevoked({ clientId: subscription.ownerId, subscriptionIndex: subscription.subscriptionIndex }).catch((error) => {
-    console.warn("[subscription revoke] notification failed", error);
-  });
   return res.json({ ok: true, revoked: true });
 }));
 

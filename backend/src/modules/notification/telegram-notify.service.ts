@@ -715,6 +715,7 @@ export async function notifyAdminsAboutSubscriptionConverted(
 /** Уведомить владельца и служебный Telegram-канал после полного отзыва одной логической подписки. */
 export async function notifySubscriptionRevoked(params: {
   clientId: string;
+  subscriptionId: string;
   subscriptionIndex: number;
 }): Promise<void> {
   const client = await prisma.client.findUnique({
@@ -738,10 +739,36 @@ export async function notifySubscriptionRevoked(params: {
     ``,
     `👤 Клиент: ${escapeHtml(formatClientLabel(client))}`,
     `📋 ${escapeHtml(subscriptionLabel)}`,
+    `🆔 Subscription: <code>${escapeHtml(params.subscriptionId)}</code>`,
     `🕐 ${formatDate(new Date())}`,
   ];
   if (client.telegramId) lines.push(`🆔 TG ID: <code>${escapeHtml(client.telegramId)}</code>`);
   await sendTelegramToAdminsForEvent("subscription_revoked", lines.join("\n"));
+}
+
+/** Уведомить служебный Telegram-канал, что отзыв ожидает повторной синхронизации. */
+export async function notifySubscriptionRevokeFailed(params: {
+  clientId: string;
+  subscriptionId: string;
+  subscriptionIndex: number;
+  failures: Array<{ key: string; error: string }>;
+}): Promise<void> {
+  const client = await prisma.client.findUnique({
+    where: { id: params.clientId },
+    select: { id: true, email: true, telegramId: true, telegramUsername: true },
+  });
+  const failureLines = params.failures.slice(0, 5).map((failure) =>
+    `• <b>${escapeHtml(failure.key)}</b>: ${escapeHtml(failure.error)}`,
+  );
+  await sendTelegramToAdminsForEvent("subscription_revoked", [
+    `⚠️ <b>Отзыв подписки ожидает синхронизации</b>`,
+    ``,
+    `👤 Клиент: ${escapeHtml(formatClientLabel(client ?? { id: params.clientId }))}`,
+    `📋 Подписка №${params.subscriptionIndex}`,
+    `🆔 Subscription: <code>${escapeHtml(params.subscriptionId)}</code>`,
+    ...failureLines,
+    `🕐 ${formatDate(new Date())}`,
+  ].join("\n"));
 }
 
 /**

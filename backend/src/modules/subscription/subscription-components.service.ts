@@ -13,6 +13,7 @@ import {
 } from "../remna/remna.client.js";
 import { generatePublicSubscriptionToken } from "./subscription.helpers.js";
 import { getSystemConfig } from "../client/client.service.js";
+import { notifySubscriptionRevoked } from "../notification/telegram-notify.service.js";
 
 type ComponentOperationTarget = {
   key: string;
@@ -361,12 +362,16 @@ export async function revokeLogicalSubscription(subscriptionId: string) {
   const links = await prisma.subscription.findUnique({
     where: { id: subscriptionId },
     select: {
+      ownerId: true,
+      subscriptionIndex: true,
       remnawaveUuid: true,
       components: { select: { remnawaveUuid: true, mergeOrder: true } },
     },
   });
   if (links && !subscriptionRemnawaveUuids(links).length) {
     await prisma.subscription.delete({ where: { id: subscriptionId } });
+    void notifySubscriptionRevoked({ clientId: links.ownerId, subscriptionId, subscriptionIndex: links.subscriptionIndex })
+      .catch((error) => console.warn("[subscription revoke] notification failed", error));
     return {
       deleted: true,
       failures: [] as Array<{ key: string; required: boolean; error: string }>,
@@ -379,6 +384,8 @@ export async function revokeLogicalSubscription(subscriptionId: string) {
   });
   if (isLogicalSubscriptionRevoked(result)) {
     await prisma.subscription.delete({ where: { id: subscriptionId } });
+    if (links) void notifySubscriptionRevoked({ clientId: links.ownerId, subscriptionId, subscriptionIndex: links.subscriptionIndex })
+      .catch((error) => console.warn("[subscription revoke] notification failed", error));
   }
   return { deleted: isLogicalSubscriptionRevoked(result), ...result };
 }

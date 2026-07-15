@@ -29,7 +29,7 @@ import {
   revokeLogicalSubscription,
   selectComponentTargets,
 } from "../subscription/subscription-components.service.js";
-import { notifySubscriptionRevoked } from "../notification/telegram-notify.service.js";
+import { notifySubscriptionRevokeFailed } from "../notification/telegram-notify.service.js";
 
 async function getClientPrimaryRemnaTarget(clientId: string) {
   const subscription = await prisma.subscription.findUnique({
@@ -360,14 +360,17 @@ botAdminRouter.post("/subscriptions/:subId/remna/revoke-subscription", async (re
 
   const result = await revokeLogicalSubscription(subId);
   if (!result.deleted) {
+    void notifySubscriptionRevokeFailed({
+      clientId: subscription.ownerId,
+      subscriptionId: subId,
+      subscriptionIndex: subscription.subscriptionIndex,
+      failures: result.failures,
+    }).catch((error) => console.warn("[bot-admin subscription revoke] failure notification failed", error));
     return res.status(502).json({
       message: "Отзыв поставлен в очередь синхронизации",
       failures: result.failures,
     });
   }
-  void notifySubscriptionRevoked({ clientId: subscription.ownerId, subscriptionIndex: subscription.subscriptionIndex }).catch((error) => {
-    console.warn("[bot-admin subscription revoke] notification failed", error);
-  });
   return res.json({ ok: true, revoked: true, subscriptionIndex: subscription.subscriptionIndex });
 });
 
