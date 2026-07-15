@@ -395,7 +395,7 @@ giftRouter.get("/history", async (req: Request, res: Response) => {
   return res.json(result.data);
 });
 
-// ─── GET /subscription-url/:id — URL подписки (Remnawave UUID) ───────────────
+// ─── GET /subscription-url/:id — стабильный публичный URL подписки ───────────
 
 giftRouter.get("/subscription-url/:id", async (req: Request, res: Response) => {
   const clientId = (req as AuthedReq).clientId;
@@ -406,5 +406,5 @@ giftRouter.get("/subscription-url/:id", async (req: Request, res: Response) => {
     return res.status(result.status).json({ message: result.error });
   }
 
-  return res.json({ uuid: result.data.uuid, subscriptionUrl: result.data.subscriptionUrl });
+  return res.json({ subscriptionUrl: result.data.subscriptionUrl });
 });

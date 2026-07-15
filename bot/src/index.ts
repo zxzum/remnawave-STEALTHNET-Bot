@@ -6739,23 +6739,14 @@ composer.on("callback_query:data", async (ctx) => {
         if (items.length === 1) {
           // Один сабклик — одна ссылка. Эмулируем sub:connect: чтобы не дублировать flow.
           const only = items[0]!;
-          const appUrl = config?.publicAppUrl?.replace(/\/$/, "") ?? null;
-          const useRemna = config?.useRemnaSubscriptionPage === true;
           let url: string | null = null;
-          let webAppPath: string | null = null;
           if (only.type === "root") {
             url = getSubscriptionUrl(only.subscription);
-            webAppPath = appUrl ? `${appUrl}/cabinet/subscribe` : null;
           } else {
-            // T17: secondary в menu:vpn уже отфильтрована (purchasedAsGift=false), активация не нужна.
             const giftRes = await api.getGiftSubscriptionUrl(token, only.id);
-            if (useRemna) {
-              const byUuid = await api.getSubscriptionByUuid(token, giftRes.uuid);
-              url = getSubscriptionUrl(byUuid.subscription);
-            }
-            webAppPath = appUrl ? `${appUrl}/cabinet/subscribe?uuid=${encodeURIComponent(giftRes.uuid)}` : null;
+            url = giftRes.subscriptionUrl;
           }
-          if (useRemna && url) {
+          if (url) {
             await editMessageContent(ctx, `📲 Ссылка на подписку:\n\n${url}`, {
               inline_keyboard: [
                 [{ text: "📲 Открыть страницу подключения", url }],
@@ -6764,15 +6755,6 @@ composer.on("callback_query:data", async (ctx) => {
                 [{ text: "🏠 Главное меню", callback_data: "menu:main" }],
               ],
             });
-          } else if (webAppPath) {
-            await editMessageContent(ctx, "📲 Подключитесь через мини-приложение:", {
-              inline_keyboard: [
-                [{ text: "📲 Открыть страницу подключения", web_app: { url: webAppPath } }],
-                [{ text: "🏠 Главное меню", callback_data: "menu:main" }],
-              ],
-            });
-          } else if (url) {
-            await editMessageContent(ctx, `📲 Ссылка на подписку:\n\n${url}\n\nОткройте её в приложении VPN.`, backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
           } else {
             await editMessageContent(ctx, _t("vpn.link_unavailable", lang), backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
           }
@@ -7241,33 +7223,23 @@ composer.on("callback_query:data", async (ctx) => {
       if (sep === -1) return;
       const subType = rest.slice(0, sep) as "root" | "secondary";
       const subId = rest.slice(sep + 1);
-      const appUrl = config?.publicAppUrl?.replace(/\/$/, "") ?? null;
-      const useRemna = config?.useRemnaSubscriptionPage === true;
       // кнопка «К подписке» на экране ссылки подключения
       // ведёт ОБРАТНО в picker «🔌 Подключиться автоматически» (menu:vpn), а не в детали
       // конкретной подписки. Так юзер может быстро выбрать другую подписку для подключения.
       const backCallback = "menu:vpn";
       try {
         let url: string | null = null;
-        let webAppPath: string | null = null;
         if (subType === "root") {
           const subRes = await api.getSubscription(token);
           url = getSubscriptionUrl(subRes.subscription);
-          webAppPath = appUrl ? `${appUrl}/cabinet/subscribe` : null;
         } else {
-          // T17: secondary в Мои подписки уже отфильтрована (purchasedAsGift=false), активация не нужна.
           const giftRes = await api.getGiftSubscriptionUrl(token, subId);
-          if (useRemna) {
-            const byUuid = await api.getSubscriptionByUuid(token, giftRes.uuid);
-            url = getSubscriptionUrl(byUuid.subscription);
-          }
-          webAppPath = appUrl ? `${appUrl}/cabinet/subscribe?uuid=${encodeURIComponent(giftRes.uuid)}` : null;
+          url = giftRes.subscriptionUrl;
         }
 
         // подсказка «если инструкция не открылась».
         const fallbackSub = instructionFallbackText(config);
-        if (useRemna && url) {
-          // Remna sub-page включена → отдаём прямую ссылку на неё (URL-кнопкой).
+        if (url) {
           await editMessageContent(
             ctx,
             `📲 Ссылка на подписку:\n\n${url}\n\n${fallbackSub}`,
@@ -7277,24 +7249,6 @@ composer.on("callback_query:data", async (ctx) => {
                 [{ text: backToSubLabel(config?.botEmojis ?? null), callback_data: backCallback }],
               ],
             },
-          );
-        } else if (webAppPath) {
-          await editMessageContent(
-            ctx,
-            `📲 Подключитесь через мини-приложение:\n\n${fallbackSub}`,
-            {
-              inline_keyboard: [
-                [{ text: "📲 Открыть страницу подключения", web_app: { url: webAppPath } }],
-                [{ text: backToSubLabel(config?.botEmojis ?? null), callback_data: backCallback }],
-              ],
-            },
-          );
-        } else if (url) {
-          // Нет publicAppUrl и нет Remna sub-page — показываем сырую ссылку.
-          await editMessageContent(
-            ctx,
-            `📲 Ссылка на подписку:\n\n${url}\n\nОткройте её в приложении VPN.\n\n${fallbackSub}`,
-            { inline_keyboard: [[{ text: backToSubLabel(config?.botEmojis ?? null), callback_data: backCallback }]] },
           );
         } else {
           await editMessageContent(
@@ -7606,43 +7560,15 @@ composer.on("callback_query:data", async (ctx) => {
         // подписка пропадала из «🎁 Мои подарки» и появлялась в «📋 Мои подписки».
         // Теперь забрать себе можно ТОЛЬКО явной кнопкой «✅ Забрать себе» в gift menu.
         const result = await api.getGiftSubscriptionUrl(token, subscriptionId);
-        const appUrl2 = config?.publicAppUrl?.replace(/\/$/, "") ?? null;
-
-        // Если включена Remna-страница подписки — отдаём remna subscriptionUrl.
-        if (config?.useRemnaSubscriptionPage) {
-          const byUuid = await api.getSubscriptionByUuid(token, result.uuid);
-          const remnaUrl = getSubscriptionUrl(byUuid.subscription);
-          if (!remnaUrl) {
-            await editMessageContent(
-              ctx,
-              "❌ Не удалось получить ссылку Remna для этой подписки.",
-              backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds),
-            );
-            return;
-          }
-          await editMessageContent(
-            ctx,
-            `📲 Ссылка на подписку:\n\n${remnaUrl}`,
-            openSubscribePageMarkup(appUrl2 ?? "", config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds, remnaUrl),
-          );
+        const subscriptionUrl = result.subscriptionUrl;
+        if (!subscriptionUrl) {
+          await editMessageContent(ctx, "❌ Не удалось получить ссылку подписки.", backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
           return;
         }
-
-        // Иначе показываем ссылку + кнопку "Подключиться" в мини-апп на нашу страницу
-        // подключения для конкретной secondary-подписки.
-        const webUrl = appUrl2 ? `${appUrl2}/cabinet/subscribe?uuid=${encodeURIComponent(result.uuid)}` : null;
-        const buttons = webUrl
-          ? {
-              inline_keyboard: [
-                [{ text: "📲 Подключиться", web_app: { url: webUrl } }],
-                [{ text: backButton(config?.botEmojis ?? null).text, callback_data: "menu:gift" }],
-              ],
-            }
-          : giftCodeResultButtons(config?.botBackLabel ?? null, innerStyles, innerEmojiIds, config?.botEmojis ?? null);
         await editMessageContent(
           ctx,
-          `📲 Ссылка на подписку:\n\n${webUrl ?? `Подписка UUID: ${result.uuid}`}`,
-          buttons,
+          `📲 Ссылка на подписку:\n\n${subscriptionUrl}`,
+          openSubscribePageMarkup("", config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds, subscriptionUrl),
         );
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : "Ошибка получения ссылки";

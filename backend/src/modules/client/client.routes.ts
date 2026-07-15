@@ -3141,6 +3141,60 @@ clientRouter.get("/subscription/by-uuid/:uuid", async (req, res) => {
 });
 
 /**
+ * GET /api/client/subscription/by-id/:id — подписка по ID STEALTHNET.
+ * Новые ссылки мини-приложения используют этот маршрут, не раскрывая UUID Remnawave.
+ */
+clientRouter.get("/subscription/by-id/:id", async (req, res) => {
+  const clientId = (req as unknown as { clientId: string }).clientId;
+  const { id } = req.params;
+  if (!id || typeof id !== "string") {
+    return res.status(400).json({ subscription: null, tariffDisplayName: null, message: "Подписка не указана" });
+  }
+
+  const dbSubscription = await prisma.subscription.findFirst({
+    where: { id, ownerId: clientId },
+    select: {
+      remnawaveUuid: true,
+      publicSubscriptionToken: true,
+      components: {
+        where: { showQuotaToClient: true },
+        orderBy: { mergeOrder: "asc" },
+        select: {
+          key: true,
+          adminName: true,
+          quotaDisplayName: true,
+          trafficLimitBytes: true,
+          trafficResetMode: true,
+          remnawaveUuid: true,
+          showQuotaToClient: true,
+        },
+      },
+    },
+  });
+  if (!dbSubscription?.remnawaveUuid) {
+    return res.status(404).json({ subscription: null, tariffDisplayName: null, message: "Подписка не найдена" });
+  }
+
+  const result = await remnaGetUser(dbSubscription.remnawaveUuid);
+  if (result.error) {
+    return res.json({ subscription: null, tariffDisplayName: null, message: result.error });
+  }
+  const config = await getSystemConfig();
+  replaceRemnaSubscriptionUrlInPlace(
+    result.data,
+    publicSubscriptionUrlForRequest(req, dbSubscription.publicSubscriptionToken, config.publicAppUrl),
+  );
+  if (config.happCryptEnabled) {
+    await encryptSubscriptionUrlInPlace(result.data);
+  }
+  return res.json({
+    subscription: result.data ?? null,
+    tariffDisplayName: await resolveTariffDisplayName(result.data ?? null),
+    componentQuotas: await loadVisibleComponentQuotas(dbSubscription.components),
+  });
+});
+
+/**
  * GET /api/client/subscription/all — Все подписки клиента (root + secondary).
  * Возвращает массив с Remnawave-данными для каждой подписки.
  */

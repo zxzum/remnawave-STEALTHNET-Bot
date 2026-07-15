@@ -297,14 +297,6 @@ export async function getSubscription(token: string): Promise<{ subscription: un
   return fetchJson("/api/client/subscription", { token });
 }
 
-/** Подписка по конкретному UUID (для secondary/gift подписок) */
-export async function getSubscriptionByUuid(
-  token: string,
-  uuid: string
-): Promise<{ subscription: unknown; tariffDisplayName?: string | null; message?: string }> {
-  return fetchJson("/api/client/subscription/by-uuid/" + encodeURIComponent(uuid), { token });
-}
-
 /**
  * доступные клиенту триалы (которые он ещё не активировал).
  * Если массив пустой — кнопка «🎁 Получить пробную» в главном меню скрывается.
@@ -1115,7 +1107,7 @@ export async function deleteGiftSubscription(
 export async function getGiftSubscriptionUrl(
   token: string,
   subscriptionId: string
-): Promise<{ uuid: string }> {
+): Promise<{ subscriptionUrl: string | null }> {
   return fetchJson("/api/client/gift/subscription-url/" + encodeURIComponent(subscriptionId), { token });
 }
 

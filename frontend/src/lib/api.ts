@@ -2043,7 +2043,12 @@ export const api = {
     return request("/client/subscription", { token });
   },
 
-  /** Подписка по Remnawave UUID (для secondary подписок на /cabinet/subscribe?uuid=xxx) */
+  /** Подписка по внутреннему ID STEALTHNET (без раскрытия Remnawave UUID). */
+  async clientSubscriptionById(token: string, subscriptionId: string): Promise<{ subscription: unknown; tariffDisplayName?: string | null; componentQuotas?: ComponentQuota[]; message?: string }> {
+    return request(`/client/subscription/by-id/${encodeURIComponent(subscriptionId)}`, { token });
+  },
+
+  /** Legacy: подписка по Remnawave UUID для ранее отправленных ссылок. */
   async clientSubscriptionByUuid(token: string, uuid: string): Promise<{ subscription: unknown; tariffDisplayName?: string | null; componentQuotas?: ComponentQuota[]; message?: string }> {
     return request(`/client/subscription/by-uuid/${encodeURIComponent(uuid)}`, { token });
   },
@@ -2577,8 +2582,8 @@ export const api = {
     return request(`/client/gift/history?page=${page}&limit=${limit}`, { token });
   },
 
-  /** Get Remnawave subscription URL for a secondary subscription */
-  async giftGetSubscriptionUrl(token: string, subscriptionId: string): Promise<{ uuid: string }> {
+  /** Stable public URL for a secondary subscription. */
+  async giftGetSubscriptionUrl(token: string, subscriptionId: string): Promise<{ subscriptionUrl: string | null }> {
     return request(`/client/gift/subscription-url/${encodeURIComponent(subscriptionId)}`, { token });
   },
 

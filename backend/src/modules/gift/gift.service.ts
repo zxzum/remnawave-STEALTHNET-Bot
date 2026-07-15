@@ -998,10 +998,10 @@ export async function getSubscriptionUrl(
   subscriptionId: string,
   rootClientId: string,
   requestOrigin?: string,
-): Promise<GiftResult<{ uuid: string; subscriptionUrl: string | null }>> {
+): Promise<GiftResult<{ subscriptionUrl: string | null }>> {
   const sub = await prisma.subscription.findUnique({
     where: { id: subscriptionId },
-    select: { ownerId: true, remnawaveUuid: true, publicSubscriptionToken: true, giftStatus: true },
+    select: { ownerId: true, publicSubscriptionToken: true, giftStatus: true },
   });
 
   if (!sub || sub.ownerId !== rootClientId) {
@@ -1010,16 +1010,11 @@ export async function getSubscriptionUrl(
   if (sub.giftStatus === "GIFT_RESERVED") {
     return { ok: false, error: "Подписка зарезервирована как подарок", status: 400 };
   }
-  if (!sub.remnawaveUuid) {
-    return { ok: false, error: "VPN-пользователь не создан", status: 400 };
-  }
-
   const config = await getSystemConfig();
   const publicBaseUrl = resolvePublicSubscriptionBaseUrl(config.publicAppUrl, requestOrigin);
   return {
     ok: true,
     data: {
-      uuid: sub.remnawaveUuid,
       subscriptionUrl: publicBaseUrl
         ? buildPublicSubscriptionUrl(publicBaseUrl, sub.publicSubscriptionToken)
         : null,

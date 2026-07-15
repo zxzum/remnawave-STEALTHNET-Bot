@@ -233,10 +233,13 @@ function ClassicSubscribePage() {
   useEffect(() => {
     if (!token) return;
     setLoading(true);
-    const uuid = searchParams.get("uuid");
-    const subscriptionPromise = uuid
-      ? api.clientSubscriptionByUuid(token, uuid)
-      : api.clientSubscription(token);
+    const subscriptionId = searchParams.get("subscriptionId");
+    const legacyUuid = searchParams.get("uuid");
+    const subscriptionPromise = subscriptionId
+      ? api.clientSubscriptionById(token, subscriptionId)
+      : legacyUuid
+        ? api.clientSubscriptionByUuid(token, legacyUuid)
+        : api.clientSubscription(token);
     Promise.all([
       subscriptionPromise,
       api.getPublicSubscriptionPageConfig(),

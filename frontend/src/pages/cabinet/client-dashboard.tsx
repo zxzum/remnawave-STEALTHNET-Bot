@@ -972,7 +972,7 @@ function ClassicDashboardPage() {
                         <span className="inline-flex items-center leading-none">Подключиться</span>
                       </a>
                     ) : (
-                      <Link to={`/cabinet/subscribe?uuid=${sec.remnawaveUuid}`} className="inline-flex w-full items-center justify-center gap-2">
+                      <Link to={`/cabinet/subscribe?subscriptionId=${encodeURIComponent(sec.id)}`} className="inline-flex w-full items-center justify-center gap-2">
                         <Wifi className="h-5 w-5 shrink-0" />
                         <span className="inline-flex items-center leading-none">Подключиться</span>
                       </Link>
@@ -1636,7 +1636,7 @@ function ClassicDashboardPage() {
                               <span className="inline-flex items-center leading-none">Подключиться</span>
                             </a>
                           ) : (
-                            <Link to={`/cabinet/subscribe?uuid=${sec.remnawaveUuid}`} className="inline-flex items-center justify-center gap-2 leading-none">
+                            <Link to={`/cabinet/subscribe?subscriptionId=${encodeURIComponent(sec.id)}`} className="inline-flex items-center justify-center gap-2 leading-none">
                               <Wifi className="h-5 w-5 shrink-0" />
                               <span className="inline-flex items-center leading-none">Подключиться</span>
                             </Link>
