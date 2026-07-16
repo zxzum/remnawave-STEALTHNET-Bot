@@ -68,6 +68,24 @@ test("выбирает один компонент для component action и в
   assert.deepEqual(select(subscription, "whitelist").map((item) => item.key), ["whitelist"]);
 });
 
+test("component targets не протаскивают Prisma BigInt в JSON-ответ", () => {
+  assert.equal(typeof service.selectComponentTargets, "function");
+  const select = service.selectComponentTargets as (subscription: unknown) => unknown[];
+  const targets = select({
+    remnawaveUuid: "main",
+    components: [{
+      key: "primary",
+      required: true,
+      mergeOrder: 0,
+      remnawaveUuid: "main",
+      trafficLimitBytes: 20n * 1024n ** 3n,
+    }],
+  });
+
+  assert.doesNotThrow(() => JSON.stringify(targets));
+  assert.deepEqual(targets, [{ key: "primary", required: true, mergeOrder: 0, remnawaveUuid: "main" }]);
+});
+
 test("частичная ошибка необязательного компонента не становится required failure", async () => {
   assert.equal(typeof service.runComponentOperations, "function");
 

@@ -190,7 +190,9 @@ export function selectComponentTargets(subscription: {
 }, componentKey?: string): Array<ComponentOperationTarget & { remnawaveUuid: string }> {
   const targets = subscription.components.length
     ? subscription.components.map((component) => ({
-        ...component,
+        key: component.key,
+        required: component.required,
+        mergeOrder: component.mergeOrder,
         remnawaveUuid: component.remnawaveUuid
           ?? (component.required ? subscription.remnawaveUuid : null),
       }))
