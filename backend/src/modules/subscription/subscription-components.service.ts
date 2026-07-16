@@ -292,6 +292,34 @@ export async function revokeSubscriptionComponents(subscriptionId: string) {
   return { ...result, publicSubscriptionToken, upstreamShortUuids };
 }
 
+async function removeSubscriptionRecord(
+  subscriptionId: string,
+  links: { ownerId: string; subscriptionIndex: number },
+) {
+  await prisma.$transaction([
+    prisma.subscription.delete({ where: { id: subscriptionId } }),
+    ...(links.subscriptionIndex === 0
+      ? [prisma.client.update({
+          where: { id: links.ownerId },
+          data: {
+            remnawaveUuid: null,
+            currentTariffId: null,
+            currentPricePerDay: null,
+            customPrimaryPrice: null,
+            autoRenewEnabled: false,
+            autoRenewTariffId: null,
+            autoRenewPriceOptionId: null,
+            autoRenewExtraDevices: 0,
+            autoRenewRetryCount: 0,
+            autoRenewNotifiedAt: null,
+            autoRenewPromoCode: null,
+            lastArnNotifiedKey: null,
+          },
+        })]
+      : []),
+  ]);
+}
+
 /**
  * Идемпотентное удаление логической подписки. Tombstone сохраняет UUID
  * компонентов до тех пор, пока каждый upstream user не удалён или не вернул 404.
@@ -316,12 +344,14 @@ export async function deleteSubscriptionComponents(subscriptionId: string) {
   const links = await prisma.subscription.findUnique({
     where: { id: subscriptionId },
     select: {
+      ownerId: true,
+      subscriptionIndex: true,
       remnawaveUuid: true,
       components: { select: { remnawaveUuid: true, mergeOrder: true } },
     },
   });
   if (links && !subscriptionRemnawaveUuids(links).length) {
-    await prisma.subscription.delete({ where: { id: subscriptionId } });
+    await removeSubscriptionRecord(subscriptionId, links);
     return {
       deleted: true,
       failures: [] as Array<{ key: string; required: boolean; error: string }>,
@@ -333,14 +363,14 @@ export async function deleteSubscriptionComponents(subscriptionId: string) {
     if (response.error && response.status !== 404) throw new Error(response.error);
   });
   if (!result.failures.length) {
-    await prisma.subscription.delete({ where: { id: subscriptionId } });
+    if (links) await removeSubscriptionRecord(subscriptionId, links);
   }
   return { deleted: result.failures.length === 0, ...result };
 }
 
 /**
  * Аннулирует одну логическую подписку: для каждого Remnawave-компонента
- * выполняется штатный revoke, затем удаляется только эта запись Subscription.
+ * Remnawave-пользователь удаляется, затем удаляется только эта запись Subscription.
  * Другие subscriptionIndex пользователя не затрагиваются.
  */
 export async function revokeLogicalSubscription(subscriptionId: string) {
@@ -371,7 +401,7 @@ export async function revokeLogicalSubscription(subscriptionId: string) {
     },
   });
   if (links && !subscriptionRemnawaveUuids(links).length) {
-    await prisma.subscription.delete({ where: { id: subscriptionId } });
+    await removeSubscriptionRecord(subscriptionId, links);
     void notifySubscriptionRevoked({ clientId: links.ownerId, subscriptionId, subscriptionIndex: links.subscriptionIndex })
       .catch((error) => console.warn("[subscription revoke] notification failed", error));
     return {
@@ -382,10 +412,11 @@ export async function revokeLogicalSubscription(subscriptionId: string) {
   }
 
   const result = await runSubscriptionComponentOperation(subscriptionId, async ({ remnawaveUuid }) => {
-    await revokeRemnawaveComponent(remnawaveUuid);
+    const response = await remnaDeleteUser(remnawaveUuid);
+    if (response.error && response.status !== 404) throw new Error(response.error);
   });
   if (isLogicalSubscriptionRevoked(result)) {
-    await prisma.subscription.delete({ where: { id: subscriptionId } });
+    if (links) await removeSubscriptionRecord(subscriptionId, links);
     if (links) void notifySubscriptionRevoked({ clientId: links.ownerId, subscriptionId, subscriptionIndex: links.subscriptionIndex })
       .catch((error) => console.warn("[subscription revoke] notification failed", error));
   }

@@ -2924,12 +2924,12 @@ clientRouter.get("/subscription", async (req, res) => {
       },
     },
   });
-  const effectiveUuid = rootSub?.remnawaveUuid ?? client.remnawaveUuid;
-  if (!effectiveUuid) {
+  if (!rootSub?.remnawaveUuid) {
     return res.json({ subscription: null, tariffDisplayName: null, currentPricePerDay: null, message: "Подписка не привязана" });
   }
+  const effectiveUuid = rootSub.remnawaveUuid;
   // Self-heal: clients.remnawaveUuid разошёлся с актуальной подпиской → чиним (влияет на устройства, доп.подписки и пр.).
-  if (rootSub?.remnawaveUuid && rootSub.remnawaveUuid !== client.remnawaveUuid) {
+  if (rootSub.remnawaveUuid !== client.remnawaveUuid) {
     prisma.client.update({ where: { id: client.id }, data: { remnawaveUuid: rootSub.remnawaveUuid } }).catch(() => {});
   }
   const result = await remnaGetUser(effectiveUuid);
