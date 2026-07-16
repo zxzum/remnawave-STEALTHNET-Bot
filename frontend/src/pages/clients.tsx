@@ -34,6 +34,7 @@ import { motion } from "framer-motion";
 import { clientsBulkApi, type BulkClientAction } from "@/lib/admin-extras-api";
 import { ClientSubscriptionsTab } from "@/components/admin/client-subscriptions-tab";
 import { fmtMsk, fmtMskDate } from "@/lib/datetime";
+import { usePageVisibility } from "@/hooks/use-page-visibility";
 
 function formatTrafficBytes(bytes: number | null | undefined): string {
   if (bytes == null || bytes <= 0) return "0 B";
@@ -75,6 +76,7 @@ function getOnlineStatus(onlineAt: string | null): { isOnline: boolean; label: s
   return { isOnline: false, label: `${Math.floor(diff / 86400000)} дн назад` };
 }
 export function ClientsPage() {
+  const pageVisible = usePageVisibility();
   const { t } = useTranslation();
   const { state } = useAuth();
   const [data, setData] = useState<{ items: ClientRecord[]; total: number } | null>(null);
@@ -205,7 +207,7 @@ export function ClientsPage() {
     const uuids = data?.items
       .map(c => c.remnawaveUuid)
       .filter((u): u is string => Boolean(u)) ?? [];
-    if (uuids.length === 0) return;
+    if (!pageVisible || uuids.length === 0) return;
     
     const poll = () => {
       api.getClientsOnlineStatuses(token, uuids)
@@ -215,7 +217,7 @@ export function ClientsPage() {
     poll();
     const interval = setInterval(poll, 30000);
     return () => clearInterval(interval);
-  }, [token, data?.items]);
+  }, [token, data?.items, pageVisible]);
 
   const applySearch = () => {
     setSearchApplied(search);
