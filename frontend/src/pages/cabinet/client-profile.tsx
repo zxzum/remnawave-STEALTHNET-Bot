@@ -79,6 +79,7 @@ function ClassicProfilePage() {
   const [linkEmailLoading, setLinkEmailLoading] = useState(false);
   const [linkEmailSent, setLinkEmailSent] = useState(false);
   const [linkEmailError, setLinkEmailError] = useState<string | null>(null);
+  const [emailVerificationRequired, setEmailVerificationRequired] = useState(true);
   const [paymentsHistoryOpen, setPaymentsHistoryOpen] = useState(false);
   const [devices, setDevices] = useState<import("@/lib/api").ClientDeviceItem[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
@@ -305,6 +306,7 @@ function ClassicProfilePage() {
 
   useEffect(() => {
     api.getPublicConfig().then((c) => {
+      setEmailVerificationRequired(Boolean(c.smtpConfigured && !c.skipEmailVerification));
       setPlategaMethods(c.plategaMethods ?? []);
       setYoomoneyEnabled(Boolean(c.yoomoneyEnabled));
       setYookassaEnabled(Boolean(c.yookassaEnabled));
@@ -516,7 +518,12 @@ function ClassicProfilePage() {
     setLinkEmailSent(false);
     setLinkEmailLoading(true);
     try {
-      await api.clientLinkEmailRequest(token, { email: linkEmailValue.trim() });
+      if (emailVerificationRequired) {
+        await api.clientLinkEmailRequest(token, { email: linkEmailValue.trim() });
+      } else {
+        await api.clientLinkEmailDirect(token, { email: linkEmailValue.trim() });
+        await refreshProfile();
+      }
       setLinkEmailSent(true);
       setLinkEmailValue("");
     } catch (err) {

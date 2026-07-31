@@ -32,13 +32,13 @@ function hexToRgb(hex: string) {
 export function AnimatedBackground({ variant = "fixed", intensity = "normal" }: { variant?: "fixed" | "absolute", intensity?: "normal" | "weak" }) {
   const { config, resolvedMode } = useTheme();
   const location = useLocation();
-  if (location.pathname === "/admin" && variant === "fixed") return null;
-
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<number>(0);
   const startRef = useRef<number>(0);
+  const disabled = variant === "fixed" && location.pathname.startsWith("/admin");
 
   useEffect(() => {
+    if (disabled) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -125,7 +125,9 @@ export function AnimatedBackground({ variant = "fixed", intensity = "normal" }: 
       cancelAnimationFrame(frameRef.current);
       window.removeEventListener("resize", resize);
     };
-  }, [config.accent, resolvedMode]);
+  }, [config.accent, disabled, resolvedMode, variant]);
+
+  if (disabled) return null;
 
   return (
     <div className={`${variant === "fixed" ? "fixed" : "absolute"} inset-0 ${variant === "fixed" ? "-z-50" : "z-0"} overflow-hidden ${intensity === "weak" ? "opacity-30" : ""}`} aria-hidden>

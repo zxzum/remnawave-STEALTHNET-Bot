@@ -483,9 +483,9 @@ export function SettingsPage() {
         ...data,
         activeLanguages: (data.activeLanguages || []).filter((l: string) => allowed.includes(l)),
         activeCurrencies: (data.activeCurrencies || []).filter((c: string) => ALLOWED_CURRENCIES.includes(c)),
-        defaultReferralPercent: data.defaultReferralPercent ?? 30,
+        defaultReferralPercent: data.defaultReferralPercent ?? 20,
         referralPercentLevel2: (data as AdminSettings).referralPercentLevel2 ?? 10,
-        referralPercentLevel3: (data as AdminSettings).referralPercentLevel3 ?? 10,
+        referralPercentLevel3: (data as AdminSettings).referralPercentLevel3 ?? 5,
         withdrawalsEnabled: (data as AdminSettings).withdrawalsEnabled ?? true,
         withdrawalMinAmount: (data as AdminSettings).withdrawalMinAmount ?? 3000,
         plategaMethods: (data as AdminSettings).plategaMethods ?? DEFAULT_PLATEGA_METHODS,
@@ -804,13 +804,21 @@ export function SettingsPage() {
         defaultCurrency: defaultCurr,
         defaultReferralPercent: settings.defaultReferralPercent,
         referralPercentLevel2: settings.referralPercentLevel2 ?? 10,
-        referralPercentLevel3: settings.referralPercentLevel3 ?? 10,
+        referralPercentLevel3: settings.referralPercentLevel3 ?? 5,
         withdrawalsEnabled: settings.withdrawalsEnabled ?? true,
         withdrawalMinAmount: settings.withdrawalMinAmount ?? 3000,
         trialDays: settings.trialDays,
         trialSquadUuid: settings.trialSquadUuid ?? null,
         trialDeviceLimit: settings.trialDeviceLimit ?? null,
         trialTrafficLimitBytes: settings.trialTrafficLimitBytes ?? null,
+        trialExpiryReminderEnabled: settings.trialExpiryReminderEnabled !== false,
+        trialExpiryReminderHours: settings.trialExpiryReminderHours ?? "3, 0.5",
+        trialExpiryReminderText: settings.trialExpiryReminderText || null,
+        trialExpiryReminderButtonText: settings.trialExpiryReminderButtonText ?? "💳 Выбрать тариф",
+        subscriptionExpiryReminderEnabled: settings.subscriptionExpiryReminderEnabled !== false,
+        subscriptionExpiryReminderHours: settings.subscriptionExpiryReminderHours ?? "3, 0.5",
+        subscriptionExpiryReminderText: settings.subscriptionExpiryReminderText || null,
+        subscriptionExpiryReminderButtonText: settings.subscriptionExpiryReminderButtonText ?? "💳 Продлить подписку",
         serviceName: settings.serviceName,
         logo: settings.logo ?? null,
         logoBot: settings.logoBot ?? null,
@@ -830,6 +838,7 @@ export function SettingsPage() {
         passwordResetEnabled: settings.passwordResetEnabled ?? false,
         skipEmailVerification: settings.skipEmailVerification ?? false,
         onboardingEmailRequired: settings.onboardingEmailRequired ?? false,
+        onboarding2faEnabled: settings.onboarding2faEnabled !== false,
         stealthAccent: settings.stealthAccent ?? null,
         stealthHeroImage: settings.stealthHeroImage ?? null,
         // Антибот-защита регистраций
@@ -2233,6 +2242,102 @@ export function SettingsPage() {
                   </TabsContent>
                   {/* === ВКЛАДКА: ПОВЕДЕНИЕ === */}
                   <TabsContent value="behavior" className="space-y-5 mt-5">
+                    <div className="rounded-2xl border border-cyan-500/20 bg-gradient-to-br from-cyan-500/5 via-sky-500/5 to-blue-500/5 p-5 space-y-4">
+                      <div className="flex items-center gap-2.5">
+                        <div className="h-8 w-8 rounded-xl bg-cyan-500/20 flex items-center justify-center"><Bell className="h-4 w-4 text-cyan-500" /></div>
+                        <h3 className="text-base font-semibold">Напоминания о продлении</h3>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Интервалы задаются в часах через запятую: <code>72, 24, 3, 0.5</code>. Триал ведёт к выбору тарифа,
+                        обычная подписка — сразу к продлению именно этой подписки.
+                      </p>
+                      {([
+                        {
+                          kind: "trial" as const,
+                          title: "Пробный период",
+                          enabled: settings.trialExpiryReminderEnabled !== false,
+                          hours: settings.trialExpiryReminderHours ?? "3, 0.5",
+                          text: settings.trialExpiryReminderText ?? "",
+                          button: settings.trialExpiryReminderButtonText ?? "💳 Выбрать тариф",
+                          placeholder: "⏳ <b>Пробный период скоро закончится</b>\n\nТриал «{{name}}» закончится примерно через <b>{{time}}</b>.\nВыберите тариф, чтобы сохранить доступ к VPN.",
+                        },
+                        {
+                          kind: "subscription" as const,
+                          title: "Обычная подписка",
+                          enabled: settings.subscriptionExpiryReminderEnabled !== false,
+                          hours: settings.subscriptionExpiryReminderHours ?? "3, 0.5",
+                          text: settings.subscriptionExpiryReminderText ?? "",
+                          button: settings.subscriptionExpiryReminderButtonText ?? "💳 Продлить подписку",
+                          placeholder: "⏳ <b>Подписка скоро закончится</b>\n\nТариф «{{name}}» закончится примерно через <b>{{time}}</b>.\nПродлите подписку, чтобы сохранить доступ к VPN.",
+                        },
+                      ]).map((reminder) => (
+                        <div key={reminder.kind} className="rounded-xl border border-white/10 bg-card/40 p-4 space-y-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <Label className="text-sm font-semibold">{reminder.title}</Label>
+                            <Switch
+                              checked={reminder.enabled}
+                              onCheckedChange={(checked: boolean) => setSettings((s) => s ? {
+                                ...s,
+                                ...(reminder.kind === "trial"
+                                  ? { trialExpiryReminderEnabled: checked === true }
+                                  : { subscriptionExpiryReminderEnabled: checked === true }),
+                              } : s)}
+                            />
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="space-y-1.5">
+                              <Label className="text-xs">За сколько часов напоминать</Label>
+                              <Input
+                                value={reminder.hours}
+                                disabled={!reminder.enabled}
+                                onChange={(e) => setSettings((s) => s ? {
+                                  ...s,
+                                  ...(reminder.kind === "trial"
+                                    ? { trialExpiryReminderHours: e.target.value }
+                                    : { subscriptionExpiryReminderHours: e.target.value }),
+                                } : s)}
+                                placeholder="3, 0.5"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-xs">Текст кнопки</Label>
+                              <Input
+                                value={reminder.button}
+                                disabled={!reminder.enabled}
+                                maxLength={64}
+                                onChange={(e) => setSettings((s) => s ? {
+                                  ...s,
+                                  ...(reminder.kind === "trial"
+                                    ? { trialExpiryReminderButtonText: e.target.value }
+                                    : { subscriptionExpiryReminderButtonText: e.target.value }),
+                                } : s)}
+                              />
+                            </div>
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-xs">Текст сообщения</Label>
+                            <Textarea
+                              rows={5}
+                              value={reminder.text}
+                              disabled={!reminder.enabled}
+                              maxLength={4000}
+                              placeholder={reminder.placeholder}
+                              className="font-mono text-xs"
+                              onChange={(e) => setSettings((s) => s ? {
+                                ...s,
+                                ...(reminder.kind === "trial"
+                                  ? { trialExpiryReminderText: e.target.value || null }
+                                  : { subscriptionExpiryReminderText: e.target.value || null }),
+                              } : s)}
+                            />
+                            <p className="text-[11px] text-muted-foreground">
+                              Плейсхолдеры: <code>{`{{name}}`}</code> — название, <code>{`{{time}}`}</code> — оставшееся время. Пусто = стандартный текст.
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
                     <div className="rounded-2xl border border-emerald-500/20 bg-gradient-to-br from-emerald-500/5 via-teal-500/5 to-cyan-500/5 p-5 space-y-4">
                       <div className="flex items-center gap-2.5">
                         <div className="h-8 w-8 rounded-xl bg-emerald-500/20 flex items-center justify-center"><Megaphone className="h-4 w-4 text-emerald-500" /></div>
@@ -2736,7 +2841,7 @@ export function SettingsPage() {
                     <div className="h-8 w-8 rounded-xl bg-violet-500/20 flex items-center justify-center"><Network className="h-4 w-4 text-violet-500" /></div>
                     <h3 className="text-base font-semibold">3-уровневая реферальная сеть</h3>
                   </div>
-                  <p className="text-xs text-muted-foreground">Процент с каждого пополнения, который начисляется на баланс реферера. Уровень 1 — прямой реф; уровень 2 — реф вашего рефа; уровень 3 — реф второго уровня.</p>
+                  <p className="text-xs text-muted-foreground">Процент с каждой оплаты. 1-я линия — ваши прямые приглашения, 2-я — друзья друзей, 3-я — глубина сети. Максимальная суммарная выплата по одной оплате — сумма трёх процентов.</p>
                   <div className="grid gap-3 sm:grid-cols-3">
                     <div className="rounded-xl border border-violet-500/30 bg-card/40 p-4 space-y-2 relative overflow-hidden">
                       <div className="absolute -top-4 -right-4 w-16 h-16 rounded-full bg-gradient-to-br from-violet-500/20 to-violet-500/5 blur-xl" />
@@ -2750,7 +2855,7 @@ export function SettingsPage() {
                           min={0}
                           max={100}
                           className="text-2xl font-bold tabular-nums h-14"
-                          value={settings.defaultReferralPercent ?? 30}
+                          value={settings.defaultReferralPercent ?? 20}
                           onChange={(e) => setSettings((s) => (s ? { ...s, defaultReferralPercent: Number(e.target.value) || 0 } : s))}
                         />
                         <span className="text-2xl font-bold text-violet-500">%</span>
@@ -2786,7 +2891,7 @@ export function SettingsPage() {
                           min={0}
                           max={100}
                           className="text-2xl font-bold tabular-nums h-14"
-                          value={settings.referralPercentLevel3 ?? 10}
+                          value={settings.referralPercentLevel3 ?? 5}
                           onChange={(e) => setSettings((s) => (s ? { ...s, referralPercentLevel3: Number(e.target.value) || 0 } : s))}
                         />
                         <span className="text-2xl font-bold text-fuchsia-500">%</span>
@@ -3830,9 +3935,12 @@ export function SettingsPage() {
                     <Label>{t("admin.settings.ai_model")}</Label>
                     <select
                       className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                      value={settings.groqModel ?? "llama3-8b-8192"}
+                      value={settings.groqModel ?? "openai/gpt-oss-20b"}
                       onChange={(e) => setSettings((s) => (s ? { ...s, groqModel: e.target.value } : s))}
                     >
+                      <option value="openai/gpt-oss-20b">openai/gpt-oss-20b (рекомендуется)</option>
+                      <option value="openai/gpt-oss-120b">openai/gpt-oss-120b</option>
+                      <option value="qwen/qwen3.6-27b">qwen/qwen3.6-27b</option>
                       <option value="llama3-8b-8192">llama3-8b-8192</option>
                       <option value="llama3-70b-8192">llama3-70b-8192</option>
                       <option value="llama-3.1-8b-instant">llama-3.1-8b-instant</option>
@@ -3863,6 +3971,9 @@ export function SettingsPage() {
                       onChange={(e) => setSettings((s) => (s ? { ...s, groqFallback1: e.target.value || null } : s))}
                     >
                       <option value="">{t("admin.settings.ai_no_fallback")} 1</option>
+                      <option value="openai/gpt-oss-20b">openai/gpt-oss-20b</option>
+                      <option value="openai/gpt-oss-120b">openai/gpt-oss-120b</option>
+                      <option value="qwen/qwen3.6-27b">qwen/qwen3.6-27b</option>
                       <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
                       <option value="deepseek-r1-distill-llama-70b">deepseek-r1-distill-llama-70b</option>
                       <option value="deepseek-r1-distill-qwen-32b">deepseek-r1-distill-qwen-32b</option>
@@ -3880,6 +3991,9 @@ export function SettingsPage() {
                       onChange={(e) => setSettings((s) => (s ? { ...s, groqFallback2: e.target.value || null } : s))}
                     >
                       <option value="">{t("admin.settings.ai_no_fallback")} 2</option>
+                      <option value="openai/gpt-oss-20b">openai/gpt-oss-20b</option>
+                      <option value="openai/gpt-oss-120b">openai/gpt-oss-120b</option>
+                      <option value="qwen/qwen3.6-27b">qwen/qwen3.6-27b</option>
                       <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
                       <option value="deepseek-r1-distill-llama-70b">deepseek-r1-distill-llama-70b</option>
                       <option value="deepseek-r1-distill-qwen-32b">deepseek-r1-distill-qwen-32b</option>
@@ -3897,6 +4011,9 @@ export function SettingsPage() {
                       onChange={(e) => setSettings((s) => (s ? { ...s, groqFallback3: e.target.value || null } : s))}
                     >
                       <option value="">{t("admin.settings.ai_no_fallback")} 3</option>
+                      <option value="openai/gpt-oss-20b">openai/gpt-oss-20b</option>
+                      <option value="openai/gpt-oss-120b">openai/gpt-oss-120b</option>
+                      <option value="qwen/qwen3.6-27b">qwen/qwen3.6-27b</option>
                       <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
                       <option value="deepseek-r1-distill-llama-70b">deepseek-r1-distill-llama-70b</option>
                       <option value="deepseek-r1-distill-qwen-32b">deepseek-r1-distill-qwen-32b</option>
@@ -4114,6 +4231,18 @@ export function SettingsPage() {
                   <div className="flex-1">
                     <span className="text-sm font-medium">{t("admin.settings.skip_email")}</span>
                     <p className="text-[11px] text-muted-foreground mt-0.5">{t("admin.settings.smtp_no_confirm_hint")}</p>
+                  </div>
+                </label>
+                <label className="flex items-center gap-3 p-3.5 rounded-xl bg-card/40 border border-white/5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={settings.onboarding2faEnabled !== false}
+                    onChange={(e) => setSettings((s) => (s ? { ...s, onboarding2faEnabled: e.target.checked } : s))}
+                    className="rounded border w-4 h-4"
+                  />
+                  <div className="flex-1">
+                    <span className="text-sm font-medium">Предлагать 2FA при регистрации</span>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">Если выключено, шаг 2FA пропускается. Пользователь сможет включить защиту позже в профиле.</p>
                   </div>
                 </label>
                 <label className="flex items-center gap-3 p-3.5 rounded-xl bg-card/40 border border-white/5 cursor-pointer">

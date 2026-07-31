@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, RefreshCw, Activity, Clock, FileText, ShieldOff, Play, CheckCircle2, AlertTriangle, XCircle, MinusCircle } from "lucide-react";
-import { diagnosticsApi, adminSecurityApi, type HealthResponse, type CronEntry, type CompositeSubscriptionMetrics } from "@/lib/admin-extras-api";
+import { diagnosticsApi, adminSecurityApi, type HealthResponse, type CronEntry } from "@/lib/admin-extras-api";
 import { fmtMsk } from "@/lib/datetime";
 
 const STATUS_META = {
@@ -27,11 +27,11 @@ export function AdminDiagnosticsPage() {
 
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [crons, setCrons] = useState<CronEntry[]>([]);
-  const [composite, setComposite] = useState<CompositeSubscriptionMetrics | null>(null);
+  const [squadTraffic, setSquadTraffic] = useState<{ state: { lastSucceededAt: string | null; durationMs: number | null; changedCount: number; lastError: string | null; observeOnly: boolean } | null; quotas: { active: number; exhausted: number; configErrors: number } } | null>(null);
   const [logs, setLogs] = useState("");
   const [logsFilter, setLogsFilter] = useState("");
   const [logsLines, setLogsLines] = useState(200);
-  const [loading, setLoading] = useState({ health: false, crons: false, composite: false, logs: false });
+  const [loading, setLoading] = useState({ health: false, crons: false, logs: false });
   const [triggeringCron, setTriggeringCron] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -74,19 +74,18 @@ export function AdminDiagnosticsPage() {
     }
   }, [token, logsLines, logsFilter]);
 
-  const loadComposite = useCallback(async () => {
+  const loadSquadTraffic = useCallback(async () => {
     if (!token) return;
-    setLoading((l) => ({ ...l, composite: true }));
     try {
-      setComposite(await diagnosticsApi.compositeSubscriptions(token));
+      const response = await fetch("/api/admin/diagnostics/squad-traffic", { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) throw new Error(`Diagnostics request failed: ${response.status}`);
+      setSquadTraffic(await response.json());
     } catch (e) {
       setError(String(e));
-    } finally {
-      setLoading((l) => ({ ...l, composite: false }));
     }
   }, [token]);
 
-  useEffect(() => { void loadHealth(); void loadCrons(); void loadComposite(); }, [loadHealth, loadCrons, loadComposite]);
+  useEffect(() => { void loadHealth(); void loadCrons(); void loadSquadTraffic(); }, [loadHealth, loadCrons, loadSquadTraffic]);
 
   const triggerCron = async (name: string) => {
     if (!token) return;
@@ -185,32 +184,14 @@ export function AdminDiagnosticsPage() {
       <Card className="bg-background/60 backdrop-blur-3xl border-white/10 rounded-[2rem] shadow-xl">
         <CardContent className="p-4">
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-              <Activity className="h-4 w-4" /> Составные подписки
-            </h2>
-            <Button onClick={loadComposite} variant="ghost" size="sm" disabled={loading.composite} className="gap-1">
-              {loading.composite ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-            </Button>
+            <h2 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Squad traffic accounting</h2>
+            <Button onClick={loadSquadTraffic} variant="ghost" size="sm"><RefreshCw className="h-3.5 w-3.5" /></Button>
           </div>
-          {composite ? (
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              {[
-                ["Запросы", composite.requests.requests],
-                ["Fallback", composite.requests.degraded],
-                ["Ошибка Main", composite.requests.requiredFailures],
-                ["Ожидают sync", composite.synchronization.pending + composite.synchronization.errors],
-                ["Средняя задержка", `${composite.requests.upstreamLatencyMs.average} мс`],
-                ["Макс. задержка", `${composite.requests.upstreamLatencyMs.max} мс`],
-                ["Base64", composite.requests.formats.base64 ?? 0],
-                ["JSON", composite.requests.formats.json ?? 0],
-              ].map(([label, value]) => (
-                <div key={label} className="rounded-xl border border-white/10 bg-foreground/[0.03] p-3">
-                  <div className="text-[11px] text-muted-foreground">{label}</div>
-                  <div className="mt-1 text-xl font-bold">{value}</div>
-                </div>
-              ))}
-            </div>
-          ) : <div className="flex h-20 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}
+          {squadTraffic ? <div className="grid gap-2 text-sm md:grid-cols-4">
+            <div>Active: <b>{squadTraffic.quotas.active}</b></div><div>Exhausted: <b>{squadTraffic.quotas.exhausted}</b></div><div>Config errors: <b>{squadTraffic.quotas.configErrors}</b></div>
+            <div>{squadTraffic.state?.observeOnly ? "Observe-only" : "Enforcement enabled"} · changed: <b>{squadTraffic.state?.changedCount ?? 0}</b></div>
+          </div> : <div className="text-sm text-muted-foreground">Loading worker diagnostics…</div>}
+          {squadTraffic?.state?.lastError ? <div className="mt-2 text-xs text-red-500">{squadTraffic.state.lastError}</div> : null}
         </CardContent>
       </Card>
 

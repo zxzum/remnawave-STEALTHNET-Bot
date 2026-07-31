@@ -1,0 +1,247 @@
+{
+  "dns": {
+    "servers": [
+      "https://77.88.8.8/dns-query",
+      "https://8.8.8.8/dns-query"
+    ],
+    "queryStrategy": "UseIP"
+  },
+  "log": {
+    "loglevel": "warning"
+  },
+  "routing": {
+    "domainMatcher": "hybrid",
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "protocol": [
+          "bittorrent"
+        ],
+        "outboundTag": "block"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "domain:vk.com",
+          "domain:vk.ru",
+          "domain:vkuseraudio.net",
+          "domain:vkusercdn.ru",
+          "domain:userapi.com",
+          "domain:mail.ru",
+          "domain:imgsmail.ru",
+          "domain:mrgcdn.ru",
+          "domain:mycdn.me",
+          "domain:ok.ru",
+          "domain:odnoklassniki.ru",
+          "domain:gosuslugi.ru",
+          "domain:nalog.ru",
+          "domain:mos.ru",
+          "domain:mosreg.ru",
+          "domain:ozon.ru",
+          "domain:o3.ru",
+          "domain:ozonusercontent.com",
+          "domain:wildberries.ru",
+          "domain:wb.ru",
+          "domain:wbbasket.ru",
+          "domain:wbstatic.net",
+          "domain:yandex.ru",
+          "domain:yandex.net",
+          "domain:yastatic.net",
+          "domain:yandexcloud.net",
+          "domain:dzen.ru",
+          "domain:avito.ru",
+          "domain:avito.st",
+          "domain:2gis.ru",
+          "domain:2gis.com",
+          "domain:rutube.ru",
+          "domain:sber.ru",
+          "domain:sberbank.ru",
+          "domain:tbank.ru",
+          "domain:tinkoff.ru",
+          "domain:alfabank.ru",
+          "domain:vtb.ru",
+          "domain:gazprombank.ru",
+          "domain:mts.ru",
+          "domain:beeline.ru",
+          "domain:megafon.ru",
+          "domain:tele2.ru"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "ip": [
+          "10.0.0.0/8",
+          "100.64.0.0/10",
+          "127.0.0.0/8",
+          "169.254.0.0/16",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "224.0.0.0/3",
+          "::1/128",
+          "fc00::/7",
+          "fe80::/10"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "wl-fallback-route"
+        ],
+        "balancerTag": "whitelist-balancer"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "socks",
+          "http"
+        ],
+        "balancerTag": "auto-wl"
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "auto-wl"
+      }
+    ],
+    "balancers": [
+      {
+        "tag": "auto-wl",
+        "selector": [
+          "eu"
+        ],
+        "strategy": {
+          "type": "leastLoad",
+          "settings": {
+            "maxRTT": "3s",
+            "expected": 2,
+            "baselines": [
+              "1500ms"
+            ],
+            "tolerance": 0.05
+          }
+        },
+        "fallbackTag": "wl-fallback-loop"
+      },
+      {
+        "tag": "whitelist-balancer",
+        "selector": [
+          "wl"
+        ],
+        "strategy": {
+          "type": "leastLoad",
+          "settings": {
+            "maxRTT": "5s",
+            "expected": 1,
+            "baselines": [
+              "2000ms"
+            ],
+            "tolerance": 0.1
+          }
+        },
+        "fallbackTag": "block"
+      }
+    ]
+  },
+  "inbounds": [
+    {
+      "tag": "socks",
+      "port": 10808,
+      "listen": "127.0.0.1",
+      "protocol": "socks",
+      "settings": {
+        "udp": true,
+        "auth": "noauth"
+      },
+      "sniffing": {
+        "enabled": true,
+        "routeOnly": false,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    },
+    {
+      "tag": "http",
+      "port": 10809,
+      "listen": "127.0.0.1",
+      "protocol": "http",
+      "settings": {
+        "allowTransparent": false
+      },
+      "sniffing": {
+        "enabled": true,
+        "routeOnly": false,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole"
+    },
+    {
+      "tag": "wl-fallback-loop",
+      "protocol": "loopback",
+      "settings": {
+        "inboundTag": "wl-fallback-route"
+      }
+    }
+  ],
+  "remnawave": {
+    "injectHosts": [
+      {
+        "selector": {
+          "type": "uuids",
+          "values": [
+            "9aa00562-8035-484b-b928-db0eb957e208",
+            "17669559-66de-433c-9144-648a971858f8",
+            "86e47bfd-99db-4add-8ba4-fdd1ff250012",
+            "5406fbe8-d73d-4921-87bb-373345997761"
+          ]
+        },
+        "tagPrefix": "eu",
+        "selectFrom": "ALL"
+      },
+      {
+        "selector": {
+          "type": "uuids",
+          "values": [
+            "b0f8cf1c-5aef-48ec-b7a1-591b94844a99",
+            "81f6e4ca-cc0c-467a-8ad4-7df1ddc8a242"
+          ]
+        },
+        "tagPrefix": "wl",
+        "selectFrom": "ALL"
+      }
+    ],
+    "addVirtualHostAsOutbound": false
+  },
+  "burstObservatory": {
+    "pingConfig": {
+      "timeout": "5s",
+      "interval": "1m",
+      "sampling": 1,
+      "httpMethod": "HEAD",
+      "destination": "https://connectivitycheck.gstatic.com/generate_204",
+      "connectivity": ""
+    },
+    "subjectSelector": [
+      "eu",
+      "wl"
+    ]
+  }
+}

@@ -12,77 +12,7 @@
  * остаётся, у неё tariffId=null. Следующая покупка продлевает её — снова главная.
  */
 
-import { randomBytes } from "node:crypto";
 import { prisma } from "../../db.js";
-
-export interface ResolvedRemnawaveComponent {
-  id: string;
-  subscriptionId: string;
-  key: string;
-  adminName: string;
-  required: boolean;
-  mergeOrder: number;
-  remnawaveUuid: string | null;
-  upstreamShortUuid: string | null;
-  internalSquadUuids: string[];
-  trafficLimitBytes: bigint | null;
-  trafficResetMode: string;
-  showQuotaToClient: boolean;
-  quotaDisplayName: string | null;
-  lastKnownStatus?: string | null;
-}
-
-export function generatePublicSubscriptionToken(): string {
-  return randomBytes(32).toString("base64url");
-}
-
-export function buildPublicSubscriptionUrl(baseUrl: string, token: string): string {
-  return new URL(`/api/sub/${encodeURIComponent(token)}`, baseUrl).toString();
-}
-
-export function resolvePublicSubscriptionBaseUrl(
-  configuredUrl: string | null | undefined,
-  requestOrigin?: string,
-): string | null {
-  const value = configuredUrl?.trim() || requestOrigin?.trim();
-  return value ? value.replace(/\/+$/, "") : null;
-}
-
-/**
- * Возвращает единый список Remnawave-компонентов. Пока backfill не завершён,
- * существующий Subscription.remnawaveUuid представляется обязательным компонентом.
- */
-export function resolveRemnawaveComponents(subscription: {
-  id: string;
-  remnawaveUuid: string | null;
-  components?: ResolvedRemnawaveComponent[];
-}): ResolvedRemnawaveComponent[] {
-  if (subscription.components?.length) {
-    return subscription.components
-      .filter((component) => component.lastKnownStatus !== "REMOVING")
-      .map((component) => component.required && !component.remnawaveUuid && subscription.remnawaveUuid
-        ? { ...component, remnawaveUuid: subscription.remnawaveUuid }
-        : component)
-      .sort((a, b) => a.mergeOrder - b.mergeOrder);
-  }
-  if (!subscription.remnawaveUuid) return [];
-
-  return [{
-    id: `legacy:${subscription.id}`,
-    subscriptionId: subscription.id,
-    key: "primary",
-    adminName: "Основной",
-    required: true,
-    mergeOrder: 0,
-    remnawaveUuid: subscription.remnawaveUuid,
-    upstreamShortUuid: null,
-    internalSquadUuids: [],
-    trafficLimitBytes: null,
-    trafficResetMode: "no_reset",
-    showQuotaToClient: false,
-    quotaDisplayName: null,
-  }];
-}
 
 export type SubscriptionWithRelations = Awaited<ReturnType<typeof getPrimarySubscription>>;
 
@@ -96,7 +26,6 @@ export async function getPrimarySubscription(clientId: string) {
     include: {
       tariff: { select: { id: true, name: true, menuEmoji: true, durationDays: true, trafficLimitBytes: true, deviceLimit: true, includedDevices: true, pricePerExtraDevice: true, maxExtraDevices: true, deviceDiscountTiers: true, internalSquadUuids: true, trafficResetMode: true, price: true, currency: true } },
       autoRenewTariff: { select: { id: true, name: true } },
-      components: { orderBy: { mergeOrder: "asc" } },
     },
   });
 }
@@ -111,7 +40,6 @@ export async function getAllClientSubscriptions(clientId: string) {
     orderBy: { subscriptionIndex: "asc" },
     include: {
       tariff: { select: { id: true, name: true, menuEmoji: true, trafficLimitBytes: true, price: true, currency: true } },
-      components: { orderBy: { mergeOrder: "asc" } },
     },
   });
 }
@@ -175,26 +103,10 @@ export async function getPrimaryRemnawaveUuid(clientId: string): Promise<string 
 export async function findSubscriptionByRemnawaveUuid(uuid: string) {
   return prisma.subscription.findFirst({
     where: {
-      OR: [
-        { remnawaveUuid: uuid },
-        { components: { some: { remnawaveUuid: uuid } } },
-      ],
+      remnawaveUuid: uuid,
     },
     include: {
       tariff: true,
-      components: { orderBy: { mergeOrder: "asc" } },
-    },
-  });
-}
-
-export async function getSubscriptionByPublicToken(token: string) {
-  return prisma.subscription.findUnique({
-    where: { publicSubscriptionToken: token },
-    include: {
-      owner: true,
-      tariff: true,
-      trial: true,
-      components: { orderBy: { mergeOrder: "asc" } },
     },
   });
 }

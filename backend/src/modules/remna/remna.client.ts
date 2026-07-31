@@ -78,60 +78,7 @@ export async function remnaFetch<T>(
   }
 }
 
-export type RemnaSubscriptionFetchResult = {
-  status: number;
-  body?: string;
-  headers?: Record<string, string>;
-  error?: string;
-};
-
-/**
- * Загружает публичную подписку Remnawave от имени VPN-клиента.
- * Admin Authorization/Cookie намеренно не используются: upstream должен увидеть
- * тот же User-Agent/HWID, который пришёл на публичную ссылку STEALTHNET.
- */
-export async function remnaFetchSubscription(
-  rawUrl: string,
-  clientHeaders: Record<string, string>,
-): Promise<RemnaSubscriptionFetchResult> {
-  let url: URL;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    return { status: 400, error: "Invalid subscription URL" };
-  }
-  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) {
-    return { status: 400, error: "Unsupported subscription URL protocol" };
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12_000);
-  try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: clientHeaders,
-      redirect: "follow",
-      signal: controller.signal,
-    });
-    const body = await response.text();
-    const headers = Object.fromEntries(response.headers.entries());
-    if (!response.ok) {
-      return {
-        status: response.status,
-        headers,
-        error: body.slice(0, 300) || response.statusText || "Subscription upstream error",
-      };
-    }
-    return { status: response.status, body, headers };
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      return { status: 504, error: "Remna subscription timeout" };
-    }
-    return { status: 502, error: error instanceof Error ? error.message : String(error) };
-  } finally {
-    clearTimeout(timer);
-  }
-}
+export type Result<T> = { data?: T; error?: string; status: number };
 
 /** GET /api/users — пагинация Remna: size и start (offset) */
 export function remnaGetUsers(params?: { page?: number; limit?: number; start?: number; size?: number }) {
@@ -196,29 +143,31 @@ export function remnaUsernameFromClient(opts: {
   telegramId?: string | null;
   email?: string | null;
   clientIdFallback?: string;
+  subscriptionIndex?: number;
 }): string {
   const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 36);
-  if (opts.telegramUsername?.trim()) {
-    const u = sanitize(opts.telegramUsername.trim());
-    if (u.length >= 3) return u;
-  }
+  let base = "";
   if (opts.telegramId?.trim()) {
-    const t = "tg" + opts.telegramId.trim().replace(/\D/g, "");
-    if (t.length >= 3) return t.slice(0, 36);
+    const digits = opts.telegramId.trim().replace(/\D/g, "");
+    if (digits) base = `tg${digits}`;
   }
-  if (opts.email?.trim()) {
+  if (!base && opts.telegramUsername?.trim()) {
+    const u = sanitize(opts.telegramUsername.trim());
+    if (u.length >= 3) base = u;
+  }
+  if (!base && opts.email?.trim()) {
     const local = opts.email.split("@")[0]?.trim();
     if (local) {
       const e = sanitize(local);
-      if (e.length >= 3) return e;
+      if (e.length >= 3) base = e;
     }
-    const full = sanitize(opts.email.trim());
-    if (full.length >= 3) return full;
+    if (!base) base = sanitize(opts.email.trim());
   }
-  const fallback = opts.clientIdFallback
+  if (!base) base = opts.clientIdFallback
     ? "user" + opts.clientIdFallback.slice(-8).replace(/[^a-zA-Z0-9_-]/g, "0")
     : "user" + Date.now().toString(36);
-  const out = sanitize(fallback);
+  const suffix = opts.subscriptionIndex && opts.subscriptionIndex > 0 ? `-${opts.subscriptionIndex + 1}` : "";
+  const out = sanitize(base).slice(0, 36 - suffix.length) + suffix;
   return out.length >= 3 ? out : "u_" + out.slice(0, 34);
 }
 
@@ -466,6 +415,54 @@ export function remnaGetNodeUsersUsage(nodeUuid: string, start: string, end: str
       topUsers: { color: string; username: string; total: number }[];
     };
   }>(`/api/bandwidth-stats/nodes/${nodeUuid}/users?${params}`);
+}
+
+type RemnaBulkUserUsage = { username: string; total: number };
+type RemnaBulkNodeUsage = { topUsers: RemnaBulkUserUsage[] };
+
+function malformedBulkUsageResponse(): Result<RemnaBulkNodeUsage> {
+  return { error: "Malformed Remna bulk node usage response", status: 502 };
+}
+
+function parseBulkNodeUsage(data: unknown): Result<RemnaBulkNodeUsage> {
+  if (!data || typeof data !== "object") return malformedBulkUsageResponse();
+  const response = (data as { response?: unknown }).response;
+  if (!response || typeof response !== "object") return malformedBulkUsageResponse();
+  const topUsers = (response as { topUsers?: unknown }).topUsers;
+  if (!Array.isArray(topUsers)) return malformedBulkUsageResponse();
+
+  const parsed: RemnaBulkUserUsage[] = [];
+  for (const entry of topUsers) {
+    if (!entry || typeof entry !== "object") return malformedBulkUsageResponse();
+    const { username, total } = entry as { username?: unknown; total?: unknown };
+    if (typeof username !== "string") return malformedBulkUsageResponse();
+    if (typeof total !== "number") return malformedBulkUsageResponse();
+    if (!Number.isSafeInteger(total) || total < 0) {
+      return { error: "Invalid total in Remna bulk node usage response", status: 502 };
+    }
+    parsed.push({ username, total });
+  }
+
+  return { data: { topUsers: parsed }, status: 200 };
+}
+
+/** POST /api/bandwidth-stats/nodes/users — aggregated top-user usage for nodes by UTC range. */
+export async function remnaGetNodesUsersUsage(
+  nodesUuids: string[],
+  start: string,
+  end: string,
+  topUsersLimit: number,
+): Promise<Result<RemnaBulkNodeUsage>> {
+  const query = new URLSearchParams({ start, end, topUsersLimit: String(topUsersLimit) });
+  const result = await remnaFetch<unknown>(`/api/bandwidth-stats/nodes/users?${query}`, {
+    method: "POST",
+    body: JSON.stringify({ nodesUuids }),
+  });
+  if (result.error) return { error: result.error, status: result.status };
+  if (result.data === undefined) return malformedBulkUsageResponse();
+
+  const parsed = parseBulkNodeUsage(result.data);
+  return parsed.error ? parsed : { data: parsed.data, status: result.status };
 }
 
 /** GET /api/bandwidth-stats/nodes/realtime — realtime usage per node (removed in API 2.7.2, kept for compat) */
@@ -796,6 +793,41 @@ export function remnaDeleteAllUserDevices(userUuid: string) {
 /** сквады: доступные ноды + добавить/убрать юзеров */
 export function remnaGetSquadAccessibleNodes(uuid: string) {
   return remnaFetch<{ response?: unknown }>(`/api/internal-squads/${uuid}/accessible-nodes`);
+}
+
+function parseAccessibleNodeUuids(data: unknown): Result<string[]> {
+  if (!data || typeof data !== "object") {
+    return { error: "Malformed Remna accessible nodes response", status: 502 };
+  }
+  const response = (data as { response?: unknown }).response;
+  const nodes = Array.isArray(response)
+    ? response
+    : response && typeof response === "object"
+      ? Array.isArray((response as { accessibleNodes?: unknown }).accessibleNodes)
+        ? (response as { accessibleNodes: unknown[] }).accessibleNodes
+        : Array.isArray((response as { nodes?: unknown }).nodes)
+          ? (response as { nodes: unknown[] }).nodes
+          : null
+      : null;
+  if (!nodes) return { error: "Malformed Remna accessible nodes response", status: 502 };
+
+  const uuids = [...new Set(nodes.flatMap((node) => (
+    node && typeof node === "object" && typeof (node as { uuid?: unknown }).uuid === "string"
+      ? [(node as { uuid: string }).uuid]
+      : []
+  )))].sort();
+  if (uuids.length === 0) return { error: "No accessible nodes configured for squad", status: 422 };
+  return { data: uuids, status: 200 };
+}
+
+/** Fetches, normalizes, and verifies the accessible nodes for one internal squad. */
+export async function remnaGetSquadAccessibleNodeUuids(squadUuid: string): Promise<Result<string[]>> {
+  const result = await remnaGetSquadAccessibleNodes(squadUuid);
+  if (result.error) return { error: result.error, status: result.status };
+  if (result.data === undefined) return { error: "Malformed Remna accessible nodes response", status: 502 };
+
+  const parsed = parseAccessibleNodeUuids(result.data);
+  return parsed.error ? parsed : { data: parsed.data, status: result.status };
 }
 export function remnaSquadAddUsers(uuid: string) {
   return remnaFetch(`/api/internal-squads/${uuid}/bulk-actions/add-users`, { method: "POST", body: JSON.stringify({}) });

@@ -7,11 +7,43 @@ import { prisma } from "../../db.js";
 import { getSystemConfig } from "../client/client.service.js";
 import { proxyFetch } from "../proxy-util/proxy-fetch.js";
 import { getProxyUrl } from "../proxy-util/get-proxy-url.js";
-import { buildPublicSubscriptionUrl } from "../subscription/subscription.helpers.js";
+import { remnaGetUser } from "../remna/remna.client.js";
+import { extractRemnaSubscriptionUrl } from "../subscription/subscription-url.js";
+import { readFile } from "node:fs/promises";
 
 /** Inline keyboard with a single "Back to menu" button for client notifications. */
 function backToMenuMarkup(backLabel?: string | null): Record<string, unknown> {
   return { inline_keyboard: [[{ text: backLabel || "◀️ В меню", callback_data: "menu:main" }]] };
+}
+
+export function subscriptionExpiryMarkup(label: string, callbackData = "menu:tariffs"): Record<string, unknown> {
+  return {
+    inline_keyboard: [
+      [{ text: label, callback_data: callbackData }],
+      [{ text: "◀️ В меню", callback_data: "menu:main" }],
+    ],
+  };
+}
+
+export const SUBSCRIPTION_UPDATE_TEXT =
+  "Откройте HAPP или INCY и обновите подписку: нажмите кнопку ↻ рядом с её названием. Ссылка останется прежней.";
+
+async function sendSubscriptionUpdateGuides(telegramId: string, token: string): Promise<void> {
+  try {
+    const form = new FormData();
+    form.append("chat_id", telegramId);
+    form.append("media", JSON.stringify([
+      { type: "photo", media: "attach://happ", caption: "HAPP: нажмите кнопку обновления ↻ рядом с подпиской." },
+      { type: "photo", media: "attach://incy", caption: "INCY: нажмите кнопку обновления ↻ рядом с подпиской." },
+    ]));
+    form.append("happ", new Blob([await readFile(new URL("../../assets/guides/happ-how-to-update.png", import.meta.url))], { type: "image/png" }), "happ-how-to-update.png");
+    form.append("incy", new Blob([await readFile(new URL("../../assets/guides/incy-how-to-update.png", import.meta.url))], { type: "image/png" }), "incy-how-to-update.png");
+    const proxy = await getProxyUrl("telegram");
+    const res = await proxyFetch(`https://api.telegram.org/bot${token}/sendMediaGroup`, { method: "POST", body: form }, proxy);
+    if (!res.ok) console.warn("[Telegram notify] sendMediaGroup failed", await res.text().catch(() => res.statusText));
+  } catch (e) {
+    console.warn("[Telegram notify] update guides failed", e);
+  }
 }
 
 type AdminNotificationEventType =
@@ -323,18 +355,17 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
     // после успешной оплаты — выдаём ту же UX что после триала:
     // ссылка подписки + кнопки «📲 Инструкции по установке» и «🌐 Локации» (если есть).
     let subscriptionUrl: string | null = null;
-    let publicSubscriptionToken: string | null = null;
     if (payment?.subscriptionId) {
       const sub = await prisma.subscription.findUnique({
         where: { id: payment.subscriptionId },
-        select: { publicSubscriptionToken: true },
+        select: { remnawaveUuid: true },
       });
-      publicSubscriptionToken = sub?.publicSubscriptionToken ?? null;
+      if (sub?.remnawaveUuid) {
+        const result = await remnaGetUser(sub.remnawaveUuid);
+        subscriptionUrl = extractRemnaSubscriptionUrl(result.data);
+      }
     }
     const cfg = await getSystemConfig();
-    if (publicSubscriptionToken && cfg.publicAppUrl) {
-      subscriptionUrl = buildPublicSubscriptionUrl(cfg.publicAppUrl, publicSubscriptionToken);
-    }
     // подсказка «если инструкция не открылась»
     // (платная/админская подписка). Текст из настроек (Тексты бота) или дефолт.
     const instrFallback = ((cfg as { botInstructionFallbackText?: string | null }).botInstructionFallbackText ?? "").trim()
@@ -350,7 +381,8 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
     const noteBlock = (isAdminGrant && adminNote)
       ? `\n\n💬 <i>${escapeHtml(adminNote)}</i>`
       : "";
-    const textClient = `${headline}.${noteBlock}${linkBlock}`;
+    const updateBlock = isAdminGrant ? "" : `\n\n${SUBSCRIPTION_UPDATE_TEXT}`;
+    const textClient = `${headline}.${noteBlock}${linkBlock}${updateBlock}`;
     const hasLocations = !!(payment?.tariff?.locations?.trim());
     type Row = ({ text: string; callback_data: string } | { text: string; url: string })[];
     const rows: Row[] = [];
@@ -363,6 +395,8 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
     await sendTelegramToUser(client.telegramId, textClient, null, { inline_keyboard: rows }, {
       clientIdForBotToken: clientId,
     });
+    const botToken = cfg.telegramBotToken?.trim();
+    if (!isAdminGrant && botToken) await sendSubscriptionUpdateGuides(client.telegramId, botToken);
   }
   const clientLabel = formatClientLabel(client);
   const lines = [
@@ -683,6 +717,52 @@ export async function notifyAdminsAboutTrialActivated(clientId: string, trialNam
   lines.push(`📅 Срок: ${durationDays} дн.`);
   lines.push(`🕐 ${formatDate(new Date())}`);
   await sendTelegramToAdminsForEvent("trial_activated", lines.join("\n"));
+}
+
+/** Напоминание клиенту незадолго до окончания пробного периода. */
+export const DEFAULT_TRIAL_EXPIRY_TEXT =
+  "⏳ <b>Пробный период скоро закончится</b>\n\nТриал «{{name}}» закончится примерно через <b>{{time}}</b>.\nВыберите тариф, чтобы сохранить доступ к VPN.";
+export const DEFAULT_SUBSCRIPTION_EXPIRY_TEXT =
+  "⏳ <b>Подписка скоро закончится</b>\n\nТариф «{{name}}» закончится примерно через <b>{{time}}</b>.\nПродлите подписку, чтобы сохранить доступ к VPN.";
+
+export function renderExpiryReminderText(template: string, name: string, minutesLeft: number): string {
+  const hours = minutesLeft / 60;
+  const time = minutesLeft >= 60
+    ? `${Number.isInteger(hours) ? hours : Number(hours.toFixed(1))} ч.`
+    : `${minutesLeft} мин.`;
+  return template.replaceAll("{{name}}", escapeHtml(name)).replaceAll("{{time}}", time);
+}
+
+export async function notifyTrialExpiry(
+  telegramId: string,
+  trialName: string,
+  minutesLeft: number,
+  text = DEFAULT_TRIAL_EXPIRY_TEXT,
+  buttonText = "💳 Выбрать тариф",
+): Promise<void> {
+  await sendTelegramToUser(
+    telegramId,
+    renderExpiryReminderText(text, trialName, minutesLeft),
+    undefined,
+    subscriptionExpiryMarkup(buttonText),
+  );
+}
+
+/** Напоминание клиенту незадолго до окончания оплаченной подписки. */
+export async function notifySubscriptionExpiry(
+  telegramId: string,
+  subscriptionId: string,
+  tariffName: string,
+  minutesLeft: number,
+  text = DEFAULT_SUBSCRIPTION_EXPIRY_TEXT,
+  buttonText = "💳 Продлить подписку",
+): Promise<void> {
+  await sendTelegramToUser(
+    telegramId,
+    renderExpiryReminderText(text, tariffName, minutesLeft),
+    undefined,
+    subscriptionExpiryMarkup(buttonText, `pay_tariff_ext:${subscriptionId}`),
+  );
 }
 
 /**

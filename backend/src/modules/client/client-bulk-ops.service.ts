@@ -14,8 +14,6 @@ import { prisma } from "../../db.js";
 import {
   remnaGetUser,
   remnaUpdateUser,
-  remnaDisableUser,
-  remnaEnableUser,
   remnaResetUserTraffic,
   remnaGetUserByTelegramId,
   remnaCreateUser,
@@ -24,11 +22,14 @@ import {
   isRemnaConfigured,
 } from "../remna/remna.client.js";
 import {
-  deleteSubscriptionComponents,
-  runSubscriptionComponentOperation,
-  revokeSubscriptionComponents,
-  synchronizeSubscriptionComponents,
-} from "../subscription/subscription-components.service.js";
+  deleteSingleSubscription,
+  disableSingleSubscription,
+  enableSingleSubscription,
+  revokeSingleSubscription,
+  runSingleSubscriptionOperation,
+  type SingleSubscriptionOperationResult,
+} from "../subscription/single-subscription-lifecycle.service.js";
+import { remnaTrafficSettings } from "../squad-traffic/traffic-remna-policy.js";
 
 export type BulkOpItem = {
   subscriptionId: string;
@@ -59,12 +60,9 @@ function pushItem(report: BulkOpReport, item: BulkOpItem) {
 async function applyToSubscription(
   report: BulkOpReport,
   sub: { id: string; subscriptionIndex: number; remnawaveUuid: string | null },
-  operation: (uuid: string) => Promise<{ error?: string }>,
+  operation: (subscriptionId: string) => Promise<SingleSubscriptionOperationResult>,
 ) {
-  const result = await runSubscriptionComponentOperation(sub.id, async ({ remnawaveUuid }) => {
-    const response = await operation(remnawaveUuid);
-    if (response.error) throw new Error(response.error);
-  });
+  const result = await operation(sub.id);
   pushItem(report, {
     subscriptionId: sub.id,
     subscriptionIndex: sub.subscriptionIndex,
@@ -84,7 +82,9 @@ async function fetchSubscriptions(clientId: string) {
       remnawaveUuid: true,
       tariffId: true,
       autoRenewEnabled: true,
-      tariff: { select: { internalSquadUuids: true, trafficLimitBytes: true, deviceLimit: true, includedDevices: true, durationDays: true } },
+      expireAt: true,
+      extraDevices: true,
+      tariff: { select: { internalSquadUuids: true, trafficLimitBytes: true, trafficResetMode: true, includedDevices: true, durationDays: true } },
     },
   });
 }
@@ -109,7 +109,7 @@ export async function disableClient(clientId: string): Promise<BulkOpReport & { 
       pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "skipped", message: "Remna not configured" });
       continue;
     }
-    await applyToSubscription(report, sub, remnaDisableUser);
+    await applyToSubscription(report, sub, disableSingleSubscription);
   }
   return { ...report, clientBlocked: true, autoRenewDisabled: arResult.count };
 }
@@ -135,17 +135,11 @@ export async function enableClient(clientId: string): Promise<BulkOpReport & { c
       pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "skipped", message: "Remna not configured" });
       continue;
     }
-    // Проверяем не истёкшая ли подписка — истёкшие не реактивируем.
-    const userRes = await remnaGetUser(sub.remnawaveUuid);
-    const data = userRes.data as Record<string, unknown> | undefined;
-    const resp = (data?.response ?? data) as Record<string, unknown> | undefined;
-    const expireRaw = typeof resp?.expireAt === "string" ? resp.expireAt : null;
-    const expireAt = expireRaw ? new Date(expireRaw) : null;
-    if (expireAt && expireAt.getTime() <= Date.now()) {
+    if (sub.expireAt && sub.expireAt.getTime() <= Date.now()) {
       pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "skipped", message: "expired — оставляем disabled" });
       continue;
     }
-    await applyToSubscription(report, sub, remnaEnableUser);
+    await applyToSubscription(report, sub, enableSingleSubscription);
   }
   return { ...report, clientUnblocked: true };
 }
@@ -155,7 +149,7 @@ export async function disableAllSubscriptionsInRemna(clientId: string): Promise<
   const report = newReport();
   const subs = await fetchSubscriptions(clientId);
   for (const sub of subs) {
-    await applyToSubscription(report, sub, remnaDisableUser);
+    await applyToSubscription(report, sub, disableSingleSubscription);
   }
   return report;
 }
@@ -164,7 +158,7 @@ export async function enableAllSubscriptionsInRemna(clientId: string): Promise<B
   const report = newReport();
   const subs = await fetchSubscriptions(clientId);
   for (const sub of subs) {
-    await applyToSubscription(report, sub, remnaEnableUser);
+    await applyToSubscription(report, sub, enableSingleSubscription);
   }
   return report;
 }
@@ -174,7 +168,8 @@ export async function resetAllSubscriptionsTraffic(clientId: string): Promise<Bu
   const report = newReport();
   const subs = await fetchSubscriptions(clientId);
   for (const sub of subs) {
-    await applyToSubscription(report, sub, remnaResetUserTraffic);
+    await applyToSubscription(report, sub, (subscriptionId) =>
+      runSingleSubscriptionOperation(subscriptionId, remnaResetUserTraffic));
   }
   return report;
 }
@@ -184,7 +179,7 @@ export async function revokeAllSubscriptionsUrls(clientId: string): Promise<Bulk
   const report = newReport();
   const subs = await fetchSubscriptions(clientId);
   for (const sub of subs) {
-    const result = await revokeSubscriptionComponents(sub.id);
+    const result = await revokeSingleSubscription(sub.id);
     pushItem(report, {
       subscriptionId: sub.id,
       subscriptionIndex: sub.subscriptionIndex,
@@ -215,7 +210,14 @@ export async function syncAllSubscriptionsToRemna(clientId: string): Promise<Bul
       pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "skipped", message: "нет тарифа — нечего пушить" });
       continue;
     }
-    const result = await synchronizeSubscriptionComponents(sub.id);
+    const tariff = sub.tariff;
+    const result = await runSingleSubscriptionOperation(sub.id, (uuid) => remnaUpdateUser({
+      uuid,
+      ...(sub.expireAt ? { expireAt: sub.expireAt.toISOString() } : {}),
+      ...remnaTrafficSettings(tariff),
+      hwidDeviceLimit: Math.max(1, tariff.includedDevices + sub.extraDevices),
+      activeInternalSquads: tariff.internalSquadUuids,
+    }));
     pushItem(report, {
       subscriptionId: sub.id,
       subscriptionIndex: sub.subscriptionIndex,
@@ -266,7 +268,7 @@ export async function wipeClientSubscriptions(clientId: string): Promise<BulkOpR
   const report = newReport();
   const subs = await fetchSubscriptions(clientId);
   for (const sub of subs) {
-    const deletion = await deleteSubscriptionComponents(sub.id);
+    const deletion = await deleteSingleSubscription(sub.id);
     if (!deletion.deleted) {
       pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "error", message: deletion.failures.map((failure) => failure.error).join("; ") });
       continue;
@@ -332,7 +334,7 @@ export async function createRemnaUserForOrphanSubscription(subscriptionId: strin
     where: { id: subscriptionId },
     include: {
       owner: { select: { id: true, email: true, telegramId: true, telegramUsername: true } },
-      tariff: { select: { trafficLimitBytes: true, deviceLimit: true, includedDevices: true, internalSquadUuids: true, durationDays: true } },
+      tariff: { select: { trafficLimitBytes: true, trafficLimitMode: true, trafficResetMode: true, includedDevices: true, internalSquadUuids: true, durationDays: true } },
     },
   });
   if (!sub || sub.remnawaveUuid) return sub?.remnawaveUuid ?? null;
@@ -347,10 +349,9 @@ export async function createRemnaUserForOrphanSubscription(subscriptionId: strin
   });
   const r = await remnaCreateUser({
     username: sub.subscriptionIndex === 0 ? username : `${username}_${sub.subscriptionIndex}`,
-    trafficLimitBytes: sub.tariff.trafficLimitBytes != null ? Number(sub.tariff.trafficLimitBytes) : 0,
-    trafficLimitStrategy: "NO_RESET",
+    ...remnaTrafficSettings(sub.tariff),
     expireAt,
-    hwidDeviceLimit: sub.tariff.deviceLimit ?? sub.tariff.includedDevices ?? 1,
+    hwidDeviceLimit: Math.max(1, sub.tariff.includedDevices + sub.extraDevices),
     activeInternalSquads: sub.tariff.internalSquadUuids,
     ...(sub.owner.telegramId?.trim() && { telegramId: parseInt(sub.owner.telegramId, 10) }),
     ...(sub.owner.email?.trim() && { email: sub.owner.email.trim() }),

@@ -24,6 +24,28 @@
   --color-saccent-400: color-mix(in oklab, rgb(var(--stealth-accent)), white 16%);
   --color-saccent-500: rgb(var(--stealth-accent));
   --color-saccent-600: color-mix(in oklab, rgb(var(--stealth-accent)), black 12%);
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --color-ink-950: #070512;
+  --color-ink-900: #0b081a;
+  --color-ink-800: #110c28;
+  --color-ink-700: #181233;
+  --color-accent-400: #b79cff;
+  --color-accent-500: #8b5cf6;
+  --color-accent-600: #7c3aed;
+  --color-mint-400: #4ade9c;
+  --color-mint-500: #2fd58a;
+  --color-amber-glow: #ffb545;
+  --color-violet-glow: #e879f9;
+  --color-fog-100: #eef2ff;
+  --color-fog-300: #b9c2dc;
+  --color-fog-500: #7c88a8;
+  --color-fog-600: #5b6684;
+  --radius-4xl: 2rem;
+  --radius-5xl: 2.5rem;
+  --shadow-neon-blue: 0 0 24px -4px rgb(139 92 246 / 0.55), 0 8px 32px -8px rgb(139 92 246 / 0.35);
+  --shadow-neon-mint: 0 0 20px -4px rgb(47 213 138 / 0.5), 0 8px 28px -8px rgb(47 213 138 / 0.3);
+  --shadow-island: 0 24px 64px -16px rgb(2 4 12 / 0.85), inset 0 1px 0 0 rgb(255 255 255 / 0.07);
 }
 
 @layer base {

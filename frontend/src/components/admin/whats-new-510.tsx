@@ -230,7 +230,7 @@ export function WhatsNew510() {
                       transition={{ delay: 0.4 }}
                       className="text-4xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-primary via-fuchsia-400 to-purple-400"
                     >
-                      STEALTHNET 5.1.0
+                      Лазейка VPN 5.1.0
                     </motion.h2>
                     <motion.p
                       initial={{ opacity: 0, y: 10 }}

@@ -16,6 +16,8 @@
 
 # Local indexes and worktrees
 /.codebase-memory/
+/.codegraph/
+/.superpowers/
 /.worktrees/
 
 # OS and editor metadata

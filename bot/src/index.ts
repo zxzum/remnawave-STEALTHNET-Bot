@@ -59,6 +59,7 @@ import {
   type InnerEmojiIds,
   type BotMenuSection,
 } from "./keyboard.js";
+import { formatTrafficLine } from "./traffic.js";
 import { t as _t, formatDays as _formatDays, setTranslations } from "./i18n.js";
 // 54-ФЗ-чек ЮКассы: prompt «нужен ли чек», ввод email, etc.
 import {
@@ -270,6 +271,8 @@ type TariffItem = {
   durationDays: number;
   trafficLimitBytes?: number | null;
   trafficResetMode?: string;
+  trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
+  isBestChoice?: boolean;
   deviceLimit?: number | null;
   includedDevices?: number;
   pricePerExtraDevice?: number;
@@ -544,6 +547,104 @@ function getSubUser(sub: unknown): Record<string, unknown> | null {
   return r;
 }
 
+type SetupPlatform = "ios" | "android" | "windows" | "linux";
+type SetupApp = "incy" | "happ";
+
+async function firstSubscriptionAccess(token: string): Promise<{
+  url: string | null;
+  expireAt: Date | null;
+}> {
+  const all = await api.getAllSubscriptions(token).catch(() => ({ items: [] }));
+  const item = all.items.find((candidate) => candidate.remnawaveUuid || getSubscriptionUrl(candidate.subscription));
+  const user = item ? getSubUser(item.subscription) : null;
+  const rawExpireAt = user?.expireAt ?? user?.expirationDate ?? user?.expire_at;
+  const expireAt = rawExpireAt == null
+    ? null
+    : (typeof rawExpireAt === "number" ? new Date(rawExpireAt * 1000) : new Date(String(rawExpireAt)));
+  return {
+    url: item ? getSubscriptionUrl(item.subscription) : null,
+    expireAt: expireAt && !Number.isNaN(expireAt.getTime()) ? expireAt : null,
+  };
+}
+
+async function showSetupDevicePicker(ctx: Context): Promise<void> {
+  const image = await api.getOnboardingAsset("select-your-device.png");
+  await ctx.replyWithPhoto(new InputFile(image, "select-your-device.png"), {
+    caption: "Какое у вас устройство? 👣",
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "🍎 iOS (iPhone, iPad, Mac)", callback_data: "setup:device:ios" }],
+        [{ text: "🤖 Android", callback_data: "setup:device:android" }],
+        [{ text: "🪟 Windows", callback_data: "setup:device:windows" }],
+        [{ text: "🐧 Linux", callback_data: "setup:device:linux" }],
+        [{ text: "🔳 QR Code", callback_data: "setup:device:qr" }],
+        [{ text: "🏠 Главное меню", callback_data: "menu:main" }],
+      ],
+    },
+  });
+}
+
+const SETUP_DOWNLOADS: Record<SetupPlatform, Record<SetupApp, string>> = {
+  ios: {
+    incy: "https://apps.apple.com/ru/app/incy/id6756943388",
+    happ: "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973",
+  },
+  android: {
+    incy: "https://play.google.com/store/apps/details?id=llc.itdev.incy",
+    happ: "https://play.google.com/store/apps/details?id=com.happproxy",
+  },
+  windows: {
+    incy: "https://github.com/Happ-proxy/happ-desktop/releases/latest",
+    happ: "https://github.com/Happ-proxy/happ-desktop/releases/latest",
+  },
+  linux: {
+    incy: "https://github.com/Happ-proxy/happ-desktop/releases/latest",
+    happ: "https://github.com/Happ-proxy/happ-desktop/releases/latest",
+  },
+};
+
+async function showSetupGuide(ctx: Context, token: string, platform: SetupPlatform, app: SetupApp): Promise<void> {
+  const access = await firstSubscriptionAccess(token);
+  const recommended = platform === "ios" || platform === "android";
+  const appName = app === "incy" ? "INCY" : "HAPP";
+  const imageName = app === "incy" ? "incy-how-to-update.png" : "happ-how-to-update.png";
+  const image = await api.getOnboardingAsset(imageName);
+  const rows: ({ text: string; url: string } | { text: string; callback_data: string })[][] = [
+    [{ text: `📱 Скачать ${appName}`, url: SETUP_DOWNLOADS[platform][app] }],
+  ];
+  if (access.url) rows.push([{ text: "🔗 Добавить ключ", url: access.url }]);
+  if (recommended) {
+    rows.push([
+      app === "incy"
+        ? { text: "Другие приложения", callback_data: `setup:guide:${platform}:happ` }
+        : { text: "⭐ Использовать INCY", callback_data: `setup:guide:${platform}:incy` },
+    ]);
+  }
+  rows.push([{ text: "◀️ Назад", callback_data: "setup:resume" }]);
+  rows.push([{ text: "✅ Готово", callback_data: "setup:done" }]);
+
+  const recommendation = recommended && app === "incy"
+    ? "\n\n⭐ Для этого устройства настоятельно рекомендуем INCY."
+    : "";
+  await ctx.replyWithPhoto(new InputFile(image, imageName), {
+    caption:
+      `#Инструкция\n\nНастройка Лазейка VPN займёт 1–2 минуты 🚀${recommendation}\n\n` +
+      `Шаг 1\nСкачайте ${appName} по первой кнопке.\n\n` +
+      "Шаг 2\nНажмите «Добавить ключ», затем включите VPN большой кнопкой внутри приложения." +
+      `${access.url ? `\n\nСсылка на подписку для ручной настройки:\n${access.url}` : ""}\n\nЕсли не получается — напишите в поддержку прямо в этом боте.`,
+    reply_markup: { inline_keyboard: rows },
+  });
+}
+
+async function activateTrialForNewClient(token: string, config: Awaited<ReturnType<typeof api.getPublicConfig>>): Promise<void> {
+  const available = await api.getAvailableTrials(token).catch(() => ({ items: [], hasAnyEnabled: false }));
+  if (available.items[0]) {
+    await api.activateTrialById(token, available.items[0].id);
+  } else if (!available.hasAnyEnabled && config?.trialEnabled) {
+    await api.activateTrial(token);
+  }
+}
+
 function bytesToGb(bytes: number): string {
   return (bytes / (1024 * 1024 * 1024)).toFixed(2);
 }
@@ -628,7 +729,7 @@ const DEFAULT_TARIFF_LINE_FIELDS: Required<BotTariffLineFields> = {
   durationDays: false,
   price: true,
   currency: true,
-  trafficLimit: false,
+  trafficLimit: true,
   trafficResetMode: false,
   deviceLimit: false,
 };
@@ -676,7 +777,11 @@ function formatTariffLine(tariff: TariffItem, fields: Required<BotTariffLineFiel
   }
   if (fields.trafficLimit) {
     const limit = tariff.trafficLimitBytes;
-    parts.push(limit == null ? "трафик без лимита" : `трафик ${bytesToGb(limit)} GB`);
+    if (limit != null) {
+      parts.push(tariff.trafficLimitMode === "LOCAL_SQUAD"
+        ? `Включено ${bytesToGb(limit)} ГБ белых списков`
+        : `Общее ограничение трафика ${bytesToGb(limit)} ГБ`);
+    }
   }
   if (fields.trafficResetMode) {
     const label = RESET_MODE_LABELS[tariff.trafficResetMode ?? "no_reset"];
@@ -1083,6 +1188,11 @@ function formatSubLine(item: {
     .split("{{SUB_DAYS}}").join(daysStr)
     .split("{{SUB_DATE}}").join(dateStr)
     .split("{{SUB_TRAFFIC}}").join(trafficSuffix);
+}
+
+function buildCompactMainMenuText(serviceName: string, balance: number, currency: string): { text: string; entities: CustomEmojiEntity[] } {
+  const name = serviceName.trim() || "Кабинет";
+  return { text: `👋 Добро пожаловать в ${name}\n\nБаланс: ${formatMoney(balance, currency)}`, entities: [] };
 }
 
 function buildMainMenuText(opts: {
@@ -1870,6 +1980,7 @@ composer.command("start", async (ctx) => {
 
   // Определяем тип deeplink
   const isPromo = /^promo_/i.test(payload);
+  const isSetupPayload = /^setup$/i.test(payload);
   const promoCode = isPromo ? payload.replace(/^promo_/i, "") : undefined;
   const parsed = parseStartPayload(payload);
   // Fallback «голый payload = рефкод» — только если payload реально похож на
@@ -1877,7 +1988,7 @@ composer.command("start", async (ctx) => {
   // при отсутствии префикса возвращал строку как есть, и кампанийные ссылки
   // вида `c_vk_winter` записывались клиенту как referralCode.
   const isCampaignOnly = /^c_/i.test(payload);
-  const bareRefFallback = !isCampaignOnly && !/^ref_?/i.test(payload) ? payload.trim() || undefined : undefined;
+  const bareRefFallback = !isCampaignOnly && !isSetupPayload && !/^ref_?/i.test(payload) ? payload.trim() || undefined : undefined;
   const refCode = !isPromo ? (parsed.refCode ?? bareRefFallback) : undefined;
 
   try {
@@ -1927,6 +2038,34 @@ composer.command("start", async (ctx) => {
 
     // Проверка подписки на канал
     if (await enforceSubscription(ctx, config)) return;
+
+    if (auth.isNewClient || isSetupPayload) {
+      if (auth.isNewClient) {
+        try {
+          await activateTrialForNewClient(auth.token, config);
+        } catch (e) {
+          console.error("[/start onboarding trial]", e instanceof Error ? e.message : e);
+        }
+      }
+      const access = await firstSubscriptionAccess(auth.token);
+      if (!access.url) {
+        await ctx.reply(
+          "Не удалось автоматически активировать пробный доступ. Попробуйте ещё раз или выберите тариф.",
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "🔄 Попробовать ещё раз", callback_data: "setup:retry" }],
+                [{ text: "💳 Выбрать тариф", callback_data: "menu:tariffs" }],
+                [{ text: "🏠 Главное меню", callback_data: "menu:main" }],
+              ],
+            },
+          },
+        );
+        return;
+      }
+      await showSetupDevicePicker(ctx);
+      return;
+    }
 
     // ─── Приветственное сообщение (если включено в админке) ───
     // Показываем картинку + текст с кнопкой «Войти», которая ведёт в главное меню.
@@ -1981,19 +2120,7 @@ composer.command("start", async (ctx) => {
     const showSingbox = singboxRes.items?.some((c: { tariffs: unknown[] }) => c.tariffs?.length > 0) ?? false;
     const appUrl = config?.publicAppUrl?.replace(/\/$/, "") ?? null;
 
-    const { text, entities } = buildMainMenuText({
-      serviceName: name,
-      balance: client?.balance ?? 0,
-      currency: client?.preferredCurrency ?? config?.defaultCurrency ?? "usd",
-      subscription: subRes.subscription,
-      tariffDisplayName: (subRes as { tariffDisplayName?: string | null }).tariffDisplayName ?? null,
-      menuTexts: config?.botMenuTexts ?? config?.resolvedBotMenuTexts ?? null,
-      menuLineVisibility: config?.botMenuLineVisibility ?? null,
-      menuTextCustomEmojiIds: config?.menuTextCustomEmojiIds ?? null,
-      botEmojis: config?.botEmojis ?? null,
-      infoBlock: config?.botInfoBlock ?? null,
-      allSubs: allSubsRes,
-    });
+    const { text, entities } = buildCompactMainMenuText(name, client?.balance ?? 0, client?.preferredCurrency ?? config?.defaultCurrency ?? "usd");
     const caption = text.length > TELEGRAM_CAPTION_MAX ? text.slice(0, TELEGRAM_CAPTION_MAX - 3) + "..." : text;
     const captionEntities = text.length > TELEGRAM_CAPTION_MAX && entities.length ? entities.filter((e) => e.offset + e.length <= TELEGRAM_CAPTION_MAX - 3) : entities;
     const hasVideoInstructions = config?.videoInstructionsEnabled && (config?.videoInstructions?.length ?? 0) > 0;
@@ -2164,22 +2291,27 @@ composer.command("referral", async (ctx) => {
     const linkBot = `https://t.me/${ctx.me?.username ?? "bot"}?start=ref_${client.referralCode}`;
     const p1 = stats?.referralPercent ?? client.referralPercent ?? (cfg?.defaultReferralPercent ?? 0);
     const p2 = stats?.referralPercentLevel2 ?? (cfg?.referralPercentLevel2 ?? 0);
+    const p3 = stats?.referralPercentLevel3 ?? (cfg?.referralPercentLevel3 ?? 0);
     const fmt = (n: number) => `${Math.round(n)}₽`;
     const lines: string[] = [
       "👥 Реферальная программа",
       "",
-      "Поделитесь ссылкой с друзьями и получайте процент со всех их пополнений! 🤝",
+      "Поделитесь ссылкой с друзьями и получайте процент с их оплат! 🤝",
       "",
-      `👥 Рефералы 1 уровня: ${p1}%`,
-      `Вы получаете ${p1}% от пополнений тех, кто перешёл по вашей ссылке.`,
+      `👥 1-я линия — ваши друзья: ${p1}%`,
+      `Вы получаете ${p1}% с оплат тех, кто перешёл по вашей ссылке.`,
       `• Переходов по вашей ссылке: ${stats?.l1Clicks ?? 0}`,
       `• Приобрели подписку: ${stats?.l1Purchased ?? 0}`,
       `• Доход с рефералов 1 уровня: ${fmt(stats?.l1Earned ?? 0)}`,
       "",
-      `🤝 Рефералы 2 уровня: ${p2}%`,
-      `Вы получаете ${p2}% от пополнений рефералов ваших рефералов.`,
+      `🤝 2-я линия — друзья друзей: ${p2}%`,
+      `Вы получаете ${p2}% с оплат пользователей, которых пригласили ваши рефералы.`,
       `• Приглашено вашими рефералами: ${stats?.l2InvitesCount ?? 0}`,
       `• Доход с рефералов 2 уровня: ${fmt(stats?.l2Earned ?? 0)}`,
+      "",
+      `🌐 3-я линия — глубина сети: ${p3}%`,
+      `Вы получаете ${p3}% с оплат третьей линии рефералов.`,
+      `• Доход с рефералов 3 уровня: ${fmt(stats?.l3Earned ?? 0)}`,
       "",
       `💰 Ваш заработок (всего): ${fmt(stats?.totalEarned ?? 0)}`,
       `💸 Выведено: ${fmt(stats?.totalWithdrawn ?? 0)}`,
@@ -2490,6 +2622,90 @@ composer.on("callback_query:data", async (ctx) => {
   if (!userId) return;
   await ctx.answerCallbackQuery().catch(() => {});
 
+  if (data.startsWith("setup:")) {
+    const token = await getOrRestoreToken(userId, ctx.from?.username);
+    if (!token) {
+      await ctx.reply("Сессия истекла. Отправьте /start ещё раз.");
+      return;
+    }
+    try {
+      if (data === "setup:resume") {
+        await showSetupDevicePicker(ctx);
+        return;
+      }
+      if (data === "setup:retry") {
+        const config = await api.getPublicConfig();
+        await activateTrialForNewClient(token, config);
+        const access = await firstSubscriptionAccess(token);
+        if (!access.url) throw new Error("Пробный доступ пока недоступен");
+        await showSetupDevicePicker(ctx);
+        return;
+      }
+      if (data === "setup:device:qr") {
+        const access = await firstSubscriptionAccess(token);
+        await ctx.reply(
+          access.url
+            ? `Откройте эту ссылку на нужном устройстве или покажите её как QR-код на странице подписки:\n\n${access.url}`
+            : "Ссылка подписки пока недоступна. Попробуйте ещё раз.",
+          {
+            reply_markup: {
+              inline_keyboard: [
+                ...(access.url ? [[{ text: "🔳 Открыть подписку", url: access.url }]] : []),
+                [{ text: "◀️ Назад", callback_data: "setup:resume" }],
+                [{ text: "✅ Готово", callback_data: "setup:done" }],
+              ],
+            },
+          },
+        );
+        return;
+      }
+      if (data.startsWith("setup:device:")) {
+        const platform = data.slice("setup:device:".length) as SetupPlatform;
+        if (!["ios", "android", "windows", "linux"].includes(platform)) return;
+        await showSetupGuide(ctx, token, platform, platform === "ios" || platform === "android" ? "incy" : "happ");
+        return;
+      }
+      if (data.startsWith("setup:guide:")) {
+        const [, , platform, app] = data.split(":") as [string, string, SetupPlatform, SetupApp];
+        if (!["ios", "android", "windows", "linux"].includes(platform) || !["incy", "happ"].includes(app)) return;
+        await showSetupGuide(ctx, token, platform, app);
+        return;
+      }
+      if (data === "setup:done") {
+        await api.completeOnboarding(token);
+        const access = await firstSubscriptionAccess(token);
+        const expiry = access.expireAt?.toLocaleString("ru-RU", {
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZone: "Europe/Moscow",
+        });
+        await ctx.reply(
+          "Поздравляем! Подключение успешно завершено — держите Лазейку 👣\n\n" +
+          (expiry ? `Тестовый период активен до: ${expiry} МСК\n\n` : "") +
+          "📌 Вы можете продлить подписку заранее по кнопке «Оплатить».",
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "💳 Оплатить", callback_data: "menu:tariffs" }],
+                [{ text: "🏠 Главное меню", callback_data: "menu:main" }],
+              ],
+            },
+          },
+        );
+        return;
+      }
+    } catch (e) {
+      console.error("[setup]", e instanceof Error ? e.message : e);
+      await ctx.reply("Не удалось продолжить настройку. Попробуйте ещё раз.", {
+        reply_markup: { inline_keyboard: [[{ text: "🔄 Повторить", callback_data: "setup:resume" }]] },
+      });
+      return;
+    }
+  }
+
   // ─── 54-ФЗ-чек: prompt «нужен ли чек» перед ЮКасса-платежом ───
   // Каждый pay_*_yookassa-handler сохраняет builder+finalize в yk-receipt store и показывает
   // этот prompt. Тут мы реагируем на 3 варианта ответа: «без чека», «на сохранённый email»,
@@ -2555,19 +2771,7 @@ composer.on("callback_query:data", async (ctx) => {
       const showProxy = proxyRes.items?.some((c: { tariffs: unknown[] }) => c.tariffs?.length > 0) ?? false;
       const showSingbox = singboxRes.items?.some((c: { tariffs: unknown[] }) => c.tariffs?.length > 0) ?? false;
       const appUrl = config?.publicAppUrl?.replace(/\/$/, "") ?? null;
-      const { text, entities } = buildMainMenuText({
-        serviceName: config?.serviceName?.trim() || "Кабинет",
-        balance: me.balance ?? 0,
-        currency: me.preferredCurrency ?? config?.defaultCurrency ?? "usd",
-        subscription: subRes.subscription,
-        tariffDisplayName: (subRes as { tariffDisplayName?: string | null }).tariffDisplayName ?? null,
-        menuTexts: config?.botMenuTexts ?? config?.resolvedBotMenuTexts ?? null,
-        menuLineVisibility: config?.botMenuLineVisibility ?? null,
-        menuTextCustomEmojiIds: config?.menuTextCustomEmojiIds ?? null,
-        botEmojis: config?.botEmojis ?? null,
-        infoBlock: config?.botInfoBlock ?? null,
-        allSubs: allSubsRes,
-      });
+      const { text, entities } = buildCompactMainMenuText(config?.serviceName?.trim() || "Кабинет", me.balance ?? 0, me.preferredCurrency ?? config?.defaultCurrency ?? "usd");
       const hasVideoInstructions = config?.videoInstructionsEnabled && (config?.videoInstructions?.length ?? 0) > 0;
       const hasSupportLinks = !!(config?.supportLink || config?.agreementLink || config?.offerLink || config?.instructionsLink || hasVideoInstructions);
       const markup = mainMenu({
@@ -3196,19 +3400,7 @@ composer.on("callback_query:data", async (ctx) => {
       const showProxy = proxyRes.items?.some((c: { tariffs: unknown[] }) => c.tariffs?.length > 0) ?? false;
       const showSingbox = singboxRes.items?.some((c: { tariffs: unknown[] }) => c.tariffs?.length > 0) ?? false;
       const name = config?.serviceName?.trim() || "Кабинет";
-      const { text, entities } = buildMainMenuText({
-        serviceName: name,
-        balance: client?.balance ?? 0,
-        currency: client?.preferredCurrency ?? config?.defaultCurrency ?? "usd",
-        subscription: subRes.subscription,
-        tariffDisplayName: (subRes as { tariffDisplayName?: string | null }).tariffDisplayName ?? null,
-        menuTexts: config?.botMenuTexts ?? config?.resolvedBotMenuTexts ?? null,
-        menuLineVisibility: config?.botMenuLineVisibility ?? null,
-        menuTextCustomEmojiIds: config?.menuTextCustomEmojiIds ?? null,
-        botEmojis: config?.botEmojis ?? null,
-        infoBlock: config?.botInfoBlock ?? null,
-        allSubs: allSubsRes,
-      });
+      const { text, entities } = buildCompactMainMenuText(name, client?.balance ?? 0, client?.preferredCurrency ?? config?.defaultCurrency ?? "usd");
       const hasVideoInstructionsCb = config?.videoInstructionsEnabled && (config?.videoInstructions?.length ?? 0) > 0;
       const hasSupportLinks = !!(config?.supportLink || config?.agreementLink || config?.offerLink || config?.instructionsLink || hasVideoInstructionsCb);
       const backMarkup = mainMenu({
@@ -3291,8 +3483,8 @@ composer.on("callback_query:data", async (ctx) => {
 
       const section = data.slice("menu:section:".length) as BotMenuSection;
       const titles: Record<BotMenuSection, string> = {
-        account: "👤 Аккаунт",
-        payment: "💳 Оплата и доступ",
+        account: "📋 Мои подписки",
+        payment: "💳 Купить / продлить",
         connection: "🔌 Подключение",
         bonuses: "🎁 Бонусы",
       };
@@ -6432,26 +6624,31 @@ composer.on("callback_query:data", async (ctx) => {
       const linkBot = `https://t.me/${ctx.me?.username ?? "bot"}?start=ref_${client.referralCode}`;
       const p1 = stats?.referralPercent ?? client.referralPercent ?? (config?.defaultReferralPercent ?? 0);
       const p2 = stats?.referralPercentLevel2 ?? (config?.referralPercentLevel2 ?? 0);
+      const p3 = stats?.referralPercentLevel3 ?? (config?.referralPercentLevel3 ?? 0);
       const fmt = (n: number) => `${Math.round(n)}₽`;
       // вступление и футер редактируются в админке («Тексты бота» →
       // bot_referral_intro_text / bot_referral_footer_text); раньше были захардкожены.
       const referralIntro = (config?.botReferralIntroText ?? "").trim()
-        || "Поделитесь ссылкой с друзьями и получайте процент со всех их пополнений! 🤝";
+        || "Поделитесь ссылкой с друзьями и получайте процент с их оплат! 🤝";
       const lines: string[] = [
         "👥 Реферальная программа",
         "",
         referralIntro,
         "",
-        `👥 Рефералы 1 уровня: ${p1}%`,
-        `Вы получаете ${p1}% от пополнений тех, кто перешёл по вашей ссылке.`,
+        `👥 1-я линия — ваши друзья: ${p1}%`,
+        `Вы получаете ${p1}% с оплат тех, кто перешёл по вашей ссылке.`,
         `• Переходов по вашей ссылке: ${stats?.l1Clicks ?? 0}`,
         `• Приобрели подписку: ${stats?.l1Purchased ?? 0}`,
         `• Доход с рефералов 1 уровня: ${fmt(stats?.l1Earned ?? 0)}`,
         "",
-        `🤝 Рефералы 2 уровня: ${p2}%`,
-        `Вы получаете ${p2}% от пополнений рефералов ваших рефералов.`,
+        `🤝 2-я линия — друзья друзей: ${p2}%`,
+        `Вы получаете ${p2}% с оплат пользователей, которых пригласили ваши рефералы.`,
         `• Приглашено вашими рефералами: ${stats?.l2InvitesCount ?? 0}`,
         `• Доход с рефералов 2 уровня: ${fmt(stats?.l2Earned ?? 0)}`,
+        "",
+        `🌐 3-я линия — глубина сети: ${p3}%`,
+        `Вы получаете ${p3}% с оплат третьей линии рефералов.`,
+        `• Доход с рефералов 3 уровня: ${fmt(stats?.l3Earned ?? 0)}`,
         "",
         `💰 Ваш заработок (всего): ${fmt(stats?.totalEarned ?? 0)}`,
         `💸 Выведено: ${fmt(stats?.totalWithdrawn ?? 0)}`,
@@ -6927,13 +7124,11 @@ composer.on("callback_query:data", async (ctx) => {
           ?? inner?.trafficUsedBytes ?? inner?.usedTrafficBytes ?? inner?.traffic_used_bytes;
         const limitNum = typeof tlimit === "string" ? parseFloat(tlimit) : Number(tlimit);
         const usedNum = typeof tused === "string" ? parseFloat(tused) : Number(tused);
-        const usedGb = bytesToGb(Number.isFinite(usedNum) ? usedNum : 0);
-        let trafficLine = `📈 Трафик —  ${usedGb} GB`;
-        if (Number.isFinite(limitNum) && limitNum > 0) {
-          trafficLine = `📈 Трафик —  ${usedGb} / ${bytesToGb(limitNum)} GB`;
-        } else {
-          trafficLine = `📈 Трафик —  ${usedGb} GB / ♾`;
-        }
+        const trafficLine = formatTrafficLine({
+          remoteUsedBytes: Number.isFinite(usedNum) ? usedNum : 0,
+          remoteLimitBytes: limitNum,
+          localQuota: item.trafficQuota,
+        });
 
         // Ссылка для подключения
         const subUrl = getSubscriptionUrl(item.subscription);

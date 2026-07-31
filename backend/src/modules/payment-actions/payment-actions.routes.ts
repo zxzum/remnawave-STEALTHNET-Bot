@@ -217,9 +217,9 @@ paymentActionsRouter.post(
         const { applyExtraOptionByPaymentId } = await import("../extra-options/extra-options.service.js");
         const result = await applyExtraOptionByPaymentId(payment.id);
         activationResult = result;
-        if (!(result as { ok?: boolean }).ok) {
-          activationError = ((result as { error?: string }).error) ?? "extra option activation failed";
-        } else if (payment.clientId) {
+        if (!result.ok) {
+          activationError = result.error ?? "extra option activation failed";
+        } else if (result.outcome === "APPLIED" && payment.clientId) {
           const { notifyExtraOptionApplied } = await import("../notification/telegram-notify.service.js");
           await notifyExtraOptionApplied(payment.clientId, payment.id).catch(() => {});
         }

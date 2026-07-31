@@ -52,6 +52,47 @@ function getInitialAiMessage(serviceName: string): Message[] {
   ];
 }
 
+function inlineAiMarkdown(text: string) {
+  const token = /(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\[[^\]]+\]\((https?:\/\/[^\s)]+)\)|\*[^*]+\*)/g;
+  const parts: Array<string | JSX.Element> = [];
+  let last = 0;
+  for (const match of text.matchAll(token)) {
+    if (match.index! > last) parts.push(text.slice(last, match.index));
+    const value = match[0];
+    if (value.startsWith("**") || value.startsWith("__")) {
+      parts.push(<strong key={`${match.index}-b`}>{value.slice(2, -2)}</strong>);
+    } else if (value.startsWith("`")) {
+      parts.push(<code key={`${match.index}-c`} className="rounded bg-black/20 px-1 py-0.5 text-[0.9em]">{value.slice(1, -1)}</code>);
+    } else if (value.startsWith("[")) {
+      const link = value.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
+      if (link) parts.push(<a key={`${match.index}-a`} href={link[2]} target="_blank" rel="noopener noreferrer" className="text-accent underline">{link[1]}</a>);
+      else parts.push(value);
+    } else {
+      parts.push(<em key={`${match.index}-i`}>{value.slice(1, -1)}</em>);
+    }
+    last = match.index! + value.length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+
+function AiMessageContent({ text }: { text: string }) {
+  return (
+    <div className="space-y-1 break-words">
+      {text.split(/\r?\n/).map((line, index) => {
+        const heading = line.match(/^#{1,3}\s+(.+)$/);
+        const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+        const numbered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+        if (!line.trim()) return <div key={index} className="h-2" />;
+        if (heading) return <p key={index} className="font-bold">{inlineAiMarkdown(heading[1])}</p>;
+        if (bullet) return <p key={index} className="ml-4 list-item list-disc">{inlineAiMarkdown(bullet[1])}</p>;
+        if (numbered) return <p key={index} className="ml-4 list-item list-decimal">{inlineAiMarkdown(numbered[1])}</p>;
+        return <p key={index}>{inlineAiMarkdown(line)}</p>;
+      })}
+    </div>
+  );
+}
+
 const ChatSwitcher = ({ activeChat, setActiveChat, aiUnread, supportUnread, isFloating = false, showAiTab = true }: any) => {
   if (!showAiTab) {
     return (
@@ -843,7 +884,7 @@ export function FloatingChat() {
                                     : "bg-card/60 border border-white/5 text-foreground rounded-tl-sm"
                                 )}
                               >
-                                <p className="whitespace-pre-wrap break-words">{msg.text}</p>
+                                <AiMessageContent text={msg.text} />
                                 <p
                                   className={cn(
                                     "text-[10px] mt-1.5 opacity-60 font-medium",

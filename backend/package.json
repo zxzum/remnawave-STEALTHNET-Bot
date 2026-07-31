@@ -14,8 +14,8 @@
     "db:migrate": "prisma migrate deploy",
     "db:studio": "prisma studio",
     "seed": "tsx src/scripts/seed-admin.ts",
-    "db:loadtest-clients": "tsx src/scripts/seed-loadtest-clients.ts",
-    "backfill:composite-subscriptions": "tsx src/scripts/backfill-composite-subscriptions.ts"
+    "migrate:single-subscription": "node dist/scripts/migrate-composite-to-single.js",
+    "db:loadtest-clients": "tsx src/scripts/seed-loadtest-clients.ts"
   },
   "engines": {
     "node": ">=22"

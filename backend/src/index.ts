@@ -19,6 +19,7 @@ import { ensureTheme, seedDefaultsToEmptyBlocks } from "./modules/landing/landin
 import { migrateLandingToBlocks } from "./scripts/migrate-landing-to-blocks.js";
 import { registerCron } from "./modules/diagnostics/cron-registry.js";
 import { runContestDailyReminder } from "./modules/contest/contest-daily-reminder.service.js";
+import { startSquadTrafficWorker } from "./modules/squad-traffic/squad-traffic.worker.js";
 
 async function main() {
   await prisma.$connect();
@@ -53,6 +54,7 @@ async function main() {
   // TG-юзерам для запуска онбординга (см. /telegram-login-check, /register). Крон бы их стирал.
   await startAutoBackupScheduler();
   startMarketplaceScheduler();
+  startSquadTrafficWorker();
 
   // Регистрация cron-задач в реестре для UI /admin/diagnostics → Cron monitor.
   // Имена/cron-выражения зашиты — должны соответствовать defaults в каждом scheduler.

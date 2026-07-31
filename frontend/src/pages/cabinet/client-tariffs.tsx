@@ -58,6 +58,7 @@ type TariffForPay = {
   description?: string | null;
   durationDays?: number;
   trafficLimitBytes?: number | null;
+  trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
   trafficResetMode?: string;
   deviceLimit?: number | null;
   includedDevices?: number;
@@ -66,6 +67,27 @@ type TariffForPay = {
   deviceDiscountTiers?: DeviceDiscountTier[];
   priceOptions?: TariffPriceOption[];
 };
+
+function tariffDeviceCount(tariff: TariffForPay): number {
+  return Math.max(1, tariff.includedDevices ?? tariff.deviceLimit ?? 1);
+}
+
+function formatTrafficLimit(bytes: number | null | undefined): string {
+  if (!bytes || bytes <= 0) return "Безлимит трафика";
+  return `${(bytes / 1024 ** 3).toFixed(1)} ГБ`;
+}
+
+function tariffTraffic(tariff: TariffForPay): { general: string; local: string | null } {
+  if (tariff.trafficLimitMode === "LOCAL_SQUAD") {
+    return {
+      general: "Безлимит трафика",
+      local: tariff.trafficLimitBytes && tariff.trafficLimitBytes > 0
+        ? `Белые списки: ${(tariff.trafficLimitBytes / 1024 ** 3).toFixed(1)} ГБ / месяц`
+        : "Белые списки: безлимит",
+    };
+  }
+  return { general: formatTrafficLimit(tariff.trafficLimitBytes), local: null };
+}
 
 /**
  * Цена пакета доп. устройств с учётом длительности.
@@ -491,6 +513,7 @@ function ClassicTariffsPage() {
       toast.success("Оплата прошла ✨", res.message);
       await refreshProfile();
       loadUserSubs(); // T-unify-cabinet: подписок стало больше — обновляем список для след. покупки
+      navigate("/cabinet/dashboard?payment=success");
     } catch (e) {
       setPayError(e instanceof Error ? e.message : t("cabinet.tariffs.error_payment"));
     } finally {
@@ -755,8 +778,9 @@ function ClassicTariffsPage() {
                 <p className="text-xs text-muted-foreground font-bold uppercase tracking-wider mb-1">{t("cabinet.tariffs.traffic_label")}</p>
                 <div className="flex items-center gap-1.5 font-bold text-sm">
                   <Wifi className="h-4 w-4 text-primary" />
-                  {tariff.trafficLimitBytes != null && tariff.trafficLimitBytes > 0 ? `${(tariff.trafficLimitBytes / 1024 / 1024 / 1024).toFixed(1)} ${t("cabinet.tariffs.gb_unit")}${tariff.trafficResetMode === "monthly" || tariff.trafficResetMode === "monthly_rolling" ? t("cabinet.tariffs.per_month") : ""}` : "∞"}
+                  {tariffTraffic(tariff).general}
                 </div>
+                {tariffTraffic(tariff).local && <p className="mt-1 text-[11px] font-semibold text-amber-500">{tariffTraffic(tariff).local}</p>}
               </div>
             </div>
           )}
@@ -1421,11 +1445,16 @@ function ClassicTariffsPage() {
                                     </span>
                                     <span className="flex items-center gap-1.5 bg-background/50 px-2 py-1 rounded-md border border-border/50">
                                       <Wifi className="h-3 w-3 text-primary" />
-                                      {tf.trafficLimitBytes != null && tf.trafficLimitBytes > 0 ? `${(tf.trafficLimitBytes / 1024 / 1024 / 1024).toFixed(1)} ${t("cabinet.tariffs.gb_unit")}${tf.trafficResetMode === "monthly" || tf.trafficResetMode === "monthly_rolling" ? t("cabinet.tariffs.per_month") : ""}` : "∞"}
+                                      {tariffTraffic(tf).general}
                                     </span>
+                                    {tariffTraffic(tf).local && (
+                                      <span className="flex items-center gap-1.5 rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-amber-500">
+                                        <Wifi className="h-3 w-3" /> {tariffTraffic(tf).local}
+                                      </span>
+                                    )}
                                     <span className="flex items-center gap-1.5 bg-background/50 px-2 py-1 rounded-md border border-border/50">
                                       <Smartphone className="h-3 w-3 text-primary" />
-                                      {tf.deviceLimit != null && tf.deviceLimit > 0 ? `${tf.deviceLimit}` : "∞"}
+                                      {tariffDeviceCount(tf)} устр.
                                     </span>
                                   </div>
                                 </div>
@@ -1510,16 +1539,20 @@ function ClassicTariffsPage() {
                                   <Wifi className="h-4 w-4 shrink-0" />
                                 </div>
                                 <span>
-                                  {tf.trafficLimitBytes != null && tf.trafficLimitBytes > 0
-                                    ? `${(tf.trafficLimitBytes / 1024 / 1024 / 1024).toFixed(1)} ${t("cabinet.tariffs.gb_unit")}${tf.trafficResetMode === "monthly" || tf.trafficResetMode === "monthly_rolling" ? t("cabinet.tariffs.per_month") : ""}`
-                                    : t("cabinet.tariffs.unlimited_traffic")}
+                                  {tariffTraffic(tf).general}
                                 </span>
                               </div>
+                              {tariffTraffic(tf).local && (
+                                <div className="flex items-center gap-3 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-amber-500">
+                                  <div className="rounded-lg bg-amber-500/15 p-1.5"><Wifi className="h-4 w-4 shrink-0" /></div>
+                                  <span>{tariffTraffic(tf).local}</span>
+                                </div>
+                              )}
                               <div className="flex items-center gap-3 bg-background/50 px-3 py-2 rounded-xl border border-border/50">
                                 <div className="bg-primary/20 p-1.5 rounded-lg text-primary">
                                   <Smartphone className="h-4 w-4 shrink-0" />
                                 </div>
-                                <span>{tf.deviceLimit != null && tf.deviceLimit > 0 ? `${tf.deviceLimit}` : "∞"} {t("cabinet.tariffs.devices")}</span>
+                                <span>{tariffDeviceCount(tf)} {t("cabinet.tariffs.devices")}</span>
                               </div>
                             </div>
 

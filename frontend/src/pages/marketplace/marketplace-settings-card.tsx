@@ -145,7 +145,7 @@ export function MarketplaceSettingsCard() {
           </div>
           <div>
             <Label>{t("admin.marketplace.settings.display_name")}</Label>
-            <Input value={displayName} maxLength={200} onChange={(e) => setDisplayName(e.target.value)} placeholder="STEALTHNET Pro" />
+            <Input value={displayName} maxLength={200} onChange={(e) => setDisplayName(e.target.value)} placeholder="Лазейка VPN Pro" />
           </div>
         </div>
         <div>

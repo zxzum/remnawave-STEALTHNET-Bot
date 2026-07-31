@@ -271,10 +271,8 @@ export function mainMenu(opts: MenuOptions): InlineMarkup {
   const byId = new Map(buttons.map((button) => [button.id, button]));
   const layout = [
     ["cabinet"],
-    ["my_subs", "devices"],
-    ["trial", "referral"],
+    ["referral"],
     ["bot_menu"],
-    ["support", "site"],
   ];
   const rows = layout
     .map((ids) => ids.map((id) => byId.get(id)).filter((button): button is BotButtonConfig => Boolean(button)))
@@ -503,7 +501,7 @@ export function tariffCategoryButtons(
 
 /** Кнопки тарифов одной категории. Только эмодзи категории (ordinary/premium), без общего эмодзи «Тарифы». */
 export function tariffsOfCategoryButtons(
-  category: { name: string; emoji?: string; tariffs: { id: string; name: string; price: number; currency: string; hasOptions?: boolean; priceOptions?: { price: number; durationDays: number }[] }[] },
+  category: { name: string; emoji?: string; tariffs: { id: string; name: string; price: number; currency: string; isBestChoice?: boolean; hasOptions?: boolean; priceOptions?: { price: number; durationDays: number }[] }[] },
   backLabel?: string | null,
   innerStyles?: InnerButtonStyles,
   backData: string = "menu:tariffs",
@@ -522,8 +520,8 @@ export function tariffsOfCategoryButtons(
   for (const t of category.tariffs) {
     // убраны цены из лейблов кнопок — теперь только название
     // тарифа, цена видна на экране выбора длительности после клика.
-    const label = `${prefix}${t.name}`.slice(0, 64);
-    rows.push([btn(label, `pay_tariff:${t.id}`, tariffPay, tariffId)]);
+    const label = `${t.isBestChoice ? "🔥 " : ""}${prefix}${t.name}`.slice(0, 64);
+    rows.push([btn(label, `pay_tariff:${t.id}`, t.isBestChoice ? "primary" : tariffPay, tariffId)]);
   }
   // кнопка «🔌 Продлить подписку» УБРАНА из общего экрана.
   // Логика перенесена на экран деталей тарифа — если у клиента уже есть подписка с этим
@@ -546,7 +544,7 @@ export function tariffPayButtons(
     id: string;
     name: string;
     emoji?: string;
-    tariffs: { id: string; name: string; price: number; currency: string; hasOptions?: boolean }[];
+    tariffs: { id: string; name: string; price: number; currency: string; isBestChoice?: boolean; hasOptions?: boolean }[];
   }[],
   backLabel?: string | null,
   innerStyles?: InnerButtonStyles,

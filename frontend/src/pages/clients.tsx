@@ -26,7 +26,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Pencil, Trash2, Ban, ShieldCheck, Wifi, Ticket, KeyRound, Search,
   Copy, Check, Smartphone, Activity, User, Users, HardDrive, Link,
-  RefreshCw, Loader2, Package, Gift, Coins, MailX, MailCheck, RotateCw, Plus, Zap,
+  RefreshCw, Loader2, Package, Gift, Coins, MailX, MailCheck, RotateCw, Plus, Zap, MessageCircle,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -93,6 +93,7 @@ export function ClientsPage() {
   const [search, setSearch] = useState("");
   const [searchApplied, setSearchApplied] = useState("");
   const [filterBlocked, setFilterBlocked] = useState<"all" | "blocked" | "active">("all");
+  const [filterSubscription, setFilterSubscription] = useState<"all" | "any" | "active">("all");
 
   // ─── Bulk-actions state ───────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -116,7 +117,11 @@ export function ClientsPage() {
     setLoading(true);
     const isBlocked =
       filterBlocked === "blocked" ? true : filterBlocked === "active" ? false : undefined;
-    api.getClients(token, page, 20, { search: searchApplied || undefined, isBlocked }).then((r) => {
+    api.getClients(token, page, 20, {
+      search: searchApplied || undefined,
+      isBlocked,
+      subscription: filterSubscription,
+    }).then((r) => {
       setData({ items: r.items, total: r.total });
       setLoading(false);
     }).catch(() => setLoading(false));
@@ -201,12 +206,12 @@ export function ClientsPage() {
 
   useEffect(() => {
     loadClients();
-  }, [token, page, searchApplied, filterBlocked]);
+  }, [token, page, searchApplied, filterBlocked, filterSubscription]);
 
   useEffect(() => {
-    const uuids = data?.items
-      .map(c => c.remnawaveUuid)
-      .filter((u): u is string => Boolean(u)) ?? [];
+    const uuids = Array.from(new Set(data?.items
+      .flatMap((c) => c.remnawaveUuids ?? (c.remnawaveUuid ? [c.remnawaveUuid] : []))
+      .filter((u): u is string => Boolean(u)) ?? []));
     if (!pageVisible || uuids.length === 0) return;
     
     const poll = () => {
@@ -236,6 +241,7 @@ export function ClientsPage() {
       referralPercent: c.referralPercent ?? undefined,
       personalDiscountPercent: c.personalDiscountPercent ?? undefined,
       personalDiscountIsOneTime: c.personalDiscountIsOneTime ?? false,
+      trialUsed: c.trialUsed,
     });
     setActionMessage(null);
   }
@@ -255,6 +261,7 @@ export function ClientsPage() {
         referralPercent: editForm.referralPercent ?? null,
         personalDiscountPercent: editForm.personalDiscountPercent ?? null,
         personalDiscountIsOneTime: editForm.personalDiscountIsOneTime ?? false,
+        trialUsed: editForm.trialUsed,
       });
       setEditing(updated);
       // Пересоздаём форму из обновлённых данных, иначе input'ы (привязанные к editForm)
@@ -269,6 +276,7 @@ export function ClientsPage() {
         referralPercent: updated.referralPercent ?? undefined,
         personalDiscountPercent: updated.personalDiscountPercent ?? undefined,
         personalDiscountIsOneTime: updated.personalDiscountIsOneTime ?? false,
+        trialUsed: updated.trialUsed,
       });
       setActionMessage(t("admin.clients.saved"));
       loadClients();
@@ -401,6 +409,19 @@ export function ClientsPage() {
               </button>
             ))}
           </div>
+          <select
+            value={filterSubscription}
+            onChange={(event) => {
+              setFilterSubscription(event.target.value as "all" | "any" | "active");
+              setPage(1);
+            }}
+            className="h-9 rounded-xl border border-white/10 bg-background/60 px-3 text-xs font-medium text-foreground"
+            aria-label="Фильтр по подписке"
+          >
+            <option value="all">Все подписки</option>
+            <option value="any">Есть подписка</option>
+            <option value="active">Активная подписка</option>
+          </select>
         </div>
       </Card>
 
@@ -574,13 +595,17 @@ export function ClientsPage() {
                   <th className="px-6 py-4 font-semibold tracking-wider">Пользователь</th>
                   <th className="px-6 py-4 font-semibold tracking-wider">Контакты</th>
                   <th className="px-6 py-4 font-semibold tracking-wider">Баланс & Дата</th>
+                  <th className="px-6 py-4 font-semibold tracking-wider">Подписки</th>
                   <th className="px-6 py-4 font-semibold tracking-wider">Статус</th>
                   <th className="px-6 py-4 rounded-tr-[2rem] text-right">Действия</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
                 {data.items.map((c, idx) => {
-                  const onlineAt = onlineStatuses[c.remnawaveUuid ?? ""]?.onlineAt ?? c.onlineAt ?? null;
+                  const onlineAt = (c.remnawaveUuids ?? (c.remnawaveUuid ? [c.remnawaveUuid] : []))
+                    .map((uuid) => onlineStatuses[uuid]?.onlineAt)
+                    .filter((value): value is string => Boolean(value))
+                    .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? c.onlineAt ?? null;
                   const status = getOnlineStatus(onlineAt);
                   
                   return (
@@ -638,6 +663,24 @@ export function ClientsPage() {
                         </div>
                       </td>
                       <td className="px-6 py-4">
+                        <div className="flex max-w-[260px] flex-wrap gap-1.5">
+                          {c.subscriptions?.length ? c.subscriptions.map((subscription) => (
+                            <span
+                              key={subscription.id}
+                              className={cn(
+                                "inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium",
+                                subscription.active
+                                  ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-400"
+                                  : "border-white/10 bg-white/5 text-muted-foreground",
+                              )}
+                            >
+                              #{subscription.subscriptionIndex} {subscription.tariffName ?? "Без тарифа"}
+                              {subscription.isTrial && <span className="text-violet-400">Пробная</span>}
+                            </span>
+                          )) : <span className="text-xs text-muted-foreground">Нет</span>}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
                         <div className="flex flex-col gap-1.5">
                           {c.isBlocked && (
                             <span className="inline-flex items-center rounded-full bg-red-500/15 text-red-400 px-2.5 py-0.5 text-[11px] font-medium border border-red-500/20 backdrop-blur-md max-w-fit shadow-sm">
@@ -659,6 +702,18 @@ export function ClientsPage() {
                           <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-foreground/[0.06] dark:hover:bg-white/10 hover:text-foreground" onClick={(e) => { e.stopPropagation(); openEdit(c); }} title="Редактировать">
                             <Pencil className="h-4 w-4" />
                           </Button>
+                          {c.telegramId && (
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-sky-500 hover:bg-sky-500/10 hover:text-sky-400" asChild title="Открыть профиль в Telegram">
+                              <a
+                                href={c.telegramUsername ? `https://t.me/${encodeURIComponent(c.telegramUsername.replace(/^@/, ""))}` : `tg://user?id=${encodeURIComponent(c.telegramId)}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <MessageCircle className="h-4 w-4" />
+                              </a>
+                            </Button>
+                          )}
                           <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-red-500/20 text-destructive" onClick={(e) => { e.stopPropagation(); deleteClient(c); }} title="Удалить">
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -967,7 +1022,18 @@ function ClientEditModal({
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="truncate">{editing.email || editing.telegramUsername ? `@${editing.telegramUsername}` : editing.telegramId || "Клиент"}</span>
+                  <span className="truncate">{editing.telegramUsername ? `@${editing.telegramUsername}` : editing.email || (editing.telegramId ? `tg${editing.telegramId}` : "Клиент")}</span>
+                  {editing.telegramId && (
+                    <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full text-sky-500 hover:bg-sky-500/10 hover:text-sky-400" asChild title="Открыть профиль в Telegram">
+                      <a
+                        href={editing.telegramUsername ? `https://t.me/${encodeURIComponent(editing.telegramUsername.replace(/^@/, ""))}` : `tg://user?id=${encodeURIComponent(editing.telegramId)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <MessageCircle className="h-4 w-4" />
+                      </a>
+                    </Button>
+                  )}
                   {editing.remnawaveUuid && (
                     <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium", statusInfo.color)}>
                       {statusInfo.label}
@@ -1053,24 +1119,20 @@ function ClientEditModal({
                   remna (например, migrate_inactive не создаёт Remna user — он добавляется при
                   первой покупке). Иначе кнопка «Открыть детально» в инлайн-блоке switch'ала
                   на несуществующий tab. */}
-              {(editing.remnawaveUuid || secondarySubs.length > 0) && (
-                <>
-                  <TabsTrigger value="subscriptions" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                    <Package className="h-3.5 w-3.5" /> Подписки
-                  </TabsTrigger>
-                  <TabsTrigger value="devices" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                    <Smartphone className="h-3.5 w-3.5" /> {t("admin.clients.devices")}
-                    {devicesTotal > 0 && <span className="ml-1 rounded-full bg-primary/10 px-1.5 text-[10px] font-bold text-primary">{devicesTotal}</span>}
-                  </TabsTrigger>
-                  <TabsTrigger value="actions" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                    <Activity className="h-3.5 w-3.5" /> {t("admin.clients.actions")}
-                  </TabsTrigger>
-                  {canManageServices && (
-                    <TabsTrigger value="services" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                      <Gift className="h-3.5 w-3.5" /> Услуги
-                    </TabsTrigger>
-                  )}
-                </>
+              <TabsTrigger value="subscriptions" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
+                <Package className="h-3.5 w-3.5" /> Подписки
+              </TabsTrigger>
+              <TabsTrigger value="devices" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
+                <Smartphone className="h-3.5 w-3.5" /> {t("admin.clients.devices")}
+                {devicesTotal > 0 && <span className="ml-1 rounded-full bg-primary/10 px-1.5 text-[10px] font-bold text-primary">{devicesTotal}</span>}
+              </TabsTrigger>
+              <TabsTrigger value="actions" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
+                <Activity className="h-3.5 w-3.5" /> {t("admin.clients.actions")}
+              </TabsTrigger>
+              {canManageServices && (
+                <TabsTrigger value="services" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
+                  <Gift className="h-3.5 w-3.5" /> Услуги
+                </TabsTrigger>
               )}
             </TabsList>
 
@@ -1111,7 +1173,7 @@ function ClientEditModal({
                             return (
                               <option key={tr.id} value={tr.id}>
                                 {tr.name}
-                                {tr.trafficLimitBytes != null && tr.trafficLimitBytes > 0
+                                {tr.trafficLimitBytes != null && Number(tr.trafficLimitBytes) > 0
                                   ? ` · ${formatTrafficBytes(Number(tr.trafficLimitBytes))}`
                                   : ""}
                                 {tr.deviceLimit ? ` · ${tr.deviceLimit} устр.` : ""}
@@ -1564,6 +1626,14 @@ function ClientEditModal({
                         onChange={(e) => setEditForm((f) => ({ ...f, isBlocked: e.target.checked }))}
                       />
                       <span>{t("admin.clients.is_blocked")}</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        checked={editForm.trialUsed ?? false}
+                        onChange={(e) => setEditForm((f) => ({ ...f, trialUsed: e.target.checked }))}
+                      />
+                      <span>Триал использован</span>
                     </label>
                   </div>
                   {(editForm.isBlocked ?? editing.isBlocked) && (

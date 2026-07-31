@@ -12,7 +12,7 @@ import { getSystemConfig } from "../client/client.service.js";
 import { activateTariffByPaymentId } from "../tariff/tariff-activation.service.js";
 import { createProxySlotsByPaymentId } from "../proxy/proxy-slots-activation.service.js";
 import { createSingboxSlotsByPaymentId } from "../singbox/singbox-slots-activation.service.js";
-import { applyExtraOptionByPaymentId } from "../extra-options/extra-options.service.js";
+import { markPaymentPaid } from "../payment/mark-paid.service.js";
 
 function hasExtraOptionInMetadata(metadata: string | null): boolean {
   if (!metadata?.trim()) return false;
@@ -193,17 +193,21 @@ yoomoneyWebhooksRouter.post("/yoomoney", async (req, res) => {
 
   await auditPaymentClientBotAlignment(payment);
 
-  if (payment.status === "PAID") {
-    console.log("[YooMoney Webhook] Payment already processed", { paymentId: payment.id });
-    return res.status(200).send("OK");
-  }
-
   const amountNum = parseFloat(amount);
   if (!Number.isFinite(amountNum) || amountNum <= 0) {
     return res.status(200).send("OK");
   }
 
   const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
+  if (isExtraOption) {
+    if (operationId) await prisma.payment.update({ where: { id: payment.id }, data: { externalId: operationId } });
+    await markPaymentPaid(payment.id);
+    return res.status(200).send("OK");
+  }
+  if (payment.status === "PAID") {
+    console.log("[YooMoney Webhook] Payment already processed", { paymentId: payment.id });
+    return res.status(200).send("OK");
+  }
   const isTopUp = !payment.tariffId && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
 
   if (isTopUp) {
@@ -233,16 +237,7 @@ yoomoneyWebhooksRouter.post("/yoomoney", async (req, res) => {
     await recordPromoCodeUsageFromPayment(payment.id);
     console.log("[YooMoney Webhook] Payment PAID (tariff/option)", { paymentId: payment.id, operationId, notificationType });
 
-    if (isExtraOption) {
-      const result = await applyExtraOptionByPaymentId(payment.id);
-      if (result.ok) {
-        console.log("[YooMoney Webhook] Extra option applied", { paymentId: payment.id });
-        const { notifyExtraOptionApplied } = await import("../notification/telegram-notify.service.js");
-        await notifyExtraOptionApplied(payment.clientId, payment.id).catch(() => {});
-      } else {
-        console.error("[YooMoney Webhook] Extra option apply failed", { paymentId: payment.id, error: (result as { error?: string }).error });
-      }
-    } else if (payment.proxyTariffId) {
+    if (payment.proxyTariffId) {
       const proxyResult = await createProxySlotsByPaymentId(payment.id);
       if (proxyResult.ok) {
         console.log("[YooMoney Webhook] Proxy slots created", { paymentId: payment.id, slots: proxyResult.slotsCreated });

@@ -18,15 +18,47 @@ import {
 import { createAdditionalSubscription, deleteSubscription } from "../gift/gift.service.js";
 import { getSystemConfig } from "../client/client.service.js";
 import { upsertSubscriptionByRemnaUuid } from "../subscription/subscription.helpers.js";
+import { deleteSingleSubscription } from "../subscription/single-subscription-lifecycle.service.js";
 import {
-  deleteSubscriptionComponents,
-  runSubscriptionComponentOperation,
-  synchronizeSubscriptionComponents,
-} from "../subscription/subscription-components.service.js";
+  applyTrafficEntitlement,
+  validateTrafficEntitlement,
+  type TrafficEntitlementInput,
+} from "../squad-traffic/traffic-entitlement.service.js";
 
 export type ActivationResult =
   | { ok: true; /** дни, добавленные pro-rata конвертацией остатка (режим convert) */ convertedDays?: number }
   | { ok: false; error: string; status: number };
+
+type TrafficAwareTariff = {
+  id?: string;
+  trafficLimitBytes: bigint | null;
+  internalSquadUuids: string[];
+  trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
+  meteredSquadUuid?: string | null;
+};
+
+async function resolveTrafficEntitlementInput(tariff: TrafficAwareTariff): Promise<TrafficEntitlementInput> {
+  let source = tariff;
+  if (!tariff.trafficLimitMode && tariff.id) {
+    source = await prisma.tariff.findUnique({
+      where: { id: tariff.id },
+      select: {
+        id: true,
+        trafficLimitMode: true,
+        meteredSquadUuid: true,
+        trafficLimitBytes: true,
+        internalSquadUuids: true,
+      },
+    }) ?? tariff;
+  }
+  return validateTrafficEntitlement({
+    tariffId: source.id ?? null,
+    mode: source.trafficLimitMode ?? "REMNAWAVE",
+    internalSquadUuids: source.internalSquadUuids,
+    meteredSquadUuid: source.meteredSquadUuid ?? null,
+    trafficLimitBytes: source.trafficLimitBytes,
+  });
+}
 
 /**
  * Извлекает текущий expireAt из ответа Remna GET /api/users/{uuid}.
@@ -315,6 +347,8 @@ export async function activateTariffForClient(
     deviceDiscountTiers?: unknown;
     internalSquadUuids: string[];
     trafficResetMode?: string;
+    trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
+    meteredSquadUuid?: string | null;
     price?: number;
   },
   selectedOption?: { id?: string; durationDays: number; price: number },
@@ -322,6 +356,12 @@ export async function activateTariffForClient(
   extraDevices?: number,
 ): Promise<ActivationResult> {
   if (!isRemnaConfigured()) return { ok: false, error: "Сервис временно недоступен", status: 503 };
+  let entitlement: TrafficEntitlementInput;
+  try {
+    entitlement = await resolveTrafficEntitlementInput(tariff);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Некорректный режим трафика", status: 400 };
+  }
 
   // Эффективные значения из selectedOption (приоритет) или из legacy полей тарифа.
   const effectiveDays = selectedOption?.durationDays ?? tariff.durationDays;
@@ -344,13 +384,15 @@ export async function activateTariffForClient(
   const effectivePrice = unitPrice + extrasTotal;
   const newPricePerDay = effectiveDays > 0 ? effectivePrice / effectiveDays : 0;
 
-  const trafficLimitBytes = tariff.trafficLimitBytes != null ? Number(tariff.trafficLimitBytes) : 0;
+  const trafficLimitBytes = entitlement.mode === "LOCAL_SQUAD"
+    ? 0
+    : tariff.trafficLimitBytes != null ? Number(tariff.trafficLimitBytes) : 0;
   // HWID лимит = включённые + докупленные. Legacy deviceLimit используется только если
   // фронт/вебхук не сообщил extras (старые ивенты, customBuild).
   const totalDevices = includedDevices + effectiveExtras;
   const hwidDeviceLimit = extraDevices != null ? totalDevices : (tariff.deviceLimit ?? totalDevices);
   const resetMode: TrafficResetMode = (tariff.trafficResetMode as TrafficResetMode) || "no_reset";
-  const trafficLimitStrategy = remnaStrategy(resetMode);
+  const trafficLimitStrategy = entitlement.mode === "LOCAL_SQUAD" ? "NO_RESET" : remnaStrategy(resetMode);
 
   // Загружаем сохранённое состояние клиента для конвертации.
   const dbClient = await prisma.client.findUnique({
@@ -362,9 +404,6 @@ export async function activateTariffForClient(
   let workingUuid = client.remnawaveUuid;
   // сохраняем итоговый expireAt чтобы синкнуть его в БД.
   let finalExpireAt: string | null = null;
-  // Основной Remnawave user может быть сброшен до материализации логической
-  // подписки. После materialize повторяем операцию по всем компонентам.
-  let resetAllComponentTraffic = false;
 
   if (workingUuid) {
     const userRes = await remnaGetUser(workingUuid);
@@ -419,9 +458,8 @@ export async function activateTariffForClient(
     });
     // T-traffic-expired-fix : used сбрасываем по resetUsed независимо от
     // hadActiveSub — иначе у истёкших carry_over лимит рос (90+остаток), а счётчик used не обнулялся.
-    if (traffic.resetUsed) {
+    if (entitlement.mode !== "LOCAL_SQUAD" && traffic.resetUsed) {
       await remnaResetUserTraffic(workingUuid);
-      resetAllComponentTraffic = true;
     }
     const finalTrafficLimitBytes = traffic.finalLimitBytes;
 
@@ -510,9 +548,8 @@ export async function activateTariffForClient(
       hadActiveSub: currentExpireAt !== null,
     });
     // T-traffic-expired-fix : used сбрасываем по resetUsed, не завися от истечения.
-    if (traffic2.resetUsed) {
+    if (entitlement.mode !== "LOCAL_SQUAD" && traffic2.resetUsed) {
       await remnaResetUserTraffic(existingUuid);
-      resetAllComponentTraffic = true;
     }
     await remnaUpdateUser({ uuid: existingUuid, expireAt, trafficLimitBytes: traffic2.finalLimitBytes, trafficLimitStrategy, hwidDeviceLimit, activeInternalSquads });
     await prisma.client.update({ where: { id: client.id }, data: { remnawaveUuid: existingUuid } });
@@ -539,8 +576,9 @@ export async function activateTariffForClient(
   // свободном слоте (0, 1, 2…). Не привязываемся жёстко к [0] — это даёт правильное поведение
   // когда клиент впервые покупает после удаления primary, или просто покупает первый тариф.
   const finalUuid = await prisma.client.findUnique({ where: { id: client.id }, select: { remnawaveUuid: true } }).then((c) => c?.remnawaveUuid ?? null);
+  let activatedSubscriptionId: string | null = null;
   if (finalUuid) {
-    const materialized = await upsertSubscriptionByRemnaUuid(client.id, {
+    const upserted = await upsertSubscriptionByRemnaUuid(client.id, {
       remnawaveUuid: finalUuid,
       ...(tariff.id ? { tariffId: tariff.id } : {}),
       trialId: null,
@@ -552,17 +590,7 @@ export async function activateTariffForClient(
       console.error("[tariff-activation] upsertSubscriptionByRemnaUuid failed:", e);
       return null;
     });
-    if (materialized) {
-      await synchronizeSubscriptionComponents(materialized.id).catch((e) =>
-        console.error("[tariff-activation] component sync failed:", e),
-      );
-      if (resetAllComponentTraffic) {
-        await runSubscriptionComponentOperation(materialized.id, async ({ remnawaveUuid }) => {
-          const reset = await remnaResetUserTraffic(remnawaveUuid);
-          if (reset.error) throw new Error(reset.error);
-        }).catch((e) => console.error("[tariff-activation] component traffic reset failed:", e));
-      }
-    }
+    activatedSubscriptionId = upserted?.id ?? null;
   }
 
   // Синхронизируем autoRenewTariffId с купленным тарифом + сохраняем priceOption.
@@ -602,6 +630,15 @@ export async function activateTariffForClient(
     }
   }
 
+  if (!activatedSubscriptionId) {
+    return { ok: false, error: "Ошибка сохранения подписки", status: 500 };
+  }
+  await applyTrafficEntitlement(
+    activatedSubscriptionId,
+    entitlement,
+    "NEW_PURCHASE",
+  );
+
   return { ok: true };
 }
 
@@ -618,8 +655,40 @@ export async function activateTariffForClient(
  * 4. PATCH в Remna: новый expireAt + лимиты + squads.
  * 5. Опц.: обновляем secondary.tariffId если клиент сменил тариф.
  */
+type SubscriptionActivationTarget = {
+  id: string;
+  remnawaveUuid: string | null;
+  tariffId: string | null;
+  ownerId: string;
+  giftedToClientId: string | null;
+  deletionRequestedAt: Date | null;
+  customPrice: number | null;
+  extraDevices: number;
+  extraDevicesMonthlyPrice: number;
+  trialId: string | null;
+  currentPricePerDay: number | null;
+};
+
+type ExtendSubscriptionDependencies = {
+  findSubscription?: (id: string) => Promise<SubscriptionActivationTarget | null>;
+  getUser?: typeof remnaGetUser;
+  resetUserTraffic?: typeof remnaResetUserTraffic;
+  updateUser?: typeof remnaUpdateUser;
+  updateSubscription?: (args: Parameters<typeof prisma.subscription.update>[0]) => Promise<unknown>;
+  applyEntitlement?: typeof applyTrafficEntitlement;
+};
+
+export function subscriptionBelongsToClient(
+  subscription: Pick<SubscriptionActivationTarget, "ownerId" | "giftedToClientId" | "deletionRequestedAt">,
+  clientId: string,
+): boolean {
+  return subscription.deletionRequestedAt == null
+    && (subscription.ownerId === clientId || subscription.giftedToClientId === clientId);
+}
+
 export async function extendSecondarySubscription(
   secondaryId: string,
+  expectedClientId: string,
   tariff: {
     id?: string;
     durationDays: number;
@@ -631,6 +700,8 @@ export async function extendSecondarySubscription(
     deviceDiscountTiers?: unknown;
     internalSquadUuids: string[];
     trafficResetMode?: string;
+    trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
+    meteredSquadUuid?: string | null;
     price?: number;
   },
   selectedOption?: { id?: string; durationDays: number; price: number },
@@ -648,18 +719,48 @@ export async function extendSecondarySubscription(
    *  тот же Remnawave-UUID → ссылка подписки НЕ меняется), НО остаток дней НЕ переносится
    *  (convertedDays=0) — старые дни сгорают, тариф начинается с нуля. */
   hardReplace?: boolean,
+  dependencies: ExtendSubscriptionDependencies = {},
 ): Promise<ActivationResult> {
   if (!isRemnaConfigured()) return { ok: false, error: "Сервис временно недоступен", status: 503 };
 
-  const sec = await prisma.subscription.findUnique({
-    where: { id: secondaryId },
-    select: { id: true, remnawaveUuid: true, tariffId: true, ownerId: true, customPrice: true, extraDevices: true, extraDevicesMonthlyPrice: true, trialId: true, currentPricePerDay: true },
-  });
+  const sec = await (dependencies.findSubscription
+    ? dependencies.findSubscription(secondaryId)
+    : prisma.subscription.findUnique({
+        where: { id: secondaryId },
+        select: {
+          id: true,
+          remnawaveUuid: true,
+          tariffId: true,
+          ownerId: true,
+          giftedToClientId: true,
+          deletionRequestedAt: true,
+          customPrice: true,
+          extraDevices: true,
+          extraDevicesMonthlyPrice: true,
+          trialId: true,
+          currentPricePerDay: true,
+        },
+      }));
   if (!sec) {
     return { ok: false, error: "Доп. подписка не найдена", status: 404 };
   }
+  if (!subscriptionBelongsToClient(sec, expectedClientId)) {
+    return { ok: false, error: "Подписка не принадлежит клиенту или удаляется", status: 403 };
+  }
   if (!sec.remnawaveUuid) {
     return { ok: false, error: "Доп. подписка не привязана к Remnawave", status: 400 };
+  }
+
+  const userRes = await (dependencies.getUser ?? remnaGetUser)(sec.remnawaveUuid);
+  if (userRes.error || !userRes.data) {
+    return { ok: false, error: "Пользователь VPN для этой подписки не найден", status: 404 };
+  }
+
+  let entitlement: TrafficEntitlementInput;
+  try {
+    entitlement = await resolveTrafficEntitlementInput(tariff);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Некорректный режим трафика", status: 400 };
   }
 
   const effectiveDays = selectedOption?.durationDays ?? tariff.durationDays;
@@ -687,16 +788,14 @@ export async function extendSecondarySubscription(
   const effectiveExtras = keptExtras + newExtras;
   const effectiveExtrasMonthly = Math.round((keptExtrasMonthly + newExtrasMonthly) * 100) / 100;
 
-  const trafficLimitBytes = tariff.trafficLimitBytes != null ? Number(tariff.trafficLimitBytes) : 0;
+  const trafficLimitBytes = entitlement.mode === "LOCAL_SQUAD"
+    ? 0
+    : tariff.trafficLimitBytes != null ? Number(tariff.trafficLimitBytes) : 0;
   const totalDevices = includedDevices + effectiveExtras;
   const hwidDeviceLimit = totalDevices;
   const resetMode: TrafficResetMode = (tariff.trafficResetMode as TrafficResetMode) || "no_reset";
-  const trafficLimitStrategy = remnaStrategy(resetMode);
+  const trafficLimitStrategy = entitlement.mode === "LOCAL_SQUAD" ? "NO_RESET" : remnaStrategy(resetMode);
 
-  const userRes = await remnaGetUser(sec.remnawaveUuid);
-  if (userRes.error || !userRes.data) {
-    return { ok: false, error: "Пользователь VPN для этой подписки не найден", status: 404 };
-  }
   const currentExpireAt = extractCurrentExpireAt(userRes.data);
   const currentSquads = extractCurrentSquads(userRes.data);
 
@@ -764,11 +863,9 @@ export async function extendSecondarySubscription(
   const currentUsedBytes = extractCurrentTrafficUsed(userRes.data);
   // При конвертации трафик начинается заново по новому тарифу (это смена тарифа,
   // а не продление того же) — лимит нового тарифа, счётчик used в ноль.
-  // конвертация ТРИАЛА переносит неизрасходованный остаток
-  // («гиги остаются»): finalLimit = лимит нового тарифа + остаток триала.
-  const trialCarryOver = isTrialConversion && trafficLimitBytes > 0
-    ? Math.max(0, (currentLimitBytes ?? 0) - (currentUsedBytes ?? 0))
-    : 0;
+  // Trial-to-paid starts a fresh paid traffic period. Historical trial usage
+  // stays out of both the Remnawave global limit and the local quota baseline.
+  const trialCarryOver = 0;
   const traffic = effectiveConvert
     ? { finalLimitBytes: trafficLimitBytes > 0 ? trafficLimitBytes + trialCarryOver : trafficLimitBytes, resetUsed: true }
     : computeTrafficOnRenewal({
@@ -781,22 +878,23 @@ export async function extendSecondarySubscription(
       });
   // T-traffic-expired-fix : used сбрасываем по resetUsed, не завися от истечения
   // (доп./триальные подписки тоже должны переносить остаток после истечения).
-  if (traffic.resetUsed) {
-    await runSubscriptionComponentOperation(sec.id, async ({ remnawaveUuid }) => {
-      const reset = await remnaResetUserTraffic(remnawaveUuid);
-      if (reset.error) throw new Error(reset.error);
-    });
+  if (entitlement.mode !== "LOCAL_SQUAD" && traffic.resetUsed) {
+    if (dependencies.resetUserTraffic) await dependencies.resetUserTraffic(sec.remnawaveUuid);
+    else await remnaResetUserTraffic(sec.remnawaveUuid);
   }
   const finalTrafficLimitBytes = traffic.finalLimitBytes;
 
-  const updateRes = await remnaUpdateUser({
+  const updateInput = {
     uuid: sec.remnawaveUuid,
     expireAt,
     trafficLimitBytes: finalTrafficLimitBytes,
     trafficLimitStrategy,
     hwidDeviceLimit,
     activeInternalSquads,
-  });
+  };
+  const updateRes = dependencies.updateUser
+    ? await dependencies.updateUser(updateInput)
+    : await remnaUpdateUser(updateInput);
   if (updateRes.error) {
     return { ok: false, error: updateRes.error, status: updateRes.status >= 400 ? updateRes.status : 500 };
   }
@@ -806,7 +904,7 @@ export async function extendSecondarySubscription(
   // фиксируем итоговое количество extraDevices.
   // В convertMode дополнительно фиксируем новую цену/ставку (для будущих продлений и автосписаний).
   const newPriceForDb = selectedOption?.price ?? tariff.price;
-  await prisma.subscription.update({
+  await (dependencies.updateSubscription ?? ((args) => prisma.subscription.update(args)))({
     where: { id: sec.id },
     data: {
       expireAt: new Date(expireAt),
@@ -819,11 +917,7 @@ export async function extendSecondarySubscription(
         currentPricePerDay: effectiveDays > 0 ? newPriceForDb / effectiveDays : null,
       } : {}),
     },
-  }).catch(() => {});
-
-  await synchronizeSubscriptionComponents(sec.id).catch((e) =>
-    console.error("[extendSecondarySubscription] component sync failed:", e),
-  );
+  });
 
   // юзер выбрал «без устройств» — лимит уже выставлен выше (included + новые extras,
   // старые обнулены в счётчиках), остаётся кикнуть HWID-устройства сверх нового лимита.
@@ -836,6 +930,12 @@ export async function extendSecondarySubscription(
       console.error("[extendSecondarySubscription] removeExtrasAfter kick failed:", e);
     }
   }
+
+  await (dependencies.applyEntitlement ?? applyTrafficEntitlement)(
+    sec.id,
+    entitlement,
+    sec.tariffId === entitlement.tariffId && !isTrialConversion ? "RENEWAL" : "TARIFF_CHANGE",
+  );
 
   return effectiveConvert ? { ok: true, convertedDays } : { ok: true };
 }
@@ -872,6 +972,7 @@ export async function findConvertibleSubscription(
     purchasedAsGift: false,
     giftStatus: null,
     remnawaveUuid: { not: null },
+    deletionRequestedAt: null,
   } as const;
   const candidateSelect = {
     id: true,
@@ -926,7 +1027,7 @@ export async function findConvertibleSubscription(
  */
 export async function consolidateToSingleSubscription(clientId: string, keepSubId: string): Promise<number> {
   const others = await prisma.subscription.findMany({
-    where: { ownerId: clientId, id: { not: keepSubId }, purchasedAsGift: false, giftStatus: null },
+    where: { ownerId: clientId, id: { not: keepSubId }, purchasedAsGift: false, giftStatus: null, deletionRequestedAt: null },
     select: { id: true },
   });
   let deleted = 0;
@@ -992,6 +1093,12 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
     if (!tariff) {
       return { ok: false, error: "Тариф не найден", status: 404 };
     }
+    let entitlement: TrafficEntitlementInput;
+    try {
+      entitlement = await resolveTrafficEntitlementInput(tariff);
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Некорректный режим трафика", status: 400 };
+    }
 
     const selectedOption = payment.tariffPriceOption && payment.tariffPriceOptionId
       ? { id: payment.tariffPriceOptionId, durationDays: payment.tariffPriceOption.durationDays, price: payment.tariffPriceOption.price }
@@ -1010,8 +1117,18 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
       // задаются в настройках триала (convertEnabled / convertAllTariffs / convertTariffIds).
       const targetSub = await prisma.subscription.findUnique({
         where: { id: extendsSecondaryId },
-        select: { tariffId: true, trialId: true, trial: { select: { convertEnabled: true, convertAllTariffs: true, convertTariffIds: true } } },
+        select: {
+          ownerId: true,
+          giftedToClientId: true,
+          deletionRequestedAt: true,
+          tariffId: true,
+          trialId: true,
+          trial: { select: { convertEnabled: true, convertAllTariffs: true, convertTariffIds: true } },
+        },
       });
+      if (!targetSub || !subscriptionBelongsToClient(targetSub, client.id)) {
+        return { ok: false, error: "Подписка не принадлежит клиенту или удаляется", status: 403 };
+      }
       if (targetSub?.trialId) {
         if (targetSub.trial?.convertEnabled === false) {
           return { ok: false, error: "Этот пробный период нельзя конвертировать или продлить", status: 400 };
@@ -1032,7 +1149,7 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
       // флаг прокидывается в metadata при создании платежа. Удаление произойдёт после
       // успешного extendSecondarySubscription.
       const removeExtrasAfter = shouldRemoveExtrasOnActivate(payment.metadata);
-      const result = await extendSecondarySubscription(extendsSecondaryId, {
+      const result = await extendSecondarySubscription(extendsSecondaryId, client.id, {
         id: tariff.id,
         durationDays: selectedOption?.durationDays ?? tariff.durationDays,
         trafficLimitBytes: tariff.trafficLimitBytes,
@@ -1043,6 +1160,8 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
         deviceDiscountTiers: tariff.deviceDiscountTiers,
         internalSquadUuids: tariff.internalSquadUuids,
         trafficResetMode: tariff.trafficResetMode ?? undefined,
+        trafficLimitMode: tariff.trafficLimitMode,
+        meteredSquadUuid: tariff.meteredSquadUuid,
         price: selectedOption?.price ?? tariff.price,
       }, selectedOption, payment.deviceCount ?? undefined, removeExtrasAfter);
       if (result.ok) {
@@ -1068,7 +1187,7 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
         // мульти выкл + ДРУГОЙ тариф → hardReplace (дни сгорают); мульти вкл (категория-single) + другой → pro-rata convert.
         const hardReplace = !multiSubEnabled && !convertible.sameTariff;
         const convertModeFlag = multiSubEnabled && !convertible.sameTariff;
-        const result = await extendSecondarySubscription(convertible.id, {
+        const result = await extendSecondarySubscription(convertible.id, client.id, {
           id: tariff.id,
           durationDays: selectedOption?.durationDays ?? tariff.durationDays,
           trafficLimitBytes: tariff.trafficLimitBytes,
@@ -1079,6 +1198,8 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
           deviceDiscountTiers: tariff.deviceDiscountTiers,
           internalSquadUuids: tariff.internalSquadUuids,
           trafficResetMode: tariff.trafficResetMode ?? undefined,
+          trafficLimitMode: tariff.trafficLimitMode,
+          meteredSquadUuid: tariff.meteredSquadUuid,
           price: selectedOption?.price ?? tariff.price,
         // тот же тариф → обычное продление (стек); другой → convert (pro-rata) или hardReplace (с нуля).
         }, selectedOption, payment.deviceCount ?? undefined, removeExtrasOnConvert, convertModeFlag, hardReplace);
@@ -1121,16 +1242,17 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
       name: tariff.name,
       price: selectedOption?.price ?? tariff.price,
       durationDays: selectedOption?.durationDays ?? tariff.durationDays,
-      trafficLimitBytes: tariff.trafficLimitBytes,
+      trafficLimitBytes: entitlement.mode === "LOCAL_SQUAD" ? 0n : tariff.trafficLimitBytes,
       deviceLimit: tariff.deviceLimit,
       includedDevices: tariff.includedDevices,
       pricePerExtraDevice: tariff.pricePerExtraDevice,
       maxExtraDevices: tariff.maxExtraDevices,
       deviceDiscountTiers: tariff.deviceDiscountTiers,
       internalSquadUuids: tariff.internalSquadUuids,
-      trafficResetMode: tariff.trafficResetMode ?? undefined,
+      trafficResetMode: entitlement.mode === "LOCAL_SQUAD" ? "no_reset" : tariff.trafficResetMode ?? undefined,
     }, { extraDevices: payment.deviceCount ?? 0, purchasedAsGift: isGiftPurchase, skipConfigCheck: true });
     if (result.ok) {
+      await applyTrafficEntitlement(result.data.subscriptionId, entitlement, "NEW_PURCHASE");
       await prisma.payment.update({ where: { id: payment.id }, data: { subscriptionId: result.data.subscriptionId } }).catch(() => {});
       await resetOneTimeDiscount();
       // Single-режим: подчищаем любые прочие подписки клиента (оставляем эту).
@@ -1146,6 +1268,13 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
   if (customBuild) {
     const result = await createAdditionalSubscription(client.id, customBuild, { purchasedAsGift: isGiftPurchase, skipConfigCheck: true });
     if (result.ok) {
+      await applyTrafficEntitlement(result.data.subscriptionId, {
+        tariffId: null,
+        mode: "REMNAWAVE",
+        internalSquadUuids: customBuild.internalSquadUuids,
+        meteredSquadUuid: null,
+        trafficLimitBytes: customBuild.trafficLimitBytes,
+      }, "NEW_PURCHASE");
       await prisma.payment.update({ where: { id: payment.id }, data: { subscriptionId: result.data.subscriptionId } }).catch(() => {});
       // Single-режим: кастом-билд, как и обычная покупка, оставляет ОДНУ подписку.
       // Не для подарков (иначе консолидация снесла бы реальные подписки клиента).
@@ -1201,14 +1330,14 @@ function getReplaceTrialSubId(metadata: string | null): string | null {
  */
 export async function replaceTrialOnPurchase(clientId: string, requestedTrialSubId: string | null): Promise<string | null> {
   const trials = await prisma.subscription.findMany({
-    where: { ownerId: clientId, trialId: { not: null }, purchasedAsGift: false },
+    where: { ownerId: clientId, trialId: { not: null }, purchasedAsGift: false, deletionRequestedAt: null },
     orderBy: { createdAt: "asc" },
     select: { id: true, remnawaveUuid: true },
   });
   if (trials.length === 0) return null;
   const target = (requestedTrialSubId && trials.find((t) => t.id === requestedTrialSubId)) || trials[0];
-  const deletion = await deleteSubscriptionComponents(target.id).catch((error) => ({ deleted: false, error }));
-  if (!deletion.deleted) console.error("[trial-replace] component deletion scheduled for reconciliation", "error" in deletion ? deletion.error : deletion.failures);
+  const deletion = await deleteSingleSubscription(target.id).catch((error) => ({ deleted: false, error }));
+  if (!deletion.deleted) console.error("[trial-replace] deletion scheduled for reconciliation", "error" in deletion ? deletion.error : deletion.failures);
   // легаси-указатель клиента мог смотреть на удалённого Remna-юзера.
   await prisma.client.updateMany({
     where: { id: clientId, remnawaveUuid: target.remnawaveUuid ?? undefined },

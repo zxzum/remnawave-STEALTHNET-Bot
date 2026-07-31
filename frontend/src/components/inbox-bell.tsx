@@ -1,20 +1,18 @@
 /**
  * Inbox Bell — глобальный indicator открытых тикетов / webhook-ошибок / failed
  * payments / cron failures и т.д. Грузит /api/admin/notifications/counters
- * каждые 60 секунд, рендерит badge с total и popover-список с переходами.
+ * при открытии, рендерит badge с total и popover-список с переходами.
  *
  * Используется в dashboard-layout topbar.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Bell, AlertTriangle, AlertCircle, Info, ChevronRight, Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/auth";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { notificationsApi, type NotificationCounter } from "@/lib/admin-extras-api";
-
-const REFRESH_MS = 60_000;
 
 function severityIcon(severity: NotificationCounter["severity"]) {
   switch (severity) {
@@ -42,7 +40,6 @@ export function InboxBell() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function load() {
     if (!state.accessToken) return;
@@ -63,14 +60,10 @@ export function InboxBell() {
   }
 
   useEffect(() => {
-    if (!state.accessToken) return;
+    if (!open || !state.accessToken) return;
     load();
-    timerRef.current = setInterval(load, REFRESH_MS);
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.accessToken]);
+  }, [open, state.accessToken]);
 
   const safeItems = Array.isArray(items) ? items : [];
   const hasError = safeItems.some((i) => i.severity === "error");

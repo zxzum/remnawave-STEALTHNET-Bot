@@ -117,7 +117,7 @@ export function ClientAuthProvider({ children }: { children: React.ReactNode }) 
   }, []);
 
   useEffect(() => {
-    if (state.token || miniappAttemptedRef.current || typeof window === "undefined") return;
+    if (miniappAttemptedRef.current || typeof window === "undefined") return;
     const initData = window.Telegram?.WebApp?.initData;
     if (!initData?.trim()) return;
     miniappAttemptedRef.current = true;
@@ -137,7 +137,7 @@ export function ClientAuthProvider({ children }: { children: React.ReactNode }) 
       .catch(() => {
         setState((prev) => ({ ...prev, miniappAuthLoading: false, miniappAuthAttempted: true }));
       });
-  }, [state.token]);
+  }, []);
 
   const refreshProfile = useCallback(async () => {
     if (!state.token) return;

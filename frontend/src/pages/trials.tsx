@@ -10,7 +10,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/auth";
 import { api } from "@/lib/api";
-import type { TrialRecord, CreateTrialPayload, TariffCategoryWithTariffs, RemnawaveComponentTemplate } from "@/lib/api";
+import type { TrialRecord, CreateTrialPayload, TariffCategoryWithTariffs } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,11 +19,7 @@ import { Plus, Trash2, Pencil, Loader2, Gift } from "lucide-react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 
-type FlatTariff = { id: string; name: string; categoryName: string; remnawaveComponents: RemnawaveComponentTemplate[] };
-
-function cloneComponents(components: RemnawaveComponentTemplate[]): RemnawaveComponentTemplate[] {
-  return components.map((component) => ({ ...component, internalSquadUuids: [...component.internalSquadUuids] }));
-}
+type FlatTariff = { id: string; name: string; categoryName: string; internalSquadUuids: string[] };
 
 export function TrialsPage() {
   const { state } = useAuth();
@@ -48,7 +44,7 @@ export function TrialsPage() {
       const flat: FlatTariff[] = [];
       for (const c of catsRes.items as TariffCategoryWithTariffs[]) {
         for (const t of c.tariffs) {
-          flat.push({ id: t.id, name: t.name, categoryName: c.name, remnawaveComponents: t.remnawaveComponents ?? [] });
+          flat.push({ id: t.id, name: t.name, categoryName: c.name, internalSquadUuids: t.internalSquadUuids });
         }
       }
       setTariffsFlat(flat);
@@ -236,10 +232,9 @@ function TrialFormDialog({
   const [convertEnabled, setConvertEnabled] = useState<boolean>(trial?.convertEnabled ?? true);
   const [convertAllTariffs, setConvertAllTariffs] = useState<boolean>(trial?.convertAllTariffs ?? false);
   const [durationDays, setDurationDays] = useState<number>(trial?.durationDays ?? 3);
-  const [trialComponents, setTrialComponents] = useState<RemnawaveComponentTemplate[]>(() => {
-    if (trial?.remnawaveComponents?.length) return cloneComponents(trial.remnawaveComponents);
-    return cloneComponents(tariffs.find((tariff) => tariff.id === (trial?.tariffId ?? tariffs[0]?.id))?.remnawaveComponents ?? []);
-  });
+  const [trafficLimitMode, setTrafficLimitMode] = useState<"REMNAWAVE" | "LOCAL_SQUAD">(trial?.trafficLimitMode ?? "REMNAWAVE");
+  const [meteredSquadUuid, setMeteredSquadUuid] = useState(trial?.meteredSquadUuid ?? "");
+  const [trafficGb, setTrafficGb] = useState(trial?.trafficLimitBytes != null ? String(Number(trial.trafficLimitBytes) / 1024 ** 3) : "");
 
   // сквады из Remna — для standalone-источника.
   useEffect(() => {
@@ -268,12 +263,9 @@ function TrialFormDialog({
         : "Заполните название, выберите сквад и укажите длительность ≥ 1.");
       return;
     }
-    if (trialComponents.length === 0 || trialComponents.filter((component) => component.enabled && component.required).length !== 1) {
-      setErr("Нужен ровно один обязательный включённый компонент.");
-      return;
-    }
-    if (trialComponents.some((component) => component.enabled && component.internalSquadUuids.length === 0)) {
-      setErr("У каждого включённого компонента должен быть хотя бы один сквад.");
+    const allowedSquads = source === "squad" ? [squadUuid] : (tariffs.find((t) => t.id === tariffId)?.internalSquadUuids ?? []);
+    if (trafficLimitMode === "LOCAL_SQUAD" && !allowedSquads.includes(meteredSquadUuid)) {
+      setErr("Выберите учитываемый squad из назначенных триалу.");
       return;
     }
     setSaving(true);
@@ -285,7 +277,9 @@ function TrialFormDialog({
         squadUuids: source === "squad" ? [squadUuid] : null,
         deviceLimit: source === "squad" ? Math.max(1, deviceLimit) : null,
         durationDays,
-        trafficLimitBytes: null,
+        trafficLimitBytes: trafficGb.trim() ? Math.round(Number(trafficGb) * 1024 ** 3) : null,
+        trafficLimitMode,
+        meteredSquadUuid: trafficLimitMode === "LOCAL_SQUAD" ? meteredSquadUuid : null,
         enabled,
         sortOrder,
         description: description.trim() || null,
@@ -293,7 +287,6 @@ function TrialFormDialog({
         convertAllTariffs,
         // сам тариф триала всегда доступен — храним только дополнительные.
         convertTariffIds: convertAllTariffs ? null : convertIds.filter((id) => id !== tariffId),
-        remnawaveComponents: trialComponents.map(({ id: _id, ...component }) => component),
       };
       if (mode === "edit" && trial) {
         await api.updateTrial(token, trial.id, payload);
@@ -343,26 +336,14 @@ function TrialFormDialog({
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
-              onClick={() => {
-                setSource("tariff");
-                setTrialComponents(cloneComponents(tariffs.find((tariff) => tariff.id === tariffId)?.remnawaveComponents ?? []));
-              }}
+              onClick={() => setSource("tariff")}
               className={`rounded-lg border px-3 py-2 text-xs font-medium transition ${source === "tariff" ? "border-primary/60 bg-primary/10 text-primary" : "border-input bg-background text-muted-foreground"}`}
             >
               Из тарифа
             </button>
             <button
               type="button"
-              onClick={() => {
-                setSource("squad");
-                if (!trialComponents.length) {
-                  setTrialComponents([{
-                    key: "primary", adminName: "Основной", required: true, mergeOrder: 0,
-                    internalSquadUuids: squadUuid ? [squadUuid] : [], trafficLimitBytes: null,
-                    trafficResetMode: "no_reset", showQuotaToClient: false, quotaDisplayName: null, enabled: true,
-                  }]);
-                }
-              }}
+              onClick={() => setSource("squad")}
               className={`rounded-lg border px-3 py-2 text-xs font-medium transition ${source === "squad" ? "border-primary/60 bg-primary/10 text-primary" : "border-input bg-background text-muted-foreground"}`}
             >
               Из сквада (не тариф)
@@ -373,17 +354,38 @@ function TrialFormDialog({
           </p>
         </div>
 
+        <div className="grid gap-1.5">
+          <Label className="text-xs">Режим лимита триала</Label>
+          <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Режим лимита триала">
+            {(["REMNAWAVE", "LOCAL_SQUAD"] as const).map((mode) => (
+              <label key={mode} className="flex items-center gap-2 rounded-lg border border-input px-3 py-2 text-xs">
+                <input type="radio" name="trial-traffic-mode" checked={trafficLimitMode === mode} onChange={() => setTrafficLimitMode(mode)} />
+                {mode === "REMNAWAVE" ? "Лимит Remnawave" : "Локальный squad"}
+              </label>
+            ))}
+          </div>
+          <Label htmlFor="trial-traffic-limit" className="text-xs">Лимит трафика (ГБ)</Label>
+          <Input id="trial-traffic-limit" type="number" min={0} step={0.1} value={trafficGb} onChange={(e) => setTrafficGb(e.target.value)} placeholder="Не ограничено" />
+          {trafficLimitMode === "LOCAL_SQUAD" && (
+            <><Label htmlFor="trial-metered-squad" className="text-xs">Учитываемый squad</Label>
+            <select id="trial-metered-squad" value={meteredSquadUuid} onChange={(e) => setMeteredSquadUuid(e.target.value)} className="w-full rounded-xl border border-white/10 bg-foreground/[0.03] px-3 py-2 text-sm">
+              <option value="">Выберите squad</option>
+              {(source === "squad"
+                ? squads.filter((s) => s.uuid === squadUuid)
+                : (tariffs.find((t) => t.id === tariffId)?.internalSquadUuids ?? [])
+                    .map((uuid) => squads.find((s) => s.uuid === uuid) ?? { uuid })
+              ).map((s) => <option key={s.uuid} value={s.uuid}>{s.name || s.uuid}</option>)}
+            </select><p className="text-[10px] text-muted-foreground">Ежемесячно от даты покупки.</p></>
+          )}
+        </div>
+
         {source === "tariff" ? (
         <div className="grid gap-1">
           <Label htmlFor="trial-tariff" className="text-xs">Тариф (наследует squads, устройства, трафик)</Label>
           <select
             id="trial-tariff"
             value={tariffId}
-            onChange={(e) => {
-              const id = e.target.value;
-              setTariffId(id);
-              setTrialComponents(cloneComponents(tariffs.find((tariff) => tariff.id === id)?.remnawaveComponents ?? []));
-            }}
+            onChange={(e) => setTariffId(e.target.value)}
             className="w-full rounded-xl border border-white/10 bg-foreground/[0.03] dark:bg-white/[0.02] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
           >
             {tariffs.length === 0 && <option value="">— Сначала создайте тариф —</option>}
@@ -401,13 +403,7 @@ function TrialFormDialog({
             <select
               id="trial-squad"
               value={squadUuid}
-              onChange={(e) => {
-                const uuid = e.target.value;
-                setSquadUuid(uuid);
-                setTrialComponents((items) => items.map((component) => component.required
-                  ? { ...component, internalSquadUuids: uuid ? [uuid] : [] }
-                  : component));
-              }}
+              onChange={(e) => setSquadUuid(e.target.value)}
               className="w-full rounded-xl border border-white/10 bg-foreground/[0.03] dark:bg-white/[0.02] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
             >
               <option value="">— Выберите сквад —</option>
@@ -451,120 +447,6 @@ function TrialFormDialog({
               onChange={(e) => setSortOrder(parseInt(e.target.value) || 0)}
             />
           </div>
-        </div>
-
-        <div className="space-y-3 rounded-2xl border border-white/10 p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <Label className="text-xs">Компоненты составной подписки</Label>
-              <p className="text-[10px] text-muted-foreground">Это независимая копия тарифа. Лимиты задаются отдельно для каждого компонента.</p>
-            </div>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setTrialComponents((items) => [...items, {
-                key: `component_${items.length + 1}`,
-                adminName: `Компонент ${items.length + 1}`,
-                required: items.length === 0,
-                mergeOrder: items.length * 10,
-                internalSquadUuids: [],
-                trafficLimitBytes: null,
-                trafficResetMode: "no_reset",
-                showQuotaToClient: false,
-                quotaDisplayName: null,
-                enabled: true,
-              }])}
-            >
-              + Компонент
-            </Button>
-          </div>
-          {trialComponents.map((component, index) => (
-            <div key={`${component.key}-${index}`} className="space-y-2 rounded-xl border border-white/10 bg-foreground/[0.02] p-3">
-              <div className="grid grid-cols-2 gap-2">
-                <Input
-                  value={component.adminName}
-                  placeholder="Название"
-                  onChange={(e) => setTrialComponents((items) => items.map((item, i) => i === index ? { ...item, adminName: e.target.value } : item))}
-                />
-                <Input
-                  value={component.key}
-                  placeholder="key"
-                  onChange={(e) => setTrialComponents((items) => items.map((item, i) => i === index ? { ...item, key: e.target.value } : item))}
-                />
-                <Input
-                  type="number"
-                  min={0}
-                  value={component.mergeOrder}
-                  onChange={(e) => setTrialComponents((items) => items.map((item, i) => i === index ? { ...item, mergeOrder: Number(e.target.value) || 0 } : item))}
-                  placeholder="Порядок"
-                />
-                <Input
-                  type="number"
-                  min={0}
-                  step={0.1}
-                  value={component.trafficLimitBytes == null ? "" : component.trafficLimitBytes / 1024 ** 3}
-                  onChange={(e) => setTrialComponents((items) => items.map((item, i) => i === index ? {
-                    ...item,
-                    trafficLimitBytes: e.target.value === "" ? null : Math.round(Number(e.target.value) * 1024 ** 3),
-                  } : item))}
-                  placeholder="ГБ, пусто = безлимит"
-                />
-              </div>
-              <select
-                value={component.trafficResetMode}
-                onChange={(e) => setTrialComponents((items) => items.map((item, i) => i === index ? { ...item, trafficResetMode: e.target.value } : item))}
-                className="w-full rounded-xl border border-white/10 bg-foreground/[0.03] px-3 py-2 text-sm"
-              >
-                <option value="no_reset">Без сброса</option>
-                <option value="monthly">Ежемесячно</option>
-                <option value="monthly_rolling">Скользящий месяц</option>
-                <option value="on_purchase">При покупке</option>
-                <option value="carry_over">Перенос остатка</option>
-              </select>
-              <div className="flex flex-wrap gap-2">
-                {squads.map((squad) => (
-                  <label key={squad.uuid} className="flex items-center gap-1 text-[11px]">
-                    <input
-                      type="checkbox"
-                      checked={component.internalSquadUuids.includes(squad.uuid)}
-                      onChange={(e) => setTrialComponents((items) => items.map((item, i) => i === index ? {
-                        ...item,
-                        internalSquadUuids: e.target.checked
-                          ? [...item.internalSquadUuids, squad.uuid]
-                          : item.internalSquadUuids.filter((uuid) => uuid !== squad.uuid),
-                      } : item))}
-                    />
-                    {squad.name || squad.uuid.slice(0, 8)}
-                  </label>
-                ))}
-              </div>
-              <div className="flex flex-wrap items-center gap-3 text-xs">
-                <label className="flex items-center gap-1">
-                  <input type="checkbox" checked={component.enabled} onChange={(e) => setTrialComponents((items) => items.map((item, i) => i === index ? { ...item, enabled: e.target.checked } : item))} />
-                  Включён
-                </label>
-                <label className="flex items-center gap-1">
-                  <input type="radio" name="trial-required-component" checked={component.required} onChange={() => setTrialComponents((items) => items.map((item, i) => ({ ...item, required: i === index })))} />
-                  Обязательный
-                </label>
-                <label className="flex items-center gap-1">
-                  <input type="checkbox" checked={component.showQuotaToClient} onChange={(e) => setTrialComponents((items) => items.map((item, i) => i === index ? { ...item, showQuotaToClient: e.target.checked } : item))} />
-                  Показывать квоту
-                </label>
-                <Button type="button" size="sm" variant="ghost" className="ml-auto text-destructive" onClick={() => setTrialComponents((items) => items.filter((_, i) => i !== index))}>
-                  Удалить
-                </Button>
-              </div>
-              {component.showQuotaToClient && (
-                <Input
-                  value={component.quotaDisplayName ?? ""}
-                  placeholder="Название квоты для клиента"
-                  onChange={(e) => setTrialComponents((items) => items.map((item, i) => i === index ? { ...item, quotaDisplayName: e.target.value || null } : item))}
-                />
-              )}
-            </div>
-          ))}
         </div>
 
         {/* настройки конвертации триала. */}

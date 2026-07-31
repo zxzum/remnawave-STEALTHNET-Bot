@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useParams } from "react-router-dom";
 import ForceGraph2D, { type ForceGraphMethods } from "react-force-graph-2d";
 import { Network, RefreshCw, ZoomIn, ZoomOut, Maximize, Target, GitBranch, Globe } from "lucide-react";
 import { useAuth } from "@/contexts/auth";
@@ -12,9 +13,9 @@ type Node = {
   name: string;
   status: string;
   referralsCount: number;
-  subscriptionIncome: number;
-  referralIncome: number;
-  campaign: string | null;
+  subscriptionIncome?: number;
+  referralIncome?: number;
+  campaign?: string | null;
 };
 type Link = { source: string; target: string };
 
@@ -25,6 +26,9 @@ const STATUS_COLORS: Record<string, string> = {
   campaign: "#f59e0b",
   trial: "#94a3b8",
   no_sub: "#64748b",
+  partner: "#f59e0b",
+  partner_referral: "#22c55e",
+  referral: "#0ea5e9",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -34,10 +38,14 @@ const STATUS_LABELS: Record<string, string> = {
   campaign: "Рекламная кампания",
   trial: "Триал",
   no_sub: "Без подписки",
+  partner: "Партнёр",
+  partner_referral: "Приведён партнёром",
+  referral: "Реферал клиента",
 };
 
 export function ReferralNetworkPage() {
   const token = useAuth().state.accessToken!;
+  const { id: partnerId } = useParams();
   const pageVisible = usePageVisibility();
   const fgRef = useRef<ForceGraphMethods<Node, Link>>();
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -50,7 +58,7 @@ export function ReferralNetworkPage() {
 
   const load = async () => {
     setLoading(true);
-    const res = await api.getReferralNetwork(token);
+    const res = partnerId ? await api.getPartnerNetwork(token, partnerId) : await api.getReferralNetwork(token);
     setData({ nodes: res.nodes, links: res.links, stats: res.stats });
     setLoading(false);
   };
@@ -121,7 +129,7 @@ export function ReferralNetworkPage() {
       return (
         <div ref={wrapRef} className="relative -m-4 md:-m-6 overflow-hidden bg-card" style={{ height: "calc(100dvh - 3.5rem)" }}>
       <div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-md bg-background/90 backdrop-blur border shadow-sm px-3 py-2 text-sm font-medium">
-        <Network className="h-4 w-4 text-primary" /> Реферальная сеть
+        <Network className="h-4 w-4 text-primary" /> {partnerId ? "Сеть партнёра" : "Реферальная сеть"}
       </div>
       
       <div className="absolute right-3 top-3 z-10 flex items-center gap-2">
@@ -144,6 +152,7 @@ export function ReferralNetworkPage() {
       {data?.stats && (
         <div className="absolute left-3 bottom-3 z-10 w-64 rounded-xl bg-background/90 backdrop-blur border shadow-lg p-4 text-sm pointer-events-none">
           <h3 className="font-semibold mb-3">Сводная статистика</h3>
+          {partnerId ? <div className="space-y-2"><div className="flex justify-between"><span className="text-muted-foreground">Привёл напрямую:</span><span className="font-medium">{data.stats.direct}</span></div><div className="flex justify-between"><span className="text-muted-foreground">Всего в сети:</span><span className="font-medium">{data.stats.total}</span></div></div> :
           <div className="space-y-2">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Пользователей:</span>
@@ -168,6 +177,7 @@ export function ReferralNetworkPage() {
               </div>
             </div>
           </div>
+          }
         </div>
       )}
 

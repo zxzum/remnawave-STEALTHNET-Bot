@@ -7,7 +7,7 @@
  * 3. Подарить → генерируется 12-символьный код XXXX-XXXX-XXXX, подписка скрывается (giftStatus = GIFT_RESERVED)
  * 4. Активировать подарок → подписка переносится на получателя (ownerId → recipient, giftedToClientId → recipient)
  * 5. Отмена / экспирация → подписка возвращается дарителю (giftStatus = null)
- * 6. Удаление подписки → remnaDeleteUser + hard delete Subscription
+ * 6. Удаление подписки → remnaDeleteUser + completed Subscription tombstone
  *
  * Все мутации логируются в GiftHistory.
  */
@@ -18,21 +18,21 @@ import { prisma } from "../../db.js";
 import { sendTelegramNotification } from "./telegram-notify.js";
 import {
   remnaCreateUser,
+  remnaGetUser,
+  remnaGetUserByUsername,
+  remnaUpdateUser,
   remnaUsernameFromClient,
   extractRemnaUuid,
   isRemnaConfigured,
 } from "../remna/remna.client.js";
 import { getSystemConfig } from "../client/client.service.js";
-import {
-  buildPublicSubscriptionUrl,
-  getNextSubscriptionIndex,
-  resolvePublicSubscriptionBaseUrl,
-} from "../subscription/subscription.helpers.js";
+import { getNextSubscriptionIndex } from "../subscription/subscription.helpers.js";
+import { extractRemnaSubscriptionUrl } from "../subscription/subscription-url.js";
 import { calcExtrasPrice } from "../tariff/extras-pricing.js";
 import {
-  deleteSubscriptionComponents,
-  synchronizeSubscriptionComponents,
-} from "../subscription/subscription-components.service.js";
+  deleteSingleSubscription,
+  runSingleSubscriptionOperation,
+} from "../subscription/single-subscription-lifecycle.service.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -75,18 +75,66 @@ function normalizeCode(input: string): string {
 // не max+1. Старая локальная функция возвращала 1 даже для свежего клиента (0+1=1).
 
 /** Генерирует Remnawave username для дочерней подписки: {rootUsername}_{index}. */
-function secondaryRemnaUsername(
+export function secondaryRemnaUsername(
   rootClient: { telegramUsername?: string | null; telegramId?: string | null; email?: string | null; id: string },
   index: number,
+  _entropy = randomBytes(4).toString("hex"),
 ): string {
-  const base = remnaUsernameFromClient({
+  return remnaUsernameFromClient({
     telegramUsername: rootClient.telegramUsername,
     telegramId: rootClient.telegramId,
     email: rootClient.email,
     clientIdFallback: rootClient.id,
+    subscriptionIndex: index,
   });
-  const suffix = `_${index}`;
-  return (base + suffix).slice(0, 36);
+}
+
+export async function createRemnaGiftUserOnce(
+  input: {
+    rootClient: { telegramUsername?: string | null; telegramId?: string | null; email?: string | null; id: string };
+    subscriptionIndex: number;
+    entropy?: string;
+    trafficLimitBytes: number;
+    trafficLimitStrategy: string;
+    expireAt: string;
+    hwidDeviceLimit?: number;
+    activeInternalSquads: string[];
+    purchasedAsGift: boolean;
+  },
+  request: typeof remnaCreateUser = remnaCreateUser,
+  lookupByUsername: typeof remnaGetUserByUsername = remnaGetUserByUsername,
+) {
+  const { rootClient } = input;
+  const username = secondaryRemnaUsername(rootClient, input.subscriptionIndex, input.entropy);
+  const payload = {
+    username,
+    trafficLimitBytes: input.trafficLimitBytes,
+    trafficLimitStrategy: input.trafficLimitStrategy,
+    expireAt: input.expireAt,
+    hwidDeviceLimit: input.hwidDeviceLimit,
+    activeInternalSquads: input.activeInternalSquads,
+    ...(input.purchasedAsGift !== true && rootClient.telegramId?.trim() && { telegramId: parseInt(rootClient.telegramId, 10) }),
+    ...(input.purchasedAsGift !== true && rootClient.email?.trim() && { email: rootClient.email.trim() }),
+  };
+  let result = await request(payload);
+  if (extractRemnaUuid(result.data) || (result.status !== 500 && result.status !== 504)) return result;
+
+  const existing = await lookupByUsername(username);
+  if (extractRemnaUuid(existing.data)) return existing;
+  if (existing.status !== 404) return result;
+
+  result = await request(payload);
+  if (extractRemnaUuid(result.data)) return result;
+  const afterRetry = await lookupByUsername(username);
+  return extractRemnaUuid(afterRetry.data) ? afterRetry : result;
+}
+
+export function bindGiftSubscriptionIdentity(
+  subscriptionId: string,
+  identity: { telegramId?: number; email?: string },
+  request: typeof remnaUpdateUser = remnaUpdateUser,
+) {
+  return runSingleSubscriptionOperation(subscriptionId, (uuid) => request({ uuid, ...identity }));
 }
 
 /** Записать событие в GiftHistory. */
@@ -105,6 +153,39 @@ async function logGiftEvent(
     },
   });
 }
+
+type CreateAdditionalSubscriptionDependencies = {
+  isConfigured: typeof isRemnaConfigured;
+  loadConfig: typeof getSystemConfig;
+  findRootClient: (id: string) => Promise<{
+    id: string;
+    email: string | null;
+    telegramId: string | null;
+    telegramUsername: string | null;
+  } | null>;
+  countSubscriptions: (ownerId: string) => Promise<number>;
+  nextSubscriptionIndex: typeof getNextSubscriptionIndex;
+  now: () => number;
+  entropy?: string;
+  request: typeof remnaCreateUser;
+  lookupByUsername: typeof remnaGetUserByUsername;
+};
+
+const createAdditionalSubscriptionDependencies: CreateAdditionalSubscriptionDependencies = {
+  isConfigured: isRemnaConfigured,
+  loadConfig: getSystemConfig,
+  findRootClient: (id) => prisma.client.findUnique({
+    where: { id },
+    select: { id: true, email: true, telegramId: true, telegramUsername: true },
+  }),
+  countSubscriptions: (ownerId) => prisma.subscription.count({
+    where: { ownerId, deletionRequestedAt: null },
+  }),
+  nextSubscriptionIndex: getNextSubscriptionIndex,
+  now: Date.now,
+  request: remnaCreateUser,
+  lookupByUsername: remnaGetUserByUsername,
+};
 
 // ─── Core Functions ──────────────────────────────────────────────────────────
 
@@ -131,33 +212,24 @@ export async function createAdditionalSubscription(
     trafficResetMode?: string;
   },
   options?: { skipConfigCheck?: boolean; extraDevices?: number; purchasedAsGift?: boolean },
+  dependencies: CreateAdditionalSubscriptionDependencies = createAdditionalSubscriptionDependencies,
 ): Promise<GiftResult<{ subscriptionId: string; subscriptionIndex: number }>> {
-  if (!isRemnaConfigured()) {
+  if (!dependencies.isConfigured()) {
     return { ok: false, error: "Сервис временно недоступен", status: 503 };
   }
 
-  const config = await getSystemConfig();
+  const config = await dependencies.loadConfig();
   if (!options?.skipConfigCheck && !config.giftSubscriptionsEnabled) {
     return { ok: false, error: "Дополнительные подписки отключены", status: 403 };
   }
 
-  const rootClient = await prisma.client.findUnique({
-    where: { id: rootClientId },
-    select: {
-      id: true,
-      email: true,
-      telegramId: true,
-      telegramUsername: true,
-    },
-  });
+  const rootClient = await dependencies.findRootClient(rootClientId);
   if (!rootClient) {
     return { ok: false, error: "Клиент не найден", status: 404 };
   }
 
   // Проверяем лимит
-  const existingCount = await prisma.subscription.count({
-    where: { ownerId: rootClientId },
-  });
+  const existingCount = await dependencies.countSubscriptions(rootClientId);
   if (existingCount >= config.maxAdditionalSubscriptions) {
     return {
       ok: false,
@@ -170,19 +242,19 @@ export async function createAdditionalSubscription(
   // (для генерации уникального имени в Remna) — это РАЗНЫЕ переменные. Раньше один и тот же
   // `index` инкрементировался при retry «username taken», что протекало в БД и подписка
   // получала subscription_index=1 вместо 0 для свежего клиента.
-  let subscriptionIndex = await getNextSubscriptionIndex(rootClientId);
+  let subscriptionIndex = await dependencies.nextSubscriptionIndex(rootClientId);
 
   // Подарочная подписка (purchasedAsGift=true) НИКОГДА не должна занимать primary-слот.
   // T-gift-index-fix : берём ПЕРВЫЙ СВОБОДНЫЙ индекс ≥1 (а не тупо 1) —
   // иначе у клиента с дырой на index 0 и уже занятым index 1 prisma.subscription.create падал
   // с UNIQUE-конфликтом (ownerId, subscriptionIndex), и активация подарка после оплаты не проходила.
   if (options?.purchasedAsGift === true && subscriptionIndex === 0) {
-    subscriptionIndex = await getNextSubscriptionIndex(rootClientId, 1);
+    subscriptionIndex = await dependencies.nextSubscriptionIndex(rootClientId, 1);
   }
 
   // Создаём пользователя в Remnawave
   const trafficLimitBytes = tariff.trafficLimitBytes != null ? Number(tariff.trafficLimitBytes) : 0;
-  const expireAt = new Date(Date.now() + tariff.durationDays * 24 * 60 * 60 * 1000).toISOString();
+  const expireAt = new Date(dependencies.now() + tariff.durationDays * 24 * 60 * 60 * 1000).toISOString();
 
   const trafficResetMode = tariff.trafficResetMode || "no_reset";
   const trafficLimitStrategy =
@@ -205,71 +277,23 @@ export async function createAdditionalSubscription(
     ? includedDevices + extraDevices
     : tariff.deviceLimit ?? undefined;
 
-  // Retry с инкрементом ОТДЕЛЬНОГО суффикса для username — если username уже занят в Remnawave.
-  // юзеры с многими тестовыми подписками упирались в лимит
-  // (после удалений в БД индексы _1.._5 могли остаться в Remna, и 5 попыток incremental не хватало).
-  // Решение: 20 incremental + fallback на random hex suffix — гарантированно уникальное имя.
-  const MAX_ATTEMPTS = 25;
-  const RANDOM_FALLBACK_AFTER = 20; // последние 5 попыток — со случайным суффиксом
-  let remnaUuid: string | undefined;
-  let username = "";
-  // usernameSuffix — стартует от subscriptionIndex (естественное имя «alice_0/alice_1»),
-  // но инкрементируется НЕЗАВИСИМО при коллизии. Это не влияет на subscriptionIndex для БД.
-  let usernameSuffix = subscriptionIndex;
-
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    if (attempt < RANDOM_FALLBACK_AFTER) {
-      username = secondaryRemnaUsername(rootClient, usernameSuffix);
-    } else {
-      // Random suffix — practically uncollidable (16M вариаций на 3 байта).
-      const baseName = remnaUsernameFromClient({
-        telegramUsername: rootClient.telegramUsername,
-        telegramId: rootClient.telegramId,
-        email: rootClient.email,
-        clientIdFallback: rootClient.id,
-      });
-      const rnd = Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0");
-      username = (baseName + "_r" + rnd).slice(0, 36);
-    }
-
-    const createRes = await remnaCreateUser({
-      username,
-      trafficLimitBytes,
-      trafficLimitStrategy,
-      expireAt,
-      hwidDeviceLimit: hwidDeviceLimit ?? undefined,
-      activeInternalSquads: tariff.internalSquadUuids,
-      // привязываем TG/email владельца к Remna-юзеру.
-      // Без этого все подписки, созданные через unified-покупку (включая первую
-      // у нового клиента), висели в панели Remna без telegramId/email.
-      // Подарочные (purchasedAsGift) не привязываем к дарителю — получатель
-      // привяжется при redeem (см. redeemGiftCode → remnaUpdateUser).
-      ...(options?.purchasedAsGift !== true && rootClient.telegramId?.trim() && { telegramId: parseInt(rootClient.telegramId, 10) }),
-      ...(options?.purchasedAsGift !== true && rootClient.email?.trim() && { email: rootClient.email.trim() }),
-    });
-
-    remnaUuid = extractRemnaUuid(createRes.data) ?? undefined;
-    if (remnaUuid) break;
-
-    const isUsernameTaken =
-      createRes.status === 400 &&
-      typeof createRes.error === "string" &&
-      createRes.error.toLowerCase().includes("already exists");
-
-    if (isUsernameTaken) {
-      console.warn(`[gift] Username "${username}" already exists in Remnawave, retrying (attempt ${attempt + 1}/${MAX_ATTEMPTS}) — увеличиваю usernameSuffix, subscriptionIndex=${subscriptionIndex} НЕ трогаю`);
-      usernameSuffix++;
-      continue;
-    }
-
+  const createRes = await createRemnaGiftUserOnce({
+    rootClient,
+    subscriptionIndex,
+    entropy: dependencies.entropy,
+    trafficLimitBytes,
+    trafficLimitStrategy,
+    expireAt,
+    hwidDeviceLimit: hwidDeviceLimit ?? undefined,
+    activeInternalSquads: tariff.internalSquadUuids,
+    purchasedAsGift: options?.purchasedAsGift === true,
+  }, dependencies.request, dependencies.lookupByUsername);
+  const remnaUuid = extractRemnaUuid(createRes.data) ?? undefined;
+  if (!remnaUuid) {
     console.error("[gift] Remna createUser failed for secondary:", createRes.error, createRes.status);
     return { ok: false, error: "Ошибка создания VPN-пользователя", status: 502 };
   }
-
-  if (!remnaUuid) {
-    console.error(`[gift] Failed to create Remnawave user after ${MAX_ATTEMPTS} attempts for root ${rootClientId}`);
-    return { ok: false, error: "Ошибка создания VPN-пользователя (все имена заняты)", status: 502 };
-  }
+  const remnaUsername = secondaryRemnaUsername(rootClient, subscriptionIndex, dependencies.entropy);
 
   // если в админке включён toggle «Автопродление подписки»
   // (defaultAutoRenewEnabled), то новые secondary создаются сразу с autoRenewEnabled=true.
@@ -283,6 +307,7 @@ export async function createAdditionalSubscription(
       ownerId: rootClientId,
       subscriptionIndex,
       remnawaveUuid: remnaUuid,
+      remnawaveUsername: remnaUsername,
       tariffId: tariff.id ?? null,
       // покупки через раздел «🎁 Подарки» помечаем true.
       // Обычные доп. подписки (купил себе) → false (default). Решает дубль в UI.
@@ -313,10 +338,6 @@ export async function createAdditionalSubscription(
       expireAt: new Date(expireAt),
     },
   });
-
-  await synchronizeSubscriptionComponents(subscription.id).catch((e) =>
-    console.error("[gift] component sync failed:", e),
-  );
 
   // если это primary-подписка (idx=0) — синкаем
   // legacy-поля Client.{remnawaveUuid,currentTariffId,currentPricePerDay} для обратной
@@ -357,10 +378,13 @@ export async function activateForSelf(
 ): Promise<GiftResult<{ subscriptionId: string }>> {
   const sub = await prisma.subscription.findUnique({
     where: { id: subscriptionId },
-    include: { tariff: { select: { name: true } } },
+    include: {
+      tariff: { select: { name: true } },
+      owner: { select: { telegramId: true, email: true } },
+    },
   });
 
-  if (!sub || sub.ownerId !== ownerId) {
+  if (!sub || sub.deletionRequestedAt || sub.ownerId !== ownerId) {
     return { ok: false, error: "Подписка не найдена", status: 404 };
   }
 
@@ -391,9 +415,16 @@ export async function activateForSelf(
     },
   });
 
-  await synchronizeSubscriptionComponents(subscriptionId).catch((error) =>
-    console.error("[gift] component synchronization failed after self activation:", error),
-  );
+  if (sub.remnawaveUuid) {
+    const binding = await bindGiftSubscriptionIdentity(subscriptionId, {
+      ...(sub.owner.telegramId?.trim() ? { telegramId: Number(sub.owner.telegramId) } : {}),
+      ...(sub.owner.email?.trim() ? { email: sub.owner.email.trim() } : {}),
+    }).catch((error) => {
+      console.error("[gift] owner binding retry record failed after self activation:", error);
+      return null;
+    });
+    if (binding?.requiredFailure) console.error("[gift] owner binding scheduled for retry:", binding.failures);
+  }
 
   await logGiftEvent(ownerId, "ACTIVATED_SELF", subscriptionId, {
     tariffName: sub.tariff?.name ?? null,
@@ -440,7 +471,7 @@ export async function deleteSubscription(
     tariffName: sub.tariff?.name ?? null,
     subscriptionIndex: sub.subscriptionIndex,
   });
-  const deletion = await deleteSubscriptionComponents(subscriptionId);
+  const deletion = await deleteSingleSubscription(subscriptionId);
   if (!deletion.deleted) {
     return { ok: false, error: "Удаление поставлено в очередь синхронизации", status: 502 };
   }
@@ -463,6 +494,7 @@ export async function listClientSubscriptions(
     where: {
       ownerId: rootClientId,
       purchasedAsGift: true,
+      deletionRequestedAt: null,
       // GIFTED показываем только если ownerId совпадает (подарено и записано на дарителя — для истории).
       // Но фактически после GIFTED ownerId меняется на получателя, поэтому фильтр по ownerId этого не пропустит.
     },
@@ -482,6 +514,7 @@ export async function listAllClientSubscriptions(
   const secondaries = await prisma.subscription.findMany({
     where: {
       ownerId: rootClientId,
+      deletionRequestedAt: null,
       OR: [
         { giftStatus: null },
         { giftStatus: "" },
@@ -626,7 +659,7 @@ export async function createGiftCode(
 export async function redeemGiftCode(
   recipientRootClientId: string,
   rawCode: string,
-  requestOrigin?: string,
+  _requestOrigin?: string,
 ): Promise<GiftResult<{
   subscriptionId: string;
   subscriptionIndex: number;
@@ -708,7 +741,7 @@ export async function redeemGiftCode(
 
   // Проверяем лимит у получателя
   const recipientSubCount = await prisma.subscription.count({
-    where: { ownerId: recipientRootClientId },
+    where: { ownerId: recipientRootClientId, deletionRequestedAt: null },
   });
   if (recipientSubCount >= config.maxAdditionalSubscriptions) {
     return {
@@ -773,10 +806,16 @@ export async function redeemGiftCode(
     throw err;
   }
 
-  // Синхронизация ниже перепривязывает TG/email сразу у всех компонентов.
-  await synchronizeSubscriptionComponents(giftCode.subscriptionId).catch((e) =>
-    console.error("[gift] redeem: component sync failed:", e),
-  );
+  if (sub.remnawaveUuid) {
+    const binding = await bindGiftSubscriptionIdentity(giftCode.subscriptionId, {
+      ...(recipient.telegramId?.trim() ? { telegramId: Number(recipient.telegramId) } : {}),
+      ...(recipient.email?.trim() ? { email: recipient.email.trim() } : {}),
+    }).catch((error) => {
+      console.error("[gift] recipient binding retry record failed after redeem:", error);
+      return null;
+    });
+    if (binding?.requiredFailure) console.error("[gift] recipient binding scheduled for retry:", binding.failures);
+  }
 
   // Логируем для обеих сторон
   await logGiftEvent(giftCode.creatorId, "GIFT_SENT", giftCode.subscriptionId, {
@@ -834,11 +873,11 @@ export async function redeemGiftCode(
   let subscriptionUrl: string | null = null;
   const updatedSub = await prisma.subscription.findUnique({
     where: { id: giftCode.subscriptionId },
-    select: { remnawaveUuid: true, publicSubscriptionToken: true },
+    select: { remnawaveUuid: true },
   });
-  const publicBaseUrl = resolvePublicSubscriptionBaseUrl(config.publicAppUrl, requestOrigin);
-  if (updatedSub?.publicSubscriptionToken && publicBaseUrl) {
-    subscriptionUrl = buildPublicSubscriptionUrl(publicBaseUrl, updatedSub.publicSubscriptionToken);
+  if (updatedSub?.remnawaveUuid) {
+    const result = await remnaGetUser(updatedSub.remnawaveUuid);
+    subscriptionUrl = extractRemnaSubscriptionUrl(result.data);
   }
 
   // уведомление админам в TG-группу: подарок активирован получателем (best-effort).
@@ -997,11 +1036,11 @@ export async function listGiftCodes(
 export async function getSubscriptionUrl(
   subscriptionId: string,
   rootClientId: string,
-  requestOrigin?: string,
+  _requestOrigin?: string,
 ): Promise<GiftResult<{ subscriptionUrl: string | null }>> {
   const sub = await prisma.subscription.findUnique({
     where: { id: subscriptionId },
-    select: { ownerId: true, publicSubscriptionToken: true, giftStatus: true },
+    select: { ownerId: true, remnawaveUuid: true, giftStatus: true },
   });
 
   if (!sub || sub.ownerId !== rootClientId) {
@@ -1010,14 +1049,11 @@ export async function getSubscriptionUrl(
   if (sub.giftStatus === "GIFT_RESERVED") {
     return { ok: false, error: "Подписка зарезервирована как подарок", status: 400 };
   }
-  const config = await getSystemConfig();
-  const publicBaseUrl = resolvePublicSubscriptionBaseUrl(config.publicAppUrl, requestOrigin);
+  const result = sub.remnawaveUuid ? await remnaGetUser(sub.remnawaveUuid) : null;
   return {
     ok: true,
     data: {
-      subscriptionUrl: publicBaseUrl
-        ? buildPublicSubscriptionUrl(publicBaseUrl, sub.publicSubscriptionToken)
-        : null,
+      subscriptionUrl: extractRemnaSubscriptionUrl(result?.data),
     },
   };
 }

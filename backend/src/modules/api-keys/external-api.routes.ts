@@ -372,14 +372,16 @@ externalApiRouter.get("/client/referrals", async (req: Request, res: Response) =
 /*  TARIFFS (public, no client token needed)   */
 /* ═══════════════════════════════════════════ */
 
-function tariffToJson(t: { id: string; name: string; description: string | null; durationDays: number; trafficLimitBytes: bigint | null; trafficResetMode?: string; deviceLimit: number | null; price: number; currency: string }) {
+function tariffToJson(t: { id: string; name: string; description: string | null; durationDays: number; trafficLimitBytes: bigint | null; trafficResetMode?: string; trafficLimitMode: "REMNAWAVE" | "LOCAL_SQUAD"; meteredSquadUuid: string | null; deviceLimit: number | null; price: number; currency: string }) {
   return {
     id: t.id,
     name: t.name,
     description: t.description,
     durationDays: t.durationDays,
-    trafficLimitBytes: t.trafficLimitBytes ? Number(t.trafficLimitBytes) : null,
+    trafficLimitBytes: t.trafficLimitBytes != null ? t.trafficLimitBytes.toString() : null,
     trafficResetMode: t.trafficResetMode ?? null,
+    trafficLimitMode: t.trafficLimitMode,
+    meteredSquadUuid: t.meteredSquadUuid,
     deviceLimit: t.deviceLimit,
     price: t.price,
     currency: t.currency,

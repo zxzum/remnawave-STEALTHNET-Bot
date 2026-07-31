@@ -9,7 +9,7 @@ import { prisma } from "../../db.js";
 import { requireAuth, requireAdminSection } from "../auth/middleware.js";
 import { getEligibleParticipants, runDraw, undoDraw, parseConditions, logContestEvent } from "./contest.service.js";
 import { sendContestStartNotification, sendContestDrawResults } from "./contest-daily-reminder.service.js";
-import { runSubscriptionComponentOperation } from "../subscription/subscription-components.service.js";
+import { remnaUpdateUser } from "../remna/remna.client.js";
 
 function asyncRoute(fn: (req: express.Request, res: express.Response) => Promise<void | express.Response>) {
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -302,22 +302,19 @@ contestAdminRouter.post("/:id/winners/:winnerId/apply", asyncRoute(async (req, r
     }
     const subscription = await prisma.subscription.findUnique({
       where: { ownerId_subscriptionIndex: { ownerId: winner.clientId, subscriptionIndex: 0 } },
-      select: { id: true, expireAt: true },
+      select: { id: true, expireAt: true, remnawaveUuid: true },
     });
     if (!subscription) {
       return res.status(400).json({ message: "У клиента нет основной подписки. Сначала клиент должен активировать подписку." });
     }
-    const { remnaUpdateUser } = await import("../remna/remna.client.js");
+    if (!subscription.remnawaveUuid) {
+      return res.status(400).json({ message: "Подписка не привязана к Remnawave" });
+    }
     const currentExpireAt = subscription.expireAt;
     const baseDate = currentExpireAt && currentExpireAt > new Date() ? currentExpireAt : new Date();
     const newExpireAt = new Date(baseDate.getTime() + days * 24 * 60 * 60 * 1000);
-    const update = await runSubscriptionComponentOperation(subscription.id, async ({ remnawaveUuid }) => {
-      const result = await remnaUpdateUser({ uuid: remnawaveUuid, expireAt: newExpireAt });
-      if (result.error) throw new Error(result.error);
-    });
-    if (update.requiredFailure) {
-      return res.status(502).json({ message: `Remna update: ${update.failures.map((failure) => failure.error).join("; ")}` });
-    }
+    const update = await remnaUpdateUser({ uuid: subscription.remnawaveUuid, expireAt: newExpireAt });
+    if (update.error) return res.status(502).json({ message: `Remna update: ${update.error}` });
     await prisma.subscription.update({ where: { id: subscription.id }, data: { expireAt: newExpireAt } });
     await prisma.contestWinner.update({ where: { id: winnerId }, data: { appliedAt: new Date() } });
     await logContestEvent(id, "prize_applied", actorOf(req), { winnerId, kind: "vpn_days", days, newExpireAt: newExpireAt.toISOString() });

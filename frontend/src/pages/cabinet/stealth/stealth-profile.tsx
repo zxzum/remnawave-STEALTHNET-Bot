@@ -223,7 +223,7 @@ export function StealthProfile() {
       {/* Service info */}
       <div className="text-center text-[10px] text-zinc-600 pt-2">
         <Shield className="h-3 w-3 inline mr-1" />
-        {(config?.serviceName ?? "STEALTHNET").toUpperCase()}
+        {(config?.serviceName ?? "Лазейка VPN").toUpperCase()}
       </div>
 
       <StealthPaymentsModal open={showPayments} onClose={() => setShowPayments(false)} />

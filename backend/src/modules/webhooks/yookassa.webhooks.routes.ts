@@ -19,7 +19,7 @@ import { getSystemConfig } from "../client/client.service.js";
 import { activateTariffByPaymentId } from "../tariff/tariff-activation.service.js";
 import { createProxySlotsByPaymentId } from "../proxy/proxy-slots-activation.service.js";
 import { createSingboxSlotsByPaymentId } from "../singbox/singbox-slots-activation.service.js";
-import { applyExtraOptionByPaymentId } from "../extra-options/extra-options.service.js";
+import { markPaymentPaid } from "../payment/mark-paid.service.js";
 import { distributeReferralRewards } from "../referral/referral.service.js";
 import { notifyBalanceToppedUp, notifyTariffActivated, notifyProxySlotsCreated, notifySingboxSlotsCreated } from "../notification/telegram-notify.service.js";
 import { createNalogReceipt } from "../nalog/nalog.service.js";
@@ -166,16 +166,17 @@ yookassaWebhooksRouter.post("/yookassa", async (req, res) => {
 
   await auditPaymentClientBotAlignment(payment);
 
-  if (payment.status === "PAID") {
+  const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
+
+  if (payment.status === "PAID" && !isExtraOption) {
     console.log("[YooKassa Webhook] Already processed", { paymentId });
     return res.status(200).send("OK");
   }
 
   const yookassaId = body.object?.id ?? null;
-  await prisma.payment.update({
-    where: { id: payment.id },
-    data: { status: "PAID", paidAt: new Date(), externalId: yookassaId },
-  });
+  await prisma.payment.update({ where: { id: payment.id }, data: isExtraOption
+    ? { externalId: yookassaId }
+    : { status: "PAID", paidAt: new Date(), externalId: yookassaId } });
   await recordPromoCodeUsageFromPayment(payment.id);
 
   // Сохраняем способ оплаты для рекуррентных платежей
@@ -196,7 +197,11 @@ yookassaWebhooksRouter.post("/yookassa", async (req, res) => {
     });
   }
 
-  const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
+  if (isExtraOption) {
+    await markPaymentPaid(payment.id);
+    return res.status(200).send("OK");
+  }
+
   const isTopUp = !payment.tariffId && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
 
   if (isTopUp) {
@@ -210,19 +215,6 @@ yookassaWebhooksRouter.post("/yookassa", async (req, res) => {
       amount: payment.amount,
     });
     await notifyBalanceToppedUp(payment.clientId, payment.amount, payment.currency || "RUB", "YooKassa").catch(() => {});
-  } else if (isExtraOption) {
-    const result = await applyExtraOptionByPaymentId(payment.id);
-    if (result.ok) {
-      console.log("[YooKassa Webhook] Extra option applied", { paymentId: payment.id });
-      // уведомляем клиента после успешной активации опции.
-      const { notifyExtraOptionApplied } = await import("../notification/telegram-notify.service.js");
-      await notifyExtraOptionApplied(payment.clientId, payment.id).catch(() => {});
-    } else {
-      console.error("[YooKassa Webhook] Extra option apply failed", {
-        paymentId: payment.id,
-        error: (result as { error?: string }).error,
-      });
-    }
   } else if (payment.proxyTariffId) {
     const proxyResult = await createProxySlotsByPaymentId(payment.id);
     if (proxyResult.ok) {

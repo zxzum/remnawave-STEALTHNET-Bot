@@ -11,7 +11,7 @@ import { verifyCryptopayWebhookSignature } from "../cryptopay/cryptopay.service.
 import { activateTariffByPaymentId } from "../tariff/tariff-activation.service.js";
 import { createProxySlotsByPaymentId } from "../proxy/proxy-slots-activation.service.js";
 import { createSingboxSlotsByPaymentId } from "../singbox/singbox-slots-activation.service.js";
-import { applyExtraOptionByPaymentId } from "../extra-options/extra-options.service.js";
+import { markPaymentPaid } from "../payment/mark-paid.service.js";
 import { distributeReferralRewards } from "../referral/referral.service.js";
 import { notifyBalanceToppedUp, notifyTariffActivated, notifyProxySlotsCreated, notifySingboxSlotsCreated } from "../notification/telegram-notify.service.js";
 import { recordPromoCodeUsageFromPayment } from "../payment/promo-code-usage.util.js";
@@ -91,6 +91,14 @@ cryptopayWebhooksRouter.post("/", async (req: Request, res: Response) => {
 
   await auditPaymentClientBotAlignment(payment);
 
+  const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
+  if (isExtraOption) {
+    const invoiceId = body.payload.invoice_id ?? null;
+    if (invoiceId != null) await prisma.payment.update({ where: { id: payment.id }, data: { externalId: String(invoiceId) } });
+    await markPaymentPaid(payment.id);
+    return res.status(200).send("OK");
+  }
+
   if (payment.status === "PAID") {
     return res.status(200).send("OK");
   }
@@ -102,7 +110,6 @@ cryptopayWebhooksRouter.post("/", async (req: Request, res: Response) => {
   });
   await recordPromoCodeUsageFromPayment(payment.id);
 
-  const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
   const isTopUp = !payment.tariffId && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
 
   if (isTopUp) {
@@ -111,12 +118,6 @@ cryptopayWebhooksRouter.post("/", async (req: Request, res: Response) => {
       data: { balance: { increment: payment.amount } },
     });
     await notifyBalanceToppedUp(payment.clientId, payment.amount, payment.currency || "USD", "CryptoPay").catch(() => {});
-  } else if (isExtraOption) {
-    const r = await applyExtraOptionByPaymentId(payment.id);
-    if (r.ok) {
-      const { notifyExtraOptionApplied } = await import("../notification/telegram-notify.service.js");
-      await notifyExtraOptionApplied(payment.clientId, payment.id).catch(() => {});
-    }
   } else if (payment.proxyTariffId) {
     const proxyResult = await createProxySlotsByPaymentId(payment.id);
     if (proxyResult.ok) {

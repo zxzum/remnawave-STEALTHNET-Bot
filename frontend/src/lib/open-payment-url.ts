@@ -50,6 +50,7 @@ function getTelegramWebApp(): TelegramWebAppMinimal | null {
  * но сохраняем API на случай будущих изменений.
  */
 export type PaymentRedirect = {
+  isTelegramMiniApp: boolean;
   open: (url: string) => void;
   cancel: () => void;
 };
@@ -61,12 +62,13 @@ export type PaymentRedirect = {
  */
 export function preparePaymentRedirect(): PaymentRedirect {
   if (typeof window === "undefined") {
-    return { open: () => undefined, cancel: () => undefined };
+    return { isTelegramMiniApp: false, open: () => undefined, cancel: () => undefined };
   }
 
   const webApp = getTelegramWebApp();
   if (webApp) {
     return {
+      isTelegramMiniApp: true,
       open: (url) => {
         try {
           webApp.openLink!(url);
@@ -79,6 +81,7 @@ export function preparePaymentRedirect(): PaymentRedirect {
   }
 
   return {
+    isTelegramMiniApp: false,
     open: (url) => {
       // `location.assign` = кросс-доменная навигация текущей вкладки.
       // На iOS это НЕ попап и не блокируется, даже после `await`.

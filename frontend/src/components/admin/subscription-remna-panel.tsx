@@ -16,9 +16,9 @@ import { useState, useEffect, useCallback } from "react";
 import {
   api,
   type AdminClientSubscriptionItem,
-  type AdminSubscriptionRemnaResponse,
   type RemnaUserFull,
   type UpdateClientRemnaPayload,
+  type AdminTrafficQuotaDetail,
 } from "@/lib/api";
 import { fmtMsk, isoToMskInputValue, mskInputValueToIso } from "@/lib/datetime";
 import { Button } from "@/components/ui/button";
@@ -34,8 +34,6 @@ import {
   Unlink,
   Copy,
   Check,
-  Plus,
-  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -125,17 +123,11 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [editForm, setEditForm] = useState<UpdateClientRemnaPayload>({});
-  const [components, setComponents] = useState<AdminSubscriptionRemnaResponse["components"]>([]);
-  const [selectedComponentKey, setSelectedComponentKey] = useState("");
   const [subscriptionUrl, setSubscriptionUrl] = useState(subscription.subscriptionUrl ?? "");
-  const [newComponent, setNewComponent] = useState(() => ({
-    key: "",
-    adminName: "",
-    mergeOrder: String(Math.max(0, ...(subscription.components ?? []).map((component) => component.mergeOrder)) + 10),
-  }));
+  const [quota, setQuota] = useState<AdminTrafficQuotaDetail | null>(null);
 
   const loadRemna = useCallback(async () => {
-    if (!subscription.remnawaveUuid && !subscription.components?.some((component) => component.remnawaveUuid)) {
+    if (!subscription.remnawaveUuid) {
       setRemnaUser(null);
       setActiveSquads([]);
       return;
@@ -143,15 +135,8 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
     setLoading(true);
     try {
       const raw = await api.getSubscriptionRemna(token, subscription.id);
-      setComponents(raw.components);
       setSubscriptionUrl(raw.subscriptionUrl);
-      const componentKey = selectedComponentKey
-        || raw.components.find((component) => component.required)?.key
-        || raw.components[0]?.key
-        || "";
-      if (componentKey !== selectedComponentKey) setSelectedComponentKey(componentKey);
-      const selected = raw.components.find((component) => component.key === componentKey);
-      const user = unwrapRemnaUser(selected?.data ?? raw);
+      const user = unwrapRemnaUser(raw);
       setRemnaUser(user);
       const ids = (user?.activeInternalSquads ?? []).map((s) => s.uuid);
       setActiveSquads(ids);
@@ -163,12 +148,13 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
           expireAt: user.expireAt ?? undefined,
         });
       }
+      api.getSubscriptionTrafficQuota(token, subscription.id).then(setQuota).catch(() => setQuota(null));
     } catch (e) {
       setActionMsg(`❌ ${e instanceof Error ? e.message : "Ошибка загрузки"}`);
     } finally {
       setLoading(false);
     }
-  }, [selectedComponentKey, subscription.id, subscription.remnawaveUuid, token]);
+  }, [subscription.id, subscription.remnawaveUuid, token]);
 
   useEffect(() => {
     loadRemna();
@@ -183,7 +169,7 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
       if (editForm.hwidDeviceLimit !== undefined) payload.hwidDeviceLimit = editForm.hwidDeviceLimit;
       if (editForm.trafficLimitStrategy) payload.trafficLimitStrategy = editForm.trafficLimitStrategy;
       if (editForm.expireAt) payload.expireAt = editForm.expireAt;
-      await api.updateSubscriptionRemna(token, subscription.id, payload, selectedComponentKey || undefined);
+      await api.updateSubscriptionRemna(token, subscription.id, payload);
       setActionMsg("✅ Лимиты применены");
       await loadRemna();
       onChanged?.();
@@ -199,10 +185,10 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
     try {
       const response = await fn();
       const result = response && typeof response === "object"
-        ? response as { degraded?: boolean; failures?: Array<{ key: string; error: string }> }
+        ? response as { degraded?: boolean; failures?: Array<{ error: string }> }
         : null;
       setActionMsg(result?.degraded
-        ? `⚠️ ${result.failures?.map((failure) => `${failure.key}: ${failure.error}`).join("; ") || "Часть компонентов ожидает retry"}`
+        ? `⚠️ ${result.failures?.map((failure) => failure.error).join("; ") || "Операция ожидает retry"}`
         : `✅ ${successLabel}`);
       if (refresh) await loadRemna();
       onChanged?.();
@@ -212,40 +198,26 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
   }
 
   async function squadAdd(uuid: string) {
-    await runAction("Сквад добавлен", () => api.subscriptionRemnaSquadAdd(token, subscription.id, uuid, selectedComponentKey || undefined));
+    await runAction("Сквад добавлен", () => api.subscriptionRemnaSquadAdd(token, subscription.id, uuid));
     setActiveSquads((prev) => (prev.includes(uuid) ? prev : [...prev, uuid]));
   }
 
   async function squadRemove(uuid: string) {
-    await runAction("Сквад удалён", () => api.subscriptionRemnaSquadRemove(token, subscription.id, uuid, selectedComponentKey || undefined));
+    await runAction("Сквад удалён", () => api.subscriptionRemnaSquadRemove(token, subscription.id, uuid));
     setActiveSquads((prev) => prev.filter((u) => u !== uuid));
   }
 
-  async function addManualComponent() {
-    const mergeOrder = Number(newComponent.mergeOrder);
-    if (!newComponent.key.trim() || !newComponent.adminName.trim() || !Number.isInteger(mergeOrder)) {
-      setActionMsg("❌ Заполните key, название и порядок компонента");
-      return;
-    }
-    await runAction("Ручной компонент добавлен", async () => {
-      await api.createSubscriptionManualComponent(token, subscription.id, {
-        key: newComponent.key.trim(),
-        adminName: newComponent.adminName.trim(),
-        mergeOrder,
-      });
-      setNewComponent({ key: "", adminName: "", mergeOrder: String(mergeOrder + 10) });
-    });
+  async function grantQuota(gb: number, scope: "CURRENT_PERIOD" | "WHILE_TARIFF_ACTIVE") {
+    await runAction(`Добавлено ${gb} ГБ`, () => api.grantSubscriptionTraffic(token, subscription.id, String(gb * 1024 ** 3), scope), false);
+    api.getSubscriptionTrafficQuota(token, subscription.id).then(setQuota).catch(() => setQuota(null));
   }
-
-  async function deleteManualComponent() {
-    const component = components.find((item) => item.key === selectedComponentKey);
-    if (!component?.managedManually) return;
-    if (!confirm(`Удалить ручной компонент «${component.adminName}»? Его доступ в Remnawave будет удалён.`)) return;
-    await runAction("Ручной компонент удалён", () => api.deleteSubscriptionManualComponent(token, subscription.id, component.key));
+  async function quotaAction(action: "suspend" | "resume") {
+    await runAction(action === "suspend" ? "Квота приостановлена" : "Квота возобновлена", () => api.setSubscriptionTrafficQuotaStatus(token, subscription.id, action), false);
+    api.getSubscriptionTrafficQuota(token, subscription.id).then(setQuota).catch(() => setQuota(null));
   }
 
   // Нет привязки к Remna → плашка.
-  if (!subscription.remnawaveUuid && !subscription.components?.some((component) => component.remnawaveUuid)) {
+  if (!subscription.remnawaveUuid) {
     return (
       <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/[0.06] p-4 text-sm text-yellow-200">
         ⚠️ Эта подписка ещё не привязана к Remna (`remnawaveUuid = null`).
@@ -256,46 +228,20 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
 
   const trafficUsed = remnaUser?.userTraffic?.usedTrafficBytes ?? 0;
   const trafficLimit = remnaUser?.trafficLimitBytes ?? 0;
-  const selectedComponent = components.find((component) => component.key === selectedComponentKey);
+  const quotaLimitBytes = quota
+    ? Number(quota.quota.baseLimitBytes) + quota.activeGrants.reduce((total, grant) => total + Number(grant.bytes), 0)
+    : 0;
+  const quotaRemainingBytes = quota ? Math.max(0, quotaLimitBytes - Number(quota.quota.usedBytes)) : 0;
 
   return (
     <div className="space-y-3">
       {subscriptionUrl && (
         <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-foreground/[0.03] px-3 py-2 text-xs">
-          <span className="text-muted-foreground">Объединённая ссылка</span>
+          <span className="text-muted-foreground">Ссылка Remnawave</span>
           <code className="min-w-0 flex-1 truncate">{subscriptionUrl}</code>
           <CopyButton text={subscriptionUrl} />
         </div>
       )}
-      {components.length > 1 && (
-        <MiniSelect
-          value={selectedComponentKey}
-          onChange={setSelectedComponentKey}
-          options={components.map((component) => ({
-            value: component.key,
-            label: `${component.required ? "★ " : ""}${subscription.components?.find((item) => item.key === component.key)?.adminName ?? component.key}${component.error ? " — ошибка" : ""}`,
-          }))}
-        />
-      )}
-      <div className="rounded-xl border border-white/10 bg-foreground/[0.03] p-3">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <span className="text-xs font-medium">Ручные компоненты</span>
-          {selectedComponent?.managedManually && (
-            <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs text-destructive" onClick={deleteManualComponent}>
-              <Trash2 className="h-3.5 w-3.5" /> Удалить выбранный
-            </Button>
-          )}
-        </div>
-        <div className="grid gap-2 sm:grid-cols-[1fr_1fr_90px_auto]">
-          <Input value={newComponent.key} onChange={(e) => setNewComponent((value) => ({ ...value, key: e.target.value }))} placeholder="key, например whitelist" />
-          <Input value={newComponent.adminName} onChange={(e) => setNewComponent((value) => ({ ...value, adminName: e.target.value }))} placeholder="Название для админа" />
-          <Input type="number" min={1} value={newComponent.mergeOrder} onChange={(e) => setNewComponent((value) => ({ ...value, mergeOrder: e.target.value }))} placeholder="Порядок" />
-          <Button variant="outline" size="sm" className="gap-1" onClick={addManualComponent}>
-            <Plus className="h-3.5 w-3.5" /> Добавить
-          </Button>
-        </div>
-        <p className="mt-2 text-xs text-muted-foreground">Выберите добавленный компонент выше, затем задайте ему лимиты и сквады.</p>
-      </div>
       <Tabs value={innerTab} onValueChange={(v) => setInnerTab(v as InnerTab)}>
         <TabsList className="grid grid-cols-3 gap-1 bg-foreground/[0.03] dark:bg-white/[0.03] p-1 rounded-xl border border-white/5">
           <TabsTrigger value="overview" className="text-xs rounded-lg data-[state=active]:bg-primary/15 data-[state=active]:text-primary">
@@ -338,6 +284,10 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
                   </span>
                 </div>
                 <div className="flex justify-between">
+                  <span className="text-muted-foreground">Статус</span>
+                  <span>{remnaUser.status}</span>
+                </div>
+                <div className="flex justify-between">
                   <span className="text-muted-foreground">Трафик</span>
                   <span>
                     {formatTrafficBytes(trafficUsed)}
@@ -361,6 +311,20 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
                   <span>{fmtMsk(remnaUser.updatedAt)}</span>
                 </div>
               </div>
+            </div>
+          )}
+
+          {quota && (
+            <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4 text-sm space-y-3">
+              <div className="flex items-center justify-between"><strong>Локальная квота</strong><span>{quota.quota.status}</span></div>
+              <div>{formatTrafficBytes(Number(quota.quota.usedBytes))} / {formatTrafficBytes(quotaLimitBytes)} · осталось {formatTrafficBytes(quotaRemainingBytes)}</div>
+              <div className="text-xs text-muted-foreground">Период: {fmtMsk(quota.quota.periodStartedAt)} — {fmtMsk(quota.quota.periodEndsAt)}</div>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" onClick={() => grantQuota(1, "CURRENT_PERIOD")}>+1 ГБ на период</Button>
+                <Button size="sm" variant="outline" onClick={() => grantQuota(1, "WHILE_TARIFF_ACTIVE")}>+1 ГБ на тариф</Button>
+                <Button size="sm" variant="outline" onClick={() => quotaAction(quota.quota.status === "SUSPENDED" ? "resume" : "suspend")}>{quota.quota.status === "SUSPENDED" ? "Возобновить" : "Приостановить"}</Button>
+              </div>
+              {quota.activeGrants.length > 0 && <div className="space-y-1 text-xs">{quota.activeGrants.map((grant) => <div key={grant.id} className="flex justify-between gap-2"><span>+{formatTrafficBytes(Number(grant.bytes))} · {grant.scope}</span><Button size="sm" variant="ghost" className="h-6 text-destructive" onClick={() => runAction("Грант отозван", () => api.revokeSubscriptionTrafficGrant(token, grant.id), false).then(() => api.getSubscriptionTrafficQuota(token, subscription.id).then(setQuota).catch(() => setQuota(null)))}>Отозвать</Button></div>)}</div>}
             </div>
           )}
 
@@ -507,7 +471,7 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
               variant="outline"
               className="justify-start gap-2 text-destructive border-destructive/30 hover:bg-destructive/10 rounded-xl"
               onClick={() => {
-                if (!confirm("Аннулировать эту подписку и все её компоненты? Остальные подписки клиента останутся без изменений.")) return;
+                if (!confirm("Аннулировать эту подписку? Остальные подписки клиента останутся без изменений.")) return;
                 runAction("Подписка аннулирована", () => api.subscriptionRemnaRevokeSubscription(token, subscription.id), false);
               }}
             >

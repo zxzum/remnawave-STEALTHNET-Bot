@@ -14,7 +14,7 @@ import { listCronEntries, triggerCron } from "./cron-registry.js";
 import { logAdmin } from "../audit/audit.service.js";
 import { getLogs } from "./log-buffer.js";
 import { prisma } from "../../db.js";
-import { compositeSubscriptionMetrics } from "../subscription/composite-subscription.js";
+import { getSquadTrafficRuntimeDiagnostics } from "../squad-traffic/squad-traffic.worker.js";
 
 function asyncRoute(fn: (req: express.Request, res: express.Response) => Promise<void | express.Response>) {
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -25,6 +25,27 @@ function asyncRoute(fn: (req: express.Request, res: express.Response) => Promise
 export const diagnosticsAdminRouter = Router();
 diagnosticsAdminRouter.use(requireAuth);
 diagnosticsAdminRouter.use(requireAdminSection);
+
+diagnosticsAdminRouter.get(
+  "/squad-traffic",
+  asyncRoute(async (_req, res) => {
+    const [state, active, exhausted, configErrors] = await Promise.all([
+      prisma.trafficAccountingWorkerState.findUnique({ where: { id: "singleton" } }),
+      prisma.squadTrafficQuota.count({ where: { status: "ACTIVE" } }),
+      prisma.squadTrafficQuota.count({ where: { status: "EXHAUSTED" } }),
+      prisma.squadTrafficQuota.count({ where: { status: "CONFIG_ERROR" } }),
+    ]);
+    return res.json({
+      state: state ? {
+        lastStartedAt: state.lastStartedAt, lastSucceededAt: state.lastSucceededAt,
+        durationMs: state.durationMs, processedCount: state.processedCount, changedCount: state.changedCount,
+        apiRequestCount: state.apiRequestCount, lastError: state.lastError, observeOnly: state.observeOnly,
+      } : null,
+      quotas: { active, exhausted, configErrors },
+      resolvedSquads: getSquadTrafficRuntimeDiagnostics(),
+    });
+  }),
+);
 
 diagnosticsAdminRouter.get(
   "/health",
@@ -38,20 +59,6 @@ diagnosticsAdminRouter.get(
   "/crons",
   asyncRoute(async (_req, res) => {
     return res.json({ items: listCronEntries() });
-  }),
-);
-
-diagnosticsAdminRouter.get(
-  "/composite-subscriptions",
-  asyncRoute(async (_req, res) => {
-    const [pending, errors] = await Promise.all([
-      prisma.subscription.count({ where: { syncStatus: "PENDING" } }),
-      prisma.subscription.count({ where: { syncStatus: "ERROR" } }),
-    ]);
-    return res.json({
-      requests: compositeSubscriptionMetrics.snapshot(),
-      synchronization: { pending, errors },
-    });
   }),
 );
 

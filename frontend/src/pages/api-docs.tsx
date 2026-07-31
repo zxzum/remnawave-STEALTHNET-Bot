@@ -285,7 +285,7 @@ const endpoints: Category[] = [
         desc: "Публичная конфигурация проекта (название, логотип, валюта, включённые платёжные методы, флаги функций и т.п.).",
         auth: "API Key",
         res: `{
-  "serviceName": "STEALTHNET",
+  "serviceName": "Лазейка VPN",
   "cabinetDesign": "stealth",
   "multiSubscriptionsEnabled": true,
   "passwordResetEnabled": true,

@@ -161,6 +161,10 @@ const SYSTEM_CONFIG_KEYS = [
   "bot_trial_used_text", // «все триалы использованы»
   "bot_gift_buy_text", // экран выбора тарифа для подарка
   "bot_promocode_text", // приглашение ввести промокод
+  "trial_expiry_reminder_enabled", "trial_expiry_reminder_hours",
+  "trial_expiry_reminder_text", "trial_expiry_reminder_button_text",
+  "subscription_expiry_reminder_enabled", "subscription_expiry_reminder_hours",
+  "subscription_expiry_reminder_text", "subscription_expiry_reminder_button_text",
   // тогглы кнопок на экране «Тарифы» бота (default true)
   "bot_tariffs_show_extra_devices_button",
   "bot_tariffs_show_balance_button",
@@ -186,6 +190,7 @@ const SYSTEM_CONFIG_KEYS = [
   "auto_broadcast_cron", // Расписание авто-рассылки (cron, например "0 9 * * *" = 9:00 каждый день)
   "skip_email_verification", // Регистрация без подтверждения почты: true/false
   "onboarding_email_required", // Обязательна ли привязка email на онбординге мини-аппа: true/false
+  "onboarding_2fa_enabled", // Показывать ли необязательный шаг 2FA при регистрации
   "stealth_accent", // Акцентный цвет stealth-мини-аппа (hex #RRGGBB)
   "stealth_hero_image", // Кастомная картинка вместо щита в hero (base64 data URL / URL)
   "multi_subscriptions_enabled", // Мульти-подписки: вкл (default) = несколько подписок; выкл = одна подписка (hard replace)
@@ -689,6 +694,7 @@ async function loadSystemConfigFromDb() {
     aiSystemPrompt: map.ai_system_prompt || "Ты — лучший менеджер техподдержки VPN-сервиса. Твоя цель — вежливо, быстро и точно помогать пользователям с настройкой VPN, тарифами и решением технических проблем. Отвечай кратко и по делу.",
     skipEmailVerification: map.skip_email_verification === "true" || map.skip_email_verification === "1",
     onboardingEmailRequired: map.onboarding_email_required === "true" || map.onboarding_email_required === "1",
+    onboarding2faEnabled: map.onboarding_2fa_enabled !== "false" && map.onboarding_2fa_enabled !== "0",
     stealthAccent: (map.stealth_accent ?? "").trim() || null,
     stealthHeroImage: map.stealth_hero_image || null,
     // Default TRUE (текущее поведение — мульти-подписки). Выкл только если явно "false".
@@ -795,6 +801,14 @@ async function loadSystemConfigFromDb() {
     botTrialUsedText: (map.bot_trial_used_text ?? "").trim() || null,
     botGiftBuyText: (map.bot_gift_buy_text ?? "").trim() || null,
     botPromocodeText: (map.bot_promocode_text ?? "").trim() || null,
+    trialExpiryReminderEnabled: (map.trial_expiry_reminder_enabled ?? "true") !== "false",
+    trialExpiryReminderHours: (map.trial_expiry_reminder_hours ?? "").trim() || "3, 0.5",
+    trialExpiryReminderText: (map.trial_expiry_reminder_text ?? "").trim() || null,
+    trialExpiryReminderButtonText: (map.trial_expiry_reminder_button_text ?? "").trim() || "💳 Выбрать тариф",
+    subscriptionExpiryReminderEnabled: (map.subscription_expiry_reminder_enabled ?? "true") !== "false",
+    subscriptionExpiryReminderHours: (map.subscription_expiry_reminder_hours ?? "").trim() || "3, 0.5",
+    subscriptionExpiryReminderText: (map.subscription_expiry_reminder_text ?? "").trim() || null,
+    subscriptionExpiryReminderButtonText: (map.subscription_expiry_reminder_button_text ?? "").trim() || "💳 Продлить подписку",
     // тогглы кнопок на экране «Тарифы»: дефолт true, выключение явное.
     botTariffsShowExtraDevicesButton: map.bot_tariffs_show_extra_devices_button !== "false" && map.bot_tariffs_show_extra_devices_button !== "0",
     botTariffsShowBalanceButton: map.bot_tariffs_show_balance_button !== "false" && map.bot_tariffs_show_balance_button !== "0",
@@ -1296,6 +1310,7 @@ export async function getPublicConfig(_forCloneBot?: { markupPercent?: number | 
     paymentProviders: full.paymentProviders,
     skipEmailVerification: full.skipEmailVerification ?? false,
     onboardingEmailRequired: full.onboardingEmailRequired ?? false,
+    onboarding2faEnabled: full.onboarding2faEnabled ?? true,
     stealthAccent: full.stealthAccent ?? null,
     stealthHeroImage: full.stealthHeroImage ?? null,
     multiSubscriptionsEnabled: full.multiSubscriptionsEnabled ?? true,

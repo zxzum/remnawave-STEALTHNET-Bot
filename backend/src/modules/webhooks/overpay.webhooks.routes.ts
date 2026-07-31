@@ -103,10 +103,10 @@ async function ensureTariffActivation(paymentId: string): Promise<void> {
     select: { tariffId: true, proxyTariffId: true, singboxTariffId: true, clientId: true, metadata: true },
   });
   const isExtraOption = row ? hasExtraOptionInMetadata(row.metadata) : false;
-  let activation: { ok: boolean; error?: string; slotIds?: string[] } = { ok: false };
+  let activation: { ok: boolean; error?: string; slotIds?: string[]; outcome?: "APPLIED" | "ALREADY_APPLIED" | "QUEUED" } = { ok: false };
   if (isExtraOption) {
     activation = await applyExtraOptionByPaymentId(paymentId);
-    if (activation.ok && row?.clientId) {
+    if (activation.ok && activation.outcome === "APPLIED" && row?.clientId) {
       const { notifyExtraOptionApplied } = await import("../notification/telegram-notify.service.js");
       await notifyExtraOptionApplied(row.clientId, paymentId).catch(() => {});
     }

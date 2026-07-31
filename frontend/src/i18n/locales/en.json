@@ -34,7 +34,7 @@
     },
     "marketplace": {
       "title": "Marketplace",
-      "subtitle": "Buy and sell between admins of other STEALTHNET panels",
+      "subtitle": "Buy and sell between admins of other Лазейка VPN panels",
       "tabs": {
         "browse": "Browse",
         "my": "My listings",
@@ -1173,9 +1173,9 @@
       "trial_traffic_limit": "Trial traffic limit (GB)",
       "referral_title": "Referrals",
       "referral_subtitle": "Percentage of top-ups by level: 1 — invited by you; 2 — invited by your referrals; 3 — invited by level 2 referrals.",
-      "referral_level_1": "Level 1 (%) — from top-ups of your invitees",
-      "referral_level_2": "Level 2 (%) — from level 1 referral top-ups",
-      "referral_level_3": "Level 3 (%) — from level 2 referral top-ups",
+      "referral_level_1": "Line 1 (%) — your direct invitees",
+      "referral_level_2": "Line 2 (%) — friends of friends",
+      "referral_level_3": "Line 3 (%) — deeper network",
       "payments_general": "General payment settings",
       "payment_providers_order": "Payment methods order & labels",
       "payment_providers_order_hint": "Customize display names and ordering of payment providers. Platega methods are configured separately below.",

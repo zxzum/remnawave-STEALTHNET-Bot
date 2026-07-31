@@ -11,6 +11,7 @@
  */
 import { Router, type Response } from "express";
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { getSystemConfig } from "./client.service.js";
 
 export const botAssetsRouter = Router();
@@ -101,5 +102,24 @@ botAssetsRouter.get("/bot-asset/logo.png", async (_req, res) => {
   } catch (e) {
     console.error("[bot-asset/logo] error:", e instanceof Error ? e.message : e);
     return res.status(500).send("error");
+  }
+});
+
+const ONBOARDING_ASSETS = new Set([
+  "select-your-device.png",
+  "happ-how-to-update.png",
+  "incy-how-to-update.png",
+]);
+
+botAssetsRouter.get("/bot-asset/onboarding/:name", async (req, res) => {
+  const name = req.params.name;
+  if (!ONBOARDING_ASSETS.has(name)) return res.status(404).send("unknown asset");
+  try {
+    const body = await readFile(new URL(`../../assets/guides/${name}`, import.meta.url));
+    res.set("Content-Type", "image/png");
+    res.set("Cache-Control", "public, max-age=31536000, immutable");
+    return res.send(body);
+  } catch {
+    return res.status(404).send("asset not found");
   }
 });

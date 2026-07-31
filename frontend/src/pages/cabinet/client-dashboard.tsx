@@ -40,7 +40,7 @@ import { useCabinetConfig } from "@/contexts/cabinet-config";
 import { useCabinetMiniapp } from "@/pages/cabinet/cabinet-layout";
 import { api } from "@/lib/api";
 import { formatRuDays } from "@/lib/i18n";
-import type { ClientPayment, ClientReferralStats } from "@/lib/api";
+import type { ClientPayment, ClientReferralStats, ClientTrafficQuota } from "@/lib/api";
 import { TrialsPickerDialog } from "@/components/cabinet/trials-picker-dialog";
 import { ExtendSubscriptionDialog } from "@/components/payment/extend-subscription-dialog";
 import { Button } from "@/components/ui/button";
@@ -120,6 +120,14 @@ function parseSubscription(sub: unknown): {
     subscriptionUrl: subUrl?.trim() || undefined,
     productName: productName || subscriptionProductName || undefined,
   };
+}
+
+function isSubscriptionActive(subscription: unknown, parsed: ReturnType<typeof parseSubscription>): boolean {
+  if (!subscription || typeof subscription !== "object") return false;
+  if (parsed.status && parsed.status !== "ACTIVE") return false;
+  if (!parsed.expireAt) return true;
+  const expireAt = new Date(parsed.expireAt);
+  return !Number.isNaN(expireAt.getTime()) && expireAt.getTime() > Date.now();
 }
 
 /**
@@ -223,7 +231,8 @@ function ClassicDashboardPage() {
   const config = useCabinetConfig();
   const [searchParams, setSearchParams] = useSearchParams();
   const [subscription, setSubscription] = useState<unknown>(null);
-  const [secondarySubscriptions, setSecondarySubscriptions] = useState<Array<{ type: string; id: string; subscriptionIndex: number | null; subscription: unknown; tariffDisplayName: string; remnawaveUuid: string | null; trialId?: string | null; trialName?: string | null; trialConvertEnabled?: boolean }>>([]);
+  const [trafficQuota, setTrafficQuota] = useState<ClientTrafficQuota | null>(null);
+  const [secondarySubscriptions, setSecondarySubscriptions] = useState<Array<{ type: string; id: string; subscriptionIndex: number | null; subscription: unknown; tariffDisplayName: string; remnawaveUuid: string | null; trialId?: string | null; trialName?: string | null; trialConvertEnabled?: boolean; trafficQuota?: ClientTrafficQuota | null }>>([]);
   // root-подписка — триал: лейбл TRIAL + «Конвертировать» (или ничего).
   const [rootTrial, setRootTrial] = useState<{ isTrial: boolean; convertEnabled: boolean }>({ isTrial: false, convertEnabled: true });
   // T-unify-cabinet (30.05.2026, WolfVPN): id главной подписки (#0) — для кнопки «Продлить» → /cabinet/tariffs?extend=
@@ -236,11 +245,13 @@ function ClassicDashboardPage() {
   const [paymentMessage, setPaymentMessage] = useState<"success_topup" | "success_tariff" | "success" | "failed" | null>(null);
   // T-pay-success-modal (WolfVPN): модалка успеха при возврате с оплаты (ЮKassa/Platega/Lava/и др.)
   const [paySuccessModal, setPaySuccessModal] = useState<null | "topup" | "tariff" | "generic">(null);
+  const [paymentJustSucceeded, setPaymentJustSucceeded] = useState(false);
   const [trialLoading, setTrialLoading] = useState(false);
   const [trialError, setTrialError] = useState<string | null>(null);
   // T15 (26.05.2026, WolfVPN): новая мульти-триал система.
   // hasMultiTrials=null → ещё не загружали; true → открываем модалку; false → legacy /trial.
   const [hasMultiTrials, setHasMultiTrials] = useState<boolean | null>(null);
+  const [hasConfiguredTrials, setHasConfiguredTrials] = useState(false);
   const [trialsPickerOpen, setTrialsPickerOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   // красивая модалка продления вместо редиректа в каталог
@@ -278,6 +289,8 @@ function ClassicDashboardPage() {
       const kind = paymentKind === "topup" ? "topup" : paymentKind === "tariff" ? "tariff" : "generic";
       setPaymentMessage(kind === "topup" ? "success_topup" : kind === "tariff" ? "success_tariff" : "success");
       setPaySuccessModal(kind);
+      setPaymentJustSucceeded(true);
+      window.setTimeout(() => setPaymentJustSucceeded(false), 3000);
       setSearchParams({}, { replace: true });
       if (token) refreshProfile().catch(() => {});
     } else if (payment === "failed") {
@@ -302,6 +315,7 @@ function ClassicDashboardPage() {
       .then(([subRes, payRes, devRes, allSubRes, allDevRes]) => {
         if (cancelled) return;
         setSubscription(subRes.subscription ?? null);
+        setTrafficQuota(subRes.trafficQuota ?? null);
         setTariffDisplayName(subRes.tariffDisplayName ?? null);
         setAutoRenewNext({
           amount: subRes.autoRenewNextChargeAmount ?? null,
@@ -326,8 +340,8 @@ function ClassicDashboardPage() {
         const rootItem = (allSubRes.items || []).find(s => s.type === "root");
         setRootSubId(rootItem?.id ?? null);
         setRootTrial({
-          isTrial: Boolean(rootItem?.trialId),
-          convertEnabled: rootItem?.trialConvertEnabled ?? true,
+          isTrial: subRes.isTrial === true,
+          convertEnabled: subRes.trialConvertEnabled ?? true,
         });
         // T-sec-devices (WolfVPN): счётчик устройств по subscriptionId — для отображения «использовано/лимит» на доп.подписках.
         const devCounts: Record<string, number> = {};
@@ -422,6 +436,7 @@ function ClassicDashboardPage() {
       .then((res) => {
         if (cancelled) return;
         setHasMultiTrials(res.items.length > 0);
+        setHasConfiguredTrials(res.hasAnyEnabled);
       })
       .catch(() => {
         if (cancelled) return;
@@ -461,8 +476,7 @@ function ClassicDashboardPage() {
   if (!client) return null;
 
   const subParsed = parseSubscription(subscription);
-  const hasActiveSubscription =
-    subscription && typeof subscription === "object" && (subParsed.status === "ACTIVE" || subParsed.status === undefined);
+  const hasActiveSubscription = isSubscriptionActive(subscription, subParsed);
   const vpnUrl = subParsed.subscriptionUrl || null;
   // T-remna-connect (27.05.2026, WolfVPN): если включена настройка «Страница подписки Remna» —
   // кнопки «Подключиться» ведут напрямую на remna subscriptionUrl, а не на /cabinet/subscribe.
@@ -472,9 +486,10 @@ function ClassicDashboardPage() {
   // ещё пробников. Legacy single-trial (`config.trialEnabled`) — старая система,
   // показываем только когда нет активной подписки.
   const showMultiTrials = hasMultiTrials === true;
-  const showLegacyTrial = !hasActiveSubscription && Boolean(config?.trialEnabled) && !client?.trialUsed && !showMultiTrials;
+  const showLegacyTrial = !hasConfiguredTrials && !hasActiveSubscription && Boolean(config?.trialEnabled) && !client?.trialUsed && !showMultiTrials;
   const showAnyTrial = showMultiTrials || showLegacyTrial;
   const [referralCopied, setReferralCopied] = useState<"site" | "bot" | null>(null);
+  const [copiedSubscriptionId, setCopiedSubscriptionId] = useState<string | null>(null);
   const siteOrigin = config?.publicAppUrl?.replace(/\/$/, "") || (typeof window !== "undefined" ? window.location.origin : "");
   const referralLinkSite =
     client.referralCode && siteOrigin
@@ -492,6 +507,13 @@ function ClassicDashboardPage() {
       setReferralCopied(which);
       setTimeout(() => setReferralCopied(null), 2000);
     }
+  };
+  const copySubscription = (id: string, url: string) => {
+    void navigator.clipboard.writeText(url).then(() => {
+      setCopiedSubscriptionId(id);
+      window.setTimeout(() => setCopiedSubscriptionId(null), 2000);
+      window.Telegram?.WebApp?.showPopup?.({ title: t("cabinet.dashboard.copied_title"), message: t("cabinet.dashboard.copied_message") });
+    });
   };
   // ♻️ Автосписание по подпискам — общий узел для mobile/desktop карточки «Баланс».
   const anyAutoRenewOn = autoRenewSubs.some((s) => s.enabled);
@@ -556,7 +578,8 @@ function ClassicDashboardPage() {
     </div>
   ) : null;
 
-  const trafficPercent = subParsed.trafficLimitBytes != null && subParsed.trafficLimitBytes > 0 && subParsed.trafficUsed != null
+  const localQuota = trafficQuota?.status ? trafficQuota : null;
+  const trafficPercent = localQuota ? Math.max(0, Math.min(100, localQuota.remainingPercent == null ? 0 : 100 - localQuota.remainingPercent)) : subParsed.trafficLimitBytes != null && subParsed.trafficLimitBytes > 0 && subParsed.trafficUsed != null
     ? Math.min(100, Math.round((subParsed.trafficUsed / subParsed.trafficLimitBytes) * 100))
     : null;
 
@@ -776,7 +799,7 @@ function ClassicDashboardPage() {
                       <Package className="h-5 w-5" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">{rootTrial.isTrial ? "TRIAL" : t("cabinet.dashboard.tariff_label")}</p>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">{rootTrial.isTrial ? "Пробная" : t("cabinet.dashboard.tariff_label")}</p>
                       <p className="text-[14px] font-semibold truncate text-foreground" title={((tariffDisplayName ?? subParsed.productName?.trim() ?? "").trim()) || t("cabinet.dashboard.test_label")}>
                         {((tariffDisplayName ?? subParsed.productName?.trim() ?? "").trim()) || t("cabinet.dashboard.test_label")}
                       </p>
@@ -805,11 +828,11 @@ function ClassicDashboardPage() {
                       <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">{t("cabinet.dashboard.traffic")}</p>
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-[14px] font-semibold text-foreground">
-                          {subParsed.trafficLimitBytes != null && subParsed.trafficLimitBytes > 0
+                          {localQuota ? `${formatBytes(Number(localQuota.usedBytes))} / ${formatBytes(Number(localQuota.limitBytes))}` : subParsed.trafficLimitBytes != null && subParsed.trafficLimitBytes > 0
                             ? `${formatBytes(subParsed.trafficUsed ?? 0)} / ${formatBytes(subParsed.trafficLimitBytes)}`
                             : t("cabinet.dashboard.unlimited")}
                         </p>
-                        {trafficPercent != null && <span className="text-[12px] font-bold text-muted-foreground">{trafficPercent}%</span>}
+                        {trafficPercent != null && <span className="text-[12px] font-bold text-muted-foreground">Использовано {trafficPercent}%</span>}
                       </div>
                     </div>
                   </div>
@@ -818,6 +841,7 @@ function ClassicDashboardPage() {
                       <div className="h-full rounded-full bg-primary transition-all duration-500 ease-in-out" style={{ width: `${trafficPercent}%` }} />
                     </div>
                   )}
+                  {localQuota && <p className="text-[11px] text-muted-foreground">Сброс: {formatDate(localQuota.periodEndsAt)} · осталось {localQuota.remainingPercent}%</p>}
                 </div>
               </div>
               {/* T-main-connect (WolfVPN): ссылка подписки + кнопка «Подключиться» прямо в карточке основной подписки (как у доп.подписок) */}
@@ -827,8 +851,8 @@ function ClassicDashboardPage() {
                     <code className="flex-1 min-w-0 truncate rounded-xl bg-background/50 border border-border/50 px-3 py-2.5 text-xs font-mono flex items-center text-foreground/80" title={vpnUrl}>
                       {vpnUrl}
                     </code>
-                    <Button size="icon" variant="outline" className="shrink-0 h-auto w-11 rounded-xl bg-background/50 hover:bg-background/80 transition-transform hover:scale-105" onClick={() => { navigator.clipboard.writeText(vpnUrl || ""); window.Telegram?.WebApp?.showPopup?.({ title: t("cabinet.dashboard.copied_title"), message: t("cabinet.dashboard.copied_message") }); }}>
-                      <Copy className="h-4 w-4" />
+                    <Button size="icon" variant="outline" aria-label={copiedSubscriptionId === "root" ? "Ссылка скопирована" : "Копировать ссылку"} title={copiedSubscriptionId === "root" ? "Ссылка скопирована" : "Копировать ссылку"} className={`shrink-0 h-auto w-11 rounded-xl transition-all hover:scale-105 ${copiedSubscriptionId === "root" ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-500 animate-pulse" : "bg-background/50 hover:bg-background/80"}`} onClick={() => copySubscription("root", vpnUrl)}>
+                      {copiedSubscriptionId === "root" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                     </Button>
                   </div>
                   <div className="pt-1">
@@ -854,10 +878,11 @@ function ClassicDashboardPage() {
 
         {secondarySubscriptions.length > 0 && secondarySubscriptions.map((sec) => {
           const secParsed = parseSubscription(sec.subscription);
-          const secHasActive = sec.subscription && typeof sec.subscription === "object" && (secParsed.status === "ACTIVE" || secParsed.status === undefined);
+          const secHasActive = isSubscriptionActive(sec.subscription, secParsed);
           const secExpireDate = secParsed.expireAt ? new Date(secParsed.expireAt) : null;
           const secDaysLeft = secExpireDate && secExpireDate > new Date() ? Math.max(0, Math.ceil((secExpireDate.getTime() - Date.now()) / (24*60*60*1000))) : null;
-          const secTrafficPercent = secParsed.trafficLimitBytes && secParsed.trafficLimitBytes > 0 && secParsed.trafficUsed != null ? Math.min(100, Math.round((secParsed.trafficUsed / secParsed.trafficLimitBytes) * 100)) : null;
+          const secLocalQuota = sec.trafficQuota?.status ? sec.trafficQuota : null;
+          const secTrafficPercent = secLocalQuota ? Math.max(0, Math.min(100, secLocalQuota.remainingPercent == null ? 0 : 100 - secLocalQuota.remainingPercent)) : secParsed.trafficLimitBytes && secParsed.trafficLimitBytes > 0 && secParsed.trafficUsed != null ? Math.min(100, Math.round((secParsed.trafficUsed / secParsed.trafficLimitBytes) * 100)) : null;
 
           return (
             <section key={sec.id} className="order-3 rounded-3xl border border-indigo-500/30 bg-card/40 backdrop-blur-xl p-5 shadow-sm overflow-hidden transition-all duration-300">
@@ -908,7 +933,7 @@ function ClassicDashboardPage() {
                         <Package className="h-5 w-5" />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">{sec.trialId ? "TRIAL" : t("cabinet.dashboard.tariff_label")}</p>
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">{sec.trialId ? "Пробная" : t("cabinet.dashboard.tariff_label")}</p>
                         <p className="text-[14px] font-semibold truncate text-foreground" title={sec.tariffDisplayName}>
                           {sec.tariffDisplayName}
                         </p>
@@ -937,11 +962,11 @@ function ClassicDashboardPage() {
                         <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">{t("cabinet.dashboard.traffic")}</p>
                         <div className="flex items-center justify-between gap-2">
                           <p className="text-[14px] font-semibold text-foreground">
-                            {secParsed.trafficLimitBytes != null && secParsed.trafficLimitBytes > 0
+                            {secLocalQuota ? `${formatBytes(Number(secLocalQuota.usedBytes))} / ${formatBytes(Number(secLocalQuota.limitBytes))}` : secParsed.trafficLimitBytes != null && secParsed.trafficLimitBytes > 0
                               ? `${formatBytes(secParsed.trafficUsed ?? 0)} / ${formatBytes(secParsed.trafficLimitBytes)}`
                               : t("cabinet.dashboard.unlimited")}
                           </p>
-                          {secTrafficPercent != null && <span className="text-[12px] font-bold text-muted-foreground">{secTrafficPercent}%</span>}
+                          {secTrafficPercent != null && <span className="text-[12px] font-bold text-muted-foreground">Использовано {secTrafficPercent}%</span>}
                         </div>
                       </div>
                     </div>
@@ -959,8 +984,8 @@ function ClassicDashboardPage() {
                     <code className="flex-1 min-w-0 truncate rounded-xl bg-background/50 border border-border/50 px-3 py-2.5 text-xs font-mono flex items-center text-foreground/80" title={secParsed.subscriptionUrl}>
                       {secParsed.subscriptionUrl}
                     </code>
-                    <Button size="icon" variant="outline" className="shrink-0 h-auto w-11 rounded-xl bg-background/50 hover:bg-background/80 transition-transform hover:scale-105" onClick={() => { navigator.clipboard.writeText(secParsed.subscriptionUrl || ""); window.Telegram?.WebApp?.showPopup?.({ title: t("cabinet.dashboard.copied_title"), message: t("cabinet.dashboard.copied_message") }); }}>
-                      <Copy className="h-4 w-4" />
+                    <Button size="icon" variant="outline" aria-label={copiedSubscriptionId === sec.id ? "Ссылка скопирована" : "Копировать ссылку"} title={copiedSubscriptionId === sec.id ? "Ссылка скопирована" : "Копировать ссылку"} className={`shrink-0 h-auto w-11 rounded-xl transition-all hover:scale-105 ${copiedSubscriptionId === sec.id ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-500 animate-pulse" : "bg-background/50 hover:bg-background/80"}`} onClick={() => copySubscription(sec.id, secParsed.subscriptionUrl || "")}>
+                      {copiedSubscriptionId === sec.id ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                     </Button>
                   </div>
                 )}
@@ -1184,7 +1209,7 @@ function ClassicDashboardPage() {
       {/* Cards grid */}
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {/* Подписка / тариф */}
-        <Card data-tour="subscription" className="rounded-3xl border border-border/50 bg-card/40 backdrop-blur-xl shadow-lg hover:shadow-xl transition-all duration-300 sm:col-span-2 lg:col-span-1 flex flex-col">
+        <Card data-tour="subscription" className={`rounded-3xl border border-border/50 bg-card/40 backdrop-blur-xl shadow-lg hover:shadow-xl transition-all duration-300 sm:col-span-2 lg:col-span-1 flex flex-col ${paymentJustSucceeded ? "animate-pulse ring-2 ring-primary/50" : ""}`}>
           <CardHeader className="pb-4">
             <CardTitle className="flex items-center justify-between gap-2 text-xl text-foreground">
               <div className="flex items-center gap-3 min-w-0">
@@ -1236,7 +1261,7 @@ function ClassicDashboardPage() {
                       <Package className="h-6 w-6" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">{rootTrial.isTrial ? "TRIAL" : t("cabinet.dashboard.tariff_label")}</p>
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">{rootTrial.isTrial ? "Пробная" : t("cabinet.dashboard.tariff_label")}</p>
                       <p className="text-[15px] font-semibold truncate text-foreground">
                         {((tariffDisplayName ?? subParsed.productName?.trim() ?? "").trim()) || t("cabinet.dashboard.test_label")}
                       </p>
@@ -1265,11 +1290,11 @@ function ClassicDashboardPage() {
                       <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">{t("cabinet.dashboard.traffic")}</p>
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-[15px] font-semibold text-foreground">
-                          {subParsed.trafficLimitBytes != null && subParsed.trafficLimitBytes > 0
+                          {localQuota ? `${formatBytes(Number(localQuota.usedBytes))} / ${formatBytes(Number(localQuota.limitBytes))}` : subParsed.trafficLimitBytes != null && subParsed.trafficLimitBytes > 0
                             ? `${formatBytes(subParsed.trafficUsed ?? 0)} / ${formatBytes(subParsed.trafficLimitBytes)}`
                             : t("cabinet.dashboard.unlimited")}
                         </p>
-                        {trafficPercent != null && <span className="text-[13px] font-bold text-muted-foreground">{trafficPercent}%</span>}
+                        {trafficPercent != null && <span className="text-[13px] font-bold text-muted-foreground">Использовано {trafficPercent}%</span>}
                       </div>
                     </div>
                   </div>
@@ -1278,6 +1303,7 @@ function ClassicDashboardPage() {
                       <div className="h-full rounded-full bg-primary transition-all duration-500 ease-in-out" style={{ width: `${trafficPercent}%` }} />
                     </div>
                   )}
+                  {localQuota && <p className="text-[11px] text-muted-foreground">Осталось {formatBytes(Number(localQuota.remainingBytes))} · сброс {formatDate(localQuota.periodEndsAt)}</p>}
                 </div>
                 {/* T-main-connect (WolfVPN): ссылка подписки + кнопка «Подключиться» в карточке основной подписки (desktop) */}
                 {vpnUrl && (
@@ -1286,8 +1312,8 @@ function ClassicDashboardPage() {
                       <code className="flex-1 min-w-0 truncate rounded-xl bg-background/50 border border-border/50 px-3 py-2.5 text-xs font-mono flex items-center text-foreground/80" title={vpnUrl}>
                         {vpnUrl}
                       </code>
-                      <Button size="icon" variant="outline" className="shrink-0 h-auto w-11 rounded-xl bg-background/50 hover:bg-background/80 transition-transform hover:scale-105" onClick={() => { navigator.clipboard.writeText(vpnUrl || ""); }}>
-                        <Copy className="h-4 w-4" />
+                      <Button size="icon" variant="outline" aria-label={copiedSubscriptionId === "root" ? "Ссылка скопирована" : "Копировать ссылку"} title={copiedSubscriptionId === "root" ? "Ссылка скопирована" : "Копировать ссылку"} className={`shrink-0 h-auto w-11 rounded-xl transition-all hover:scale-105 ${copiedSubscriptionId === "root" ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-500 animate-pulse" : "bg-background/50 hover:bg-background/80"}`} onClick={() => copySubscription("root", vpnUrl)}>
+                        {copiedSubscriptionId === "root" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                       </Button>
                     </div>
                     <Button className="w-full gap-2 shadow-lg h-12 rounded-xl text-md hover:scale-[1.02] transition-transform [&_svg]:self-center [&_span]:leading-none bg-gradient-to-r from-primary via-fuchsia-500 to-purple-500 text-white border-0" asChild>
@@ -1514,10 +1540,11 @@ function ClassicDashboardPage() {
           <div className="grid gap-6 sm:grid-cols-2">
             {secondarySubscriptions.map((sec) => {
               const secParsed = parseSubscription(sec.subscription);
-              const secHasActive = sec.subscription && typeof sec.subscription === "object" && (secParsed.status === "ACTIVE" || secParsed.status === undefined);
+              const secHasActive = isSubscriptionActive(sec.subscription, secParsed);
               const secExpireDate = secParsed.expireAt ? new Date(secParsed.expireAt) : null;
               const secDaysLeft = secExpireDate && secExpireDate > new Date() ? Math.max(0, Math.ceil((secExpireDate.getTime() - Date.now()) / (24*60*60*1000))) : null;
-              const secTrafficPercent = secParsed.trafficLimitBytes && secParsed.trafficLimitBytes > 0 && secParsed.trafficUsed != null ? Math.min(100, Math.round((secParsed.trafficUsed / secParsed.trafficLimitBytes) * 100)) : null;
+              const secLocalQuota = sec.trafficQuota?.status ? sec.trafficQuota : null;
+              const secTrafficPercent = secLocalQuota ? Math.max(0, Math.min(100, secLocalQuota.remainingPercent == null ? 0 : 100 - secLocalQuota.remainingPercent)) : secParsed.trafficLimitBytes && secParsed.trafficLimitBytes > 0 && secParsed.trafficUsed != null ? Math.min(100, Math.round((secParsed.trafficUsed / secParsed.trafficLimitBytes) * 100)) : null;
 
               return (
                 <Card key={sec.id} className="rounded-3xl border border-indigo-500/30 bg-card/40 backdrop-blur-xl shadow-lg hover:shadow-xl transition-all duration-300 flex flex-col">
@@ -1571,7 +1598,7 @@ function ClassicDashboardPage() {
                             <Package className="h-6 w-6" />
                           </div>
                           <div className="min-w-0 flex-1">
-                            <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">{sec.trialId ? "TRIAL" : t("cabinet.dashboard.tariff_label")}</p>
+                            <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">{sec.trialId ? "Пробная" : t("cabinet.dashboard.tariff_label")}</p>
                             <p className="text-[15px] font-semibold truncate text-foreground">
                               {sec.tariffDisplayName}
                             </p>
@@ -1602,11 +1629,11 @@ function ClassicDashboardPage() {
                             <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">{t("cabinet.dashboard.traffic")}</p>
                             <div className="flex items-center justify-between gap-2">
                               <p className="text-[15px] font-semibold text-foreground">
-                                {secParsed.trafficLimitBytes != null && secParsed.trafficLimitBytes > 0
+                                {secLocalQuota ? `${formatBytes(Number(secLocalQuota.usedBytes))} / ${formatBytes(Number(secLocalQuota.limitBytes))}` : secParsed.trafficLimitBytes != null && secParsed.trafficLimitBytes > 0
                                   ? `${formatBytes(secParsed.trafficUsed ?? 0)} / ${formatBytes(secParsed.trafficLimitBytes)}`
                                   : t("cabinet.dashboard.unlimited")}
                               </p>
-                              {secTrafficPercent != null && <span className="text-[13px] font-bold text-muted-foreground">{secTrafficPercent}%</span>}
+                              {secTrafficPercent != null && <span className="text-[13px] font-bold text-muted-foreground">Использовано {secTrafficPercent}%</span>}
                             </div>
                           </div>
                         </div>
@@ -1623,8 +1650,8 @@ function ClassicDashboardPage() {
                           <code className="flex-1 min-w-0 truncate rounded-xl bg-background/50 border border-border/50 px-3 py-2.5 text-xs font-mono flex items-center text-foreground/80" title={secParsed.subscriptionUrl}>
                             {secParsed.subscriptionUrl}
                           </code>
-                          <Button size="icon" variant="outline" className="shrink-0 h-auto w-11 rounded-xl bg-background/50 hover:bg-background/80 transition-transform hover:scale-105" onClick={() => { navigator.clipboard.writeText(secParsed.subscriptionUrl || ""); window.Telegram?.WebApp?.showPopup?.({ title: t("cabinet.dashboard.copied_title"), message: t("cabinet.dashboard.copied_message") }); }}>
-                            <Copy className="h-4 w-4" />
+                          <Button size="icon" variant="outline" aria-label={copiedSubscriptionId === sec.id ? "Ссылка скопирована" : "Копировать ссылку"} title={copiedSubscriptionId === sec.id ? "Ссылка скопирована" : "Копировать ссылку"} className={`shrink-0 h-auto w-11 rounded-xl transition-all hover:scale-105 ${copiedSubscriptionId === sec.id ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-500 animate-pulse" : "bg-background/50 hover:bg-background/80"}`} onClick={() => copySubscription(sec.id, secParsed.subscriptionUrl || "")}>
+                            {copiedSubscriptionId === sec.id ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                           </Button>
                         </div>
                       )}

@@ -52,9 +52,9 @@ import { adminPermissionsRouter } from "./modules/admin-permissions/admin-permis
 import { emailTemplatesRouter } from "./modules/email-templates/email-templates.routes.js";
 import { botMessagesRouter } from "./modules/bot-messages/bot-messages.routes.js";
 import { botConversationsRouter } from "./modules/bot-conversations/bot-conversations.routes.js";
+import { trafficQuotaAdminRouter } from "./modules/squad-traffic/squad-traffic.admin.routes.js";
 import { requireAuth } from "./modules/auth/middleware.js";
 import { renderSpaIndex } from "./modules/branding/spa-html.js";
-import { publicSubscriptionRouter } from "./modules/subscription/composite-subscription.routes.js";
 
 const app = express();
 
@@ -316,6 +316,7 @@ app.use("/api/auth", authRouter);
 // Специфичные под-роуты (lookup, :id, :id/referrer) живут в adminRouter и резолвятся через next().
 app.use("/api/admin/referrals", adminReferralsRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/admin", trafficQuotaAdminRouter);
 app.use("/api/admin/traffic-abuse", trafficAbuseRouter);
 app.use("/api/admin/api-keys", apiKeysAdminRouter);
 app.use("/api/admin/geo-map", geoMapRouter);
@@ -324,7 +325,6 @@ app.use("/api/admin/proxy", proxyAdminRouter);
 app.use("/api/admin/singbox", singboxAdminRouter);
 app.use("/api/proxy-nodes", proxyAgentRouter);
 app.use("/api/singbox-nodes", singboxAgentRouter);
-app.use("/api/sub", publicSubscriptionRouter);
 app.use("/api/client", clientRouter);
 app.use("/api/client/contests", contestClientRouter);
 app.use("/api/client/gift", giftRouter);

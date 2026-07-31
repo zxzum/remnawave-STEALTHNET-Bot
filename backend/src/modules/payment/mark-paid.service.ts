@@ -24,11 +24,24 @@ function hasExtraOptionInMetadata(metadata: string | null): boolean {
   }
 }
 
+export function shouldRetryPaidExtraOption(
+  status: string,
+  metadata: string | null,
+  state: "NEEDS_PLAN" | "PLANNING" | "PENDING" | "APPLYING" | "MANUAL_REVIEW" | "APPLIED" | "FAILED_SAFE" | null,
+): boolean {
+  return status === "PAID"
+    && hasExtraOptionInMetadata(metadata)
+    && state != null
+    && state !== "MANUAL_REVIEW"
+    && state !== "APPLIED"
+    && state !== "FAILED_SAFE";
+}
+
 export type MarkPaymentPaidResult = {
   ok: boolean;
   payment: Awaited<ReturnType<typeof prisma.payment.findUnique>>;
   referral?: Awaited<ReturnType<typeof distributeReferralRewards>>;
-  activation?: { ok: boolean; error?: string };
+  activation?: { ok: boolean; error?: string; outcome?: "APPLIED" | "ALREADY_APPLIED" | "QUEUED" };
   proxySlots?: { ok: boolean; slotsCreated?: number; error?: string };
   balanceCredited?: boolean;
   error?: string;
@@ -44,6 +57,16 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
     clientId: payment.clientId,
   });
   if (payment.status === "PAID") {
+    if (shouldRetryPaidExtraOption(payment.status, payment.metadata, payment.extraOptionState)) {
+      const extraResult = await applyExtraOptionByPaymentId(paymentId);
+      if (!extraResult.ok) {
+        return { ok: false, payment, activation: extraResult, error: extraResult.error };
+      }
+      if (extraResult.outcome === "APPLIED") {
+        const { notifyExtraOptionApplied } = await import("../notification/telegram-notify.service.js");
+        await notifyExtraOptionApplied(payment.clientId, paymentId).catch(() => {});
+      }
+    }
     const result = await distributeReferralRewards(paymentId);
     const updated = await prisma.payment.findUnique({ where: { id: paymentId } });
     return { ok: true, payment: updated ?? payment, referral: result };
@@ -62,10 +85,39 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
   // Без этой проверки: 2 webhook'а на один payment → 2 раза +balance.increment
   // (двойной топап). На бесподписном webhook'е (см. отчёт) — атакер мог фигачить
   // /webhooks/platega с одним paymentId сколько хочет.
-  const flip = await prisma.payment.updateMany({
-    where: { id: paymentId, status: "PENDING" },
-    data: { status: "PAID", paidAt: now },
-  });
+  let flip: { count: number };
+  if (isExtraOption) {
+    flip = await prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe('SELECT "id" FROM "payments" WHERE "id" = $1 FOR UPDATE', paymentId);
+      const fresh = await tx.payment.findUnique({ where: { id: paymentId } });
+      if (!fresh || fresh.status !== "PENDING") return { count: 0 };
+      const metadata = fresh.metadata ? JSON.parse(fresh.metadata) as Record<string, unknown> : {};
+      const requestedId = typeof metadata.targetSubscriptionId === "string" ? metadata.targetSubscriptionId : null;
+      const subscription = requestedId
+        ? await tx.subscription.findFirst({
+            where: { id: requestedId, deletionRequestedAt: null },
+            select: { id: true, ownerId: true, giftedToClientId: true },
+          })
+        : await tx.subscription.findFirst({
+            where: { ownerId: fresh.clientId, subscriptionIndex: 0, deletionRequestedAt: null },
+            select: { id: true, ownerId: true, giftedToClientId: true },
+          });
+      if (!subscription || (subscription.ownerId !== fresh.clientId && subscription.giftedToClientId !== fresh.clientId)) {
+        await tx.payment.update({ where: { id: paymentId }, data: { status: "PAID", paidAt: now, extraOptionState: "FAILED_SAFE" } });
+        return { count: 1 };
+      }
+      await tx.payment.update({
+        where: { id: paymentId },
+        data: { status: "PAID", paidAt: now, subscriptionId: subscription.id, extraOptionState: "NEEDS_PLAN", extraOptionNextAttemptAt: now },
+      });
+      return { count: 1 };
+    });
+  } else {
+    flip = await prisma.payment.updateMany({
+      where: { id: paymentId, status: "PENDING" },
+      data: { status: "PAID", paidAt: now },
+    });
+  }
   if (flip.count === 0) {
     // Уже PAID параллельным запросом — выходим как идемпотент.
     const updated = await prisma.payment.findUnique({ where: { id: paymentId } });
@@ -80,12 +132,16 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
     });
   }
 
-  let activation: { ok: boolean; error?: string } = { ok: false, error: "no tariff" };
+  let activation: { ok: boolean; error?: string; outcome?: "APPLIED" | "ALREADY_APPLIED" | "QUEUED" } = { ok: false, error: "no tariff" };
   let proxySlots: { ok: boolean; slotsCreated?: number; error?: string } = { ok: false };
   if (isExtraOption) {
     const extraResult = await applyExtraOptionByPaymentId(paymentId);
-    activation = extraResult.ok ? { ok: true } : { ok: false, error: (extraResult as { error?: string }).error };
-    if (extraResult.ok && payment.clientId) {
+    activation = extraResult.ok ? { ok: true, outcome: extraResult.outcome } : { ok: false, error: extraResult.error };
+    if (!extraResult.ok) {
+      const updated = await prisma.payment.findUnique({ where: { id: paymentId } });
+      return { ok: false, payment: updated ?? payment, activation, error: extraResult.error };
+    }
+    if (extraResult.ok && extraResult.outcome === "APPLIED" && payment.clientId) {
       const { notifyExtraOptionApplied } = await import("../notification/telegram-notify.service.js");
       await notifyExtraOptionApplied(payment.clientId, paymentId).catch(() => {});
     }

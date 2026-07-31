@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -17,7 +17,7 @@ import { useAuth } from "@/contexts/auth";
 import { useTheme, ACCENT_PALETTES, type ThemeMode, type ThemeAccent } from "@/contexts/theme";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { api, type AdminNotificationCounters } from "@/lib/api";
+import { api } from "@/lib/api";
 import { InboxBell } from "@/components/inbox-bell";
 
 const PANEL_VERSION = "5.2.0";
@@ -75,6 +75,7 @@ function useNavSections(): NavItem[] {
     { to: "/admin/referral-network", label: t("admin.nav.referral_network"), icon: Network, section: "referral-network", category: "subscription" },
     // детальная страница рефералки по клиенту (поиск, реферер, заработок, кредиты).
     { to: "/admin/referrals", label: "👥 Рефералка", icon: Users, section: "referrals", category: "subscription" },
+    { to: "/admin/partners", label: "🤝 Партнёры", icon: Users, section: "partners", category: "subscription" },
     { to: "/admin/secondary-subscriptions", label: "Подписки", icon: Gift, section: "secondary-subscriptions", category: "subscription" },
     { to: "/admin/video-instructions", label: t("admin.nav.video_instructions"), icon: Video, section: "video-instructions", category: "tools" },
     { to: "/admin/broadcast", label: t("admin.nav.broadcast"), icon: Send, section: "broadcast", category: "tools" },
@@ -188,9 +189,6 @@ export function DashboardLayout() {
   const [brand, setBrand] = useState<{ serviceName: string; logo: string | null }>({ serviceName: "", logo: null });
   const [showThemePanel, setShowThemePanel] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [notificationToasts, setNotificationToasts] = useState<{ id: number; text: string; icon: string }[]>([]);
-  const lastCountersRef = useRef<AdminNotificationCounters | null>(null);
-  const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(true);
 
   useEffect(() => { setMobileMenuOpen(false); }, [location.pathname]);
 
@@ -212,42 +210,9 @@ export function DashboardLayout() {
     if (token) {
       api.getSettings(token).then((s) => {
         setBrand({ serviceName: s.serviceName, logo: s.logo ?? null });
-        setNotificationsEnabled(s.adminFrontNotificationsEnabled ?? true);
       }).catch(() => {});
     }
   }, [state.accessToken]);
-
-  useEffect(() => {
-    const token = state.accessToken;
-    if (!token || !notificationsEnabled) return;
-    let cancelled = false;
-    const pushToast = (text: string, icon = "") => {
-      const id = Date.now() + Math.random();
-      setNotificationToasts((prev) => [...prev, { id, text, icon }]);
-      window.setTimeout(() => { setNotificationToasts((prev) => prev.filter((t) => t.id !== id)); }, 5000);
-    };
-    const fetchCounters = async () => {
-      try {
-        const data = await api.getAdminNotificationCounters(token);
-        if (cancelled) return;
-        const last = lastCountersRef.current;
-        if (last) {
-          const newClients = data.totalClients - last.totalClients;
-          const newPayments = data.totalTariffPayments - last.totalTariffPayments;
-          const newTopups = data.totalBalanceTopups - last.totalBalanceTopups;
-          const newTickets = data.totalTickets - last.totalTickets;
-          if (newClients > 0) pushToast(newClients === 1 ? t("admin.header.notification_new_client") : t("admin.header.notification_new_clients", { newClients }), "\u{1F464}");
-          if (newPayments > 0) pushToast(newPayments === 1 ? t("admin.header.notification_new_payment") : t("admin.header.notification_new_payments", { newPayments }), "\u{1F4E6}");
-          if (newTopups > 0) pushToast(newTopups === 1 ? t("admin.header.notification_new_topup") : t("admin.header.notification_new_topups", { newTopups }), "\u{1F4B0}");
-          if (newTickets > 0) pushToast(newTickets === 1 ? t("admin.header.notification_new_ticket") : t("admin.header.notification_new_tickets", { newTickets }), "\u{1F4AC}");
-        }
-        lastCountersRef.current = data;
-      } catch { /* ignore */ }
-    };
-    fetchCounters();
-    const id = window.setInterval(fetchCounters, 15000);
-    return () => { cancelled = true; window.clearInterval(id); };
-  }, [state.accessToken, notificationsEnabled]);
 
   async function handleLogout() {
     await logout();
@@ -285,7 +250,6 @@ export function DashboardLayout() {
         <div className="border-t border-white/10 p-4 space-y-1.5 relative z-10">
           <div className="text-[12px] font-mono font-bold text-emerald-400 drop-shadow-[0_0_8px_rgba(52,211,153,0.8)] uppercase tracking-widest px-3 py-1 mb-1 flex items-center gap-2">
             <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
             </span>
             {t("admin.header.online")}
@@ -336,7 +300,6 @@ export function DashboardLayout() {
               <div className="border-t border-white/10 p-4 space-y-1.5 relative z-10">
                 <div className="text-[12px] font-mono font-bold text-emerald-400 drop-shadow-[0_0_8px_rgba(52,211,153,0.8)] uppercase tracking-widest px-3 py-1 mb-1 flex items-center gap-2">
                   <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                   </span>
                   {t("admin.header.online")}
@@ -409,12 +372,6 @@ export function DashboardLayout() {
             </div>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* Real-time toast indicator (legacy, низ-приоритет) */}
-            {notificationToasts.length > 0 && (
-              <span title={notificationsEnabled ? "Уведомления включены" : "Уведомления выключены"} className="flex items-center justify-center h-9 w-2">
-                <span className="h-2 w-2 rounded-full bg-rose-500 animate-pulse" />
-              </span>
-            )}
             {/* Inbox Bell (counters → tickets/webhooks/payments/cron failures/etc.) */}
             <InboxBell />
             {/* Theme picker — стиль из кабинета */}
@@ -496,7 +453,6 @@ export function DashboardLayout() {
             <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer"
               className="hidden sm:flex items-center gap-1.5 rounded-xl border border-white/10 bg-gradient-to-br from-emerald-500/10 to-teal-500/5 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-400 transition-all hover:from-emerald-500/20 hover:to-teal-500/10 hover:shadow-md">
               <span className="relative flex h-1.5 w-1.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
               </span>
               <span>v{PANEL_VERSION}</span>
@@ -509,16 +465,6 @@ export function DashboardLayout() {
         </div>
       </main>
 
-      {notificationToasts.length > 0 && (
-        <div className="fixed bottom-4 right-4 z-50 space-y-2">
-          {notificationToasts.map((t) => (
-            <div key={t.id} className="max-w-xs rounded-lg border bg-card px-4 py-3 text-sm shadow-lg flex items-center gap-2 animate-in slide-in-from-right-5 fade-in duration-300">
-              {t.icon && <span className="text-base shrink-0">{t.icon}</span>}
-              <span>{t.text}</span>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

@@ -178,9 +178,11 @@ export function ClientOnboardingPage() {
     const hasEmail = !!client?.email;
     const arr: Step[] = ["welcome"];
     if (!hasEmail) arr.push("email");
-    arr.push("password", "2fa", "done");
+    arr.push("password");
+    if (config?.onboarding2faEnabled !== false) arr.push("2fa");
+    arr.push("done");
     return arr;
-  }, [client?.email]);
+  }, [client?.email, config?.onboarding2faEnabled]);
 
   const stepIndex = STEPS.indexOf(step);
 

@@ -25,28 +25,17 @@ import {
   resetAllSubscriptionsTraffic,
   revokeAllSubscriptionsUrls,
 } from "../client/client-bulk-ops.service.js";
-import {
-  revokeLogicalSubscription,
-  selectComponentTargets,
-} from "../subscription/subscription-components.service.js";
+import { deleteSingleSubscription } from "../subscription/single-subscription-lifecycle.service.js";
 import { notifySubscriptionRevokeFailed } from "../notification/telegram-notify.service.js";
 
 async function getClientPrimaryRemnaTarget(clientId: string) {
   const subscription = await prisma.subscription.findUnique({
     where: { ownerId_subscriptionIndex: { ownerId: clientId, subscriptionIndex: 0 } },
-    select: {
-      id: true,
-      remnawaveUuid: true,
-      components: {
-        orderBy: { mergeOrder: "asc" },
-        select: { key: true, required: true, mergeOrder: true, remnawaveUuid: true },
-      },
-    },
+    select: { id: true, remnawaveUuid: true },
   });
-  if (!subscription) return null;
-  const targets = selectComponentTargets(subscription);
-  const target = targets.find((component) => component.required) ?? targets[0];
-  return target ? { subscriptionId: subscription.id, ...target } : null;
+  return subscription?.remnawaveUuid
+    ? { subscriptionId: subscription.id, remnawaveUuid: subscription.remnawaveUuid }
+    : null;
 }
 
 /** Извлечь activeInternalSquads (uuid[]) из ответа Remna getUser */
@@ -358,7 +347,7 @@ botAdminRouter.post("/subscriptions/:subId/remna/revoke-subscription", async (re
   });
   if (!subscription) return res.status(404).json({ message: "Подписка не найдена" });
 
-  const result = await revokeLogicalSubscription(subId);
+  const result = await deleteSingleSubscription(subId, "REVOKE");
   if (!result.deleted) {
     void notifySubscriptionRevokeFailed({
       clientId: subscription.ownerId,
@@ -435,7 +424,7 @@ botAdminRouter.get("/clients/:id/remna", async (req, res) => {
   const result = await remnaGetUser(target.remnawaveUuid);
   if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
   const activeInternalSquads = getRemnaUserSquads(result.data);
-  return res.json({ remnaUuid: target.remnawaveUuid, componentKey: target.key, activeInternalSquads });
+  return res.json({ remnaUuid: target.remnawaveUuid, activeInternalSquads });
 });
 
 const squadActionSchema = z.object({ squadUuid: z.string().uuid() });
@@ -456,10 +445,6 @@ botAdminRouter.post("/clients/:id/remna/squads/add", async (req, res) => {
   if (!currentSquads.includes(body.data.squadUuid)) currentSquads.push(body.data.squadUuid);
   const updateRes = await remnaUpdateUser({ uuid: target.remnawaveUuid, activeInternalSquads: currentSquads });
   if (updateRes.error) return res.status(updateRes.status >= 400 ? updateRes.status : 500).json({ message: updateRes.error });
-  await prisma.remnawaveComponent.updateMany({
-    where: { subscriptionId: target.subscriptionId, key: target.key },
-    data: { internalSquadUuids: currentSquads },
-  });
   return res.json({ ok: true, activeInternalSquads: currentSquads });
 });
 
@@ -478,10 +463,6 @@ botAdminRouter.post("/clients/:id/remna/squads/remove", async (req, res) => {
   const currentSquads = getRemnaUserSquads(userRes.data).filter((u) => u !== body.data.squadUuid);
   const updateRes = await remnaUpdateUser({ uuid: target.remnawaveUuid, activeInternalSquads: currentSquads });
   if (updateRes.error) return res.status(updateRes.status >= 400 ? updateRes.status : 500).json({ message: updateRes.error });
-  await prisma.remnawaveComponent.updateMany({
-    where: { subscriptionId: target.subscriptionId, key: target.key },
-    data: { internalSquadUuids: currentSquads },
-  });
   return res.json({ ok: true, activeInternalSquads: currentSquads });
 });
 

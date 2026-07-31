@@ -16,7 +16,7 @@ import { verifyLavaWebhookSignature } from "../lava/lava.service.js";
 import { activateTariffByPaymentId } from "../tariff/tariff-activation.service.js";
 import { createProxySlotsByPaymentId } from "../proxy/proxy-slots-activation.service.js";
 import { createSingboxSlotsByPaymentId } from "../singbox/singbox-slots-activation.service.js";
-import { applyExtraOptionByPaymentId } from "../extra-options/extra-options.service.js";
+import { markPaymentPaid } from "../payment/mark-paid.service.js";
 import { distributeReferralRewards } from "../referral/referral.service.js";
 import { notifyBalanceToppedUp, notifyTariffActivated, notifyProxySlotsCreated, notifySingboxSlotsCreated } from "../notification/telegram-notify.service.js";
 import { recordPromoCodeUsageFromPayment } from "../payment/promo-code-usage.util.js";
@@ -129,6 +129,13 @@ lavaWebhooksRouter.post("/", async (req: Request, res: Response) => {
     return res.status(200).send("OK");
   }
 
+  const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
+  if (isExtraOption) {
+    if (body.invoice_id != null) await prisma.payment.update({ where: { id: payment.id }, data: { externalId: body.invoice_id } });
+    await markPaymentPaid(payment.id);
+    return res.status(200).send("OK");
+  }
+
   // Идемпотентность: если уже PAID — просто OK.
   if (payment.status === "PAID") {
     return res.status(200).send("OK");
@@ -141,7 +148,6 @@ lavaWebhooksRouter.post("/", async (req: Request, res: Response) => {
   });
   await recordPromoCodeUsageFromPayment(payment.id);
 
-  const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
   const isTopUp = !payment.tariffId && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
 
   if (isTopUp) {
@@ -150,12 +156,6 @@ lavaWebhooksRouter.post("/", async (req: Request, res: Response) => {
       data: { balance: { increment: payment.amount } },
     });
     await notifyBalanceToppedUp(payment.clientId, payment.amount, payment.currency || "RUB", "Lava").catch(() => {});
-  } else if (isExtraOption) {
-    const r = await applyExtraOptionByPaymentId(payment.id);
-    if (r.ok) {
-      const { notifyExtraOptionApplied } = await import("../notification/telegram-notify.service.js");
-      await notifyExtraOptionApplied(payment.clientId, payment.id).catch(() => {});
-    }
   } else if (payment.proxyTariffId) {
     const proxyResult = await createProxySlotsByPaymentId(payment.id);
     if (proxyResult.ok) {

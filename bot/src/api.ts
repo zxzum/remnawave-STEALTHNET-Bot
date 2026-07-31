@@ -37,6 +37,14 @@ async function fetchJson<T>(path: string, opts?: { method?: string; body?: unkno
   return data as T;
 }
 
+export async function getOnboardingAsset(name: "select-your-device.png" | "happ-how-to-update.png" | "incy-how-to-update.png"): Promise<Uint8Array> {
+  const res = await fetch(`${API_URL}/api/public/bot-asset/onboarding/${name}`, {
+    headers: getHeaders(),
+  });
+  if (!res.ok) throw new Error(`Не удалось загрузить изображение (${res.status})`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
 /** Привязка Telegram к аккаунту по коду (вызывается ботом при /link КОД) */
 export async function linkTelegramFromBot(code: string, telegramId: number, telegramUsername?: string): Promise<{ message: string }> {
   const botToken = process.env.BOT_TOKEN || "";
@@ -342,6 +350,7 @@ export async function getReferralStats(token: string): Promise<{
   l1Earned: number;
   l2InvitesCount: number;
   l2Earned: number;
+  l3Earned: number;
   totalEarned: number;
   totalWithdrawn: number;
   totalSpent: number;
@@ -470,6 +479,8 @@ export async function getPublicTariffs(): Promise<{
       durationDays: number;
       trafficLimitBytes?: number | null;
       trafficResetMode?: string;
+      trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
+      isBestChoice?: boolean;
       deviceLimit?: number | null;
       price: number;
       currency: string;
@@ -1152,6 +1163,12 @@ export type SubscriptionListItem = {
   trialConvertEnabled?: boolean;
   /** конвертация триала разрешена в любой тариф. */
   trialConvertAllTariffs?: boolean;
+  trafficQuota?: {
+    usedBytes: string;
+    limitBytes: string;
+    remainingBytes: string;
+    status: string;
+  } | null;
 };
 
 /** Убрать ВСЕ доп. устройства с подписки (extraDevices=0, hwid kick в Remna). */

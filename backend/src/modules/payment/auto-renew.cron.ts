@@ -154,9 +154,9 @@ export async function processAutoRenewals() {
     // Пропускаем в legacy Client-цикле, чтобы не списать дважды.
     const primaryHasAutoRenew = await prisma.subscription.findUnique({
       where: { ownerId_subscriptionIndex: { ownerId: client.id, subscriptionIndex: 0 } },
-      select: { autoRenewEnabled: true },
+      select: { autoRenewEnabled: true, deletionRequestedAt: true },
     });
-    if (primaryHasAutoRenew?.autoRenewEnabled === true) {
+    if (primaryHasAutoRenew?.autoRenewEnabled === true || primaryHasAutoRenew?.deletionRequestedAt) {
       console.log(`[auto-renew] Skipping legacy Client-cycle for ${client.id}: Subscription[0].autoRenewEnabled handled by unified cycle.`);
       continue;
     }
@@ -683,7 +683,7 @@ async function processSecondaryAutoRenewals(): Promise<void> {
   // Продлевать не на что — раньше висели включёнными и молчали («не списывает и не пишет»).
   // Выключаем тумблер и один раз говорим клиенту (EXPIRED-шаблон «автосписание отключено»).
   const orphans = await prisma.subscription.findMany({
-    where: { autoRenewEnabled: true, tariffId: null, autoRenewTariffId: null },
+    where: { autoRenewEnabled: true, tariffId: null, autoRenewTariffId: null, deletionRequestedAt: null },
     select: { id: true, ownerId: true, subscriptionIndex: true, owner: { select: { balance: true } } },
   });
   for (const o of orphans) {
@@ -711,6 +711,7 @@ async function processSecondaryAutoRenewals(): Promise<void> {
   const secondaries = await prisma.subscription.findMany({
     where: {
       autoRenewEnabled: true,
+      deletionRequestedAt: null,
       remnawaveUuid: { not: null },
       // тариф подписки мог быть удалён (FK SetNull → tariffId=null). Раньше такие
       // подписки МОЛЧА выпадали из автосписания навсегда («не списывает при балансе»).
@@ -823,6 +824,7 @@ async function processSecondaryAutoRenewals(): Promise<void> {
         const { extendSecondarySubscription } = await import("../tariff/tariff-activation.service.js");
         const retryResult = await extendSecondarySubscription(
           sec.id,
+          sec.owner.id,
           {
             id: tariffForRenewal.id,
             durationDays: tariffForRenewal.durationDays,
@@ -1011,6 +1013,7 @@ async function processSecondaryAutoRenewals(): Promise<void> {
       const { extendSecondarySubscription } = await import("../tariff/tariff-activation.service.js");
       const result = await extendSecondarySubscription(
         sec.id,
+        sec.owner.id,
         {
           id: tariffForRenewal.id,
           durationDays: tariffForRenewal.durationDays,

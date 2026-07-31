@@ -40,7 +40,7 @@ export function StealthLayout() {
     void api.getPublicSubscriptionPageConfig().catch(() => {});
   }, []);
 
-  const brand = (config?.serviceName ?? "STEALTHNET").toUpperCase();
+  const brand = (config?.serviceName ?? "Лазейка VPN").toUpperCase();
   const accent = hexToRgbTriple(config?.stealthAccent);
 
   // Ставим акцент ГЛОБАЛЬНО на :root — контент кабинета рендерится в отдельном

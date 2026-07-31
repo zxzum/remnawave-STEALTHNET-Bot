@@ -8,8 +8,8 @@ export default defineConfig({
         react(),
         tailwindcss(),
         VitePWA({
-            registerType: "prompt",
-            injectRegister: null, // регистрируем вручную в main.tsx (для показа промпта обновления)
+            selfDestroying: true,
+            injectRegister: false,
             includeAssets: [
                 "favicon.svg",
                 "favicon-16.png",
@@ -17,9 +17,9 @@ export default defineConfig({
                 "apple-touch-icon.png",
             ],
             manifest: {
-                name: "STEALTHNET",
-                short_name: "STEALTHNET",
-                description: "Личный кабинет и админка STEALTHNET — VPN на базе Remnawave",
+                name: "Лазейка VPN",
+                short_name: "Лазейка VPN",
+                description: "Личный кабинет и админка Лазейка VPN — VPN на базе Remnawave",
                 lang: "ru",
                 start_url: "/cabinet",
                 scope: "/",
@@ -47,44 +47,6 @@ export default defineConfig({
                         description: "Управление клиентами и тарифами",
                         url: "/admin",
                         icons: [{ src: "/icon-192.png", sizes: "192x192" }],
-                    },
-                ],
-            },
-            workbox: {
-                // SPA-роутинг: любой не-API путь отдаём index.html из кеша
-                navigateFallback: "/index.html",
-                navigateFallbackDenylist: [
-                    /^\/api\//,
-                    /^\/assets\/.*\.(png|jpg|jpeg|svg|webp|ico)$/,
-                ],
-                maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
-                skipWaiting: false, // ждём подтверждения от пользователя на обновление
-                clientsClaim: true,
-                cleanupOutdatedCaches: true,
-                runtimeCaching: [
-                    {
-                        // Не кешируем API — всегда идём в сеть
-                        urlPattern: /\/api\/.*/i,
-                        handler: "NetworkOnly",
-                    },
-                    {
-                        // Google-шрифты
-                        urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com\/.*/i,
-                        handler: "CacheFirst",
-                        options: {
-                            cacheName: "google-fonts",
-                            expiration: { maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 365 },
-                            cacheableResponse: { statuses: [0, 200] },
-                        },
-                    },
-                    {
-                        // Картинки/логотипы
-                        urlPattern: /\.(?:png|jpg|jpeg|svg|webp|gif|ico)$/i,
-                        handler: "StaleWhileRevalidate",
-                        options: {
-                            cacheName: "images",
-                            expiration: { maxEntries: 100, maxAgeSeconds: 60 * 60 * 24 * 30 },
-                        },
                     },
                 ],
             },

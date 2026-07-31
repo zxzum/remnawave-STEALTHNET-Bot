@@ -11,15 +11,14 @@ import {
   remnaGetUserByTelegramId,
   remnaGetUserByEmail,
   remnaGetUserByUsername,
+  remnaUpdateUser,
   extractRemnaUuid,
   remnaUsernameFromClient,
 } from "../remna/remna.client.js";
 import { getSystemConfig } from "../client/client.service.js";
 import { getPrimaryBot } from "../bot/bot.service.js";
-import {
-  isManagedComponentUsername,
-  synchronizeSubscriptionComponents,
-} from "../subscription/subscription-components.service.js";
+import { isActiveSubscriptionGrace, runSingleSubscriptionOperation } from "../subscription/single-subscription-lifecycle.service.js";
+import { remnaTrafficSettings } from "../squad-traffic/traffic-remna-policy.js";
 
 const PAGE_SIZE = 100;
 
@@ -29,6 +28,10 @@ type RemnaUser = {
   email?: string | null;
   username?: string;
 };
+
+export function isLegacyManagedComponentUsername(username: string | null | undefined): boolean {
+  return typeof username === "string" && (/_c_[a-zA-Z0-9_-]+_\d+$/.test(username) || /_WL$/i.test(username));
+}
 
 function extractRemnaUsers(data: unknown): RemnaUser[] {
   if (Array.isArray(data)) return data as RemnaUser[];
@@ -87,12 +90,6 @@ export async function syncFromRemna(): Promise<{
     const users = extractRemnaUsers(res.data);
     if (users.length === 0) hasMore = false;
     else {
-      const pageUuids = users.map((user) => user.uuid).filter((uuid): uuid is string => Boolean(uuid));
-      const linkedComponents = await prisma.remnawaveComponent.findMany({
-        where: { remnawaveUuid: { in: pageUuids } },
-        select: { remnawaveUuid: true },
-      });
-      const linkedComponentUuids = new Set(linkedComponents.flatMap((component) => component.remnawaveUuid ? [component.remnawaveUuid] : []));
       for (const u of users) {
         const uuid = u.uuid;
         if (!uuid) {
@@ -102,14 +99,12 @@ export async function syncFromRemna(): Promise<{
         const telegramId = u.telegramId != null ? String(u.telegramId) : null;
         const email = u.email && String(u.email).trim() ? String(u.email).trim() : null;
         const username = u.username && String(u.username).trim() ? String(u.username).trim() : null;
+        if (isLegacyManagedComponentUsername(username)) {
+          result.skipped++;
+          continue;
+        }
 
         try {
-          // Runtime-компоненты уже принадлежат одной логической подписке и не
-          // должны превращаться в отдельных клиентов при Remnawave -> STEALTHNET.
-          if (linkedComponentUuids.has(uuid) || isManagedComponentUsername(username)) {
-            result.skipped++;
-            continue;
-          }
           const existingByUuid = await prisma.client.findFirst({
             where: { remnawaveUuid: uuid },
           });
@@ -176,7 +171,13 @@ export async function syncFromRemna(): Promise<{
 
 /** Извлечь telegramId, email и activeInternalSquads из ответа Remna (getUser) — чтобы не затирать при PATCH. */
 /** Синхронизация в Remna всех логических подписок и каждого их компонента. */
-export async function syncToRemna(): Promise<{
+export async function syncToRemna(
+  dependencies: { isConfigured: () => boolean; updateUser: typeof remnaUpdateUser } = {
+    isConfigured: isRemnaConfigured,
+    updateUser: remnaUpdateUser,
+  },
+  now = new Date(),
+): Promise<{
   ok: boolean;
   updated: number;
   unlinked: number;
@@ -184,20 +185,44 @@ export async function syncToRemna(): Promise<{
 }> {
   const result = { updated: 0, unlinked: 0, errors: [] as string[] };
 
-  if (!isRemnaConfigured()) {
+  if (!dependencies.isConfigured()) {
     result.errors.push("Remna API не настроен");
     return { ok: false, ...result };
   }
 
   const subscriptions = await prisma.subscription.findMany({
     where: { deletionRequestedAt: null },
-    select: { id: true },
+    select: {
+      id: true,
+      remnawaveUuid: true,
+      expireAt: true,
+      graceUntil: true,
+      extraDevices: true,
+      owner: { select: { isBlocked: true, telegramId: true, email: true } },
+      tariff: { select: { trafficLimitBytes: true, trafficLimitMode: true, trafficResetMode: true, includedDevices: true, internalSquadUuids: true } },
+    },
   });
   for (const subscription of subscriptions) {
-    const sync = await synchronizeSubscriptionComponents(subscription.id);
+    if (isActiveSubscriptionGrace(subscription.graceUntil, now)) continue;
+    if (!subscription.remnawaveUuid) {
+      result.unlinked++;
+      continue;
+    }
+    const sync = await runSingleSubscriptionOperation(subscription.id, (uuid) => dependencies.updateUser({
+      uuid,
+      ...(subscription.expireAt ? { expireAt: subscription.expireAt.toISOString() } : {}),
+      ...(subscription.tariff ? {
+        ...remnaTrafficSettings(subscription.tariff),
+        hwidDeviceLimit: Math.max(1, subscription.tariff.includedDevices + subscription.extraDevices),
+        activeInternalSquads: subscription.tariff.internalSquadUuids,
+      } : {}),
+      status: subscription.owner.isBlocked || (subscription.expireAt?.getTime() ?? Infinity) <= now.getTime() ? "DISABLED" : "ACTIVE",
+      ...(subscription.owner.telegramId?.trim() ? { telegramId: Number(subscription.owner.telegramId) } : {}),
+      ...(subscription.owner.email?.trim() ? { email: subscription.owner.email.trim() } : {}),
+    }));
     if (!sync.requiredFailure) result.updated++;
     if (sync.failures.length) {
-      result.errors.push(...sync.failures.map((failure) => `${subscription.id}/${failure.key}: ${failure.error}`));
+      result.errors.push(...sync.failures.map((failure) => `${subscription.id}: ${failure.error}`));
     }
   }
 

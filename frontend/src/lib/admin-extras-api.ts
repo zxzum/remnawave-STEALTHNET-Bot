@@ -135,23 +135,9 @@ export interface CronEntry {
   canTrigger: boolean;
 }
 
-export interface CompositeSubscriptionMetrics {
-  requests: {
-    requests: number;
-    successful: number;
-    degraded: number;
-    requiredFailures: number;
-    formats: Record<string, number>;
-    clients: Record<string, number>;
-    upstreamLatencyMs: { count: number; average: number; max: number };
-  };
-  synchronization: { pending: number; errors: number };
-}
-
 export const diagnosticsApi = {
   health: (token: string) => req<HealthResponse>(token, `/diagnostics/health`),
   crons: (token: string) => req<{ items: CronEntry[] }>(token, `/diagnostics/crons`),
-  compositeSubscriptions: (token: string) => req<CompositeSubscriptionMetrics>(token, `/diagnostics/composite-subscriptions`),
   triggerCron: (token: string, name: string) =>
     req<{ ok: boolean }>(token, `/diagnostics/crons/${encodeURIComponent(name)}/trigger`, { method: "POST" }),
   logs: (token: string, params: { lines?: number; filter?: string; container?: string } = {}) => {

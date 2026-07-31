@@ -10,9 +10,9 @@ test("подарочная ссылка не отдаёт Remnawave UUID кли�
   assert.doesNotMatch(routes, /uuid:\s*result\.data\.uuid/);
 });
 
-test("отзыв из reconciliation отправляет успешное уведомление", async () => {
-  const service = await readFile(new URL("../subscription/subscription-components.service.ts", import.meta.url), "utf8");
+test("single-user revoke отправляет успешное уведомление", async () => {
+  const service = await readFile(new URL("../subscription/single-subscription-lifecycle.service.ts", import.meta.url), "utf8");
 
   assert.match(service, /notifySubscriptionRevoked/);
-  assert.match(service, /if \(isLogicalSubscriptionRevoked\(result\)\)[\s\S]*notifySubscriptionRevoked/);
+  assert.match(service, /if \(deletionOperation === "REVOKE"\) notifyRevoked/);
 });

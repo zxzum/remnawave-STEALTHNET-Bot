@@ -864,12 +864,13 @@ export const api = {
     token: string,
     page = 1,
     limit = 20,
-    params?: { search?: string; isBlocked?: boolean }
+    params?: { search?: string; isBlocked?: boolean; subscription?: "all" | "any" | "active" }
   ): Promise<{ items: ClientRecord[]; total: number; page: number; limit: number }> {
     const sp = new URLSearchParams({ page: String(page), limit: String(limit) });
     if (params?.search?.trim()) sp.set("search", params.search.trim());
     if (params?.isBlocked === true) sp.set("isBlocked", "true");
     if (params?.isBlocked === false) sp.set("isBlocked", "false");
+    if (params?.subscription && params.subscription !== "all") sp.set("subscription", params.subscription);
     return request(`/admin/clients?${sp.toString()}`, { token });
   },
 
@@ -1086,18 +1087,24 @@ export const api = {
   async getClientSubscriptionsList(token: string, clientId: string): Promise<{ items: AdminClientSubscriptionItem[] }> {
     return request(`/admin/clients/${clientId}/subscriptions`, { token });
   },
+
+  async getSubscriptionTrafficQuota(token: string, subscriptionId: string): Promise<AdminTrafficQuotaDetail> {
+    return request(`/admin/subscriptions/${encodeURIComponent(subscriptionId)}/traffic-quota`, { token });
+  },
+  async grantSubscriptionTraffic(token: string, subscriptionId: string, bytes: string, scope: "CURRENT_PERIOD" | "WHILE_TARIFF_ACTIVE"): Promise<{ id: string }> {
+    return request(`/admin/subscriptions/${encodeURIComponent(subscriptionId)}/traffic-grants`, { method: "POST", token, body: JSON.stringify({ bytes, scope }) });
+  },
+  async revokeSubscriptionTrafficGrant(token: string, grantId: string): Promise<{ id: string; status: string }> {
+    return request(`/admin/traffic-grants/${encodeURIComponent(grantId)}/revoke`, { method: "POST", token });
+  },
+  async setSubscriptionTrafficQuotaStatus(token: string, subscriptionId: string, action: "suspend" | "resume"): Promise<{ quota: AdminTrafficQuota }> {
+    return request(`/admin/subscriptions/${encodeURIComponent(subscriptionId)}/traffic-quota/${action}`, { method: "POST", token });
+  },
   async getSubscriptionRemna(token: string, subId: string): Promise<AdminSubscriptionRemnaResponse> {
     return request(`/admin/subscriptions/${subId}/remna`, { token });
   },
-  async updateSubscriptionRemna(token: string, subId: string, data: UpdateClientRemnaPayload, componentKey?: string): Promise<unknown> {
-    const query = componentKey ? `?componentKey=${encodeURIComponent(componentKey)}` : "";
-    return request(`/admin/subscriptions/${subId}/remna${query}`, { method: "PATCH", body: JSON.stringify(data), token });
-  },
-  async createSubscriptionManualComponent(token: string, subId: string, data: { key: string; adminName: string; mergeOrder: number }): Promise<unknown> {
-    return request(`/admin/subscriptions/${subId}/components`, { method: "POST", body: JSON.stringify(data), token });
-  },
-  async deleteSubscriptionManualComponent(token: string, subId: string, key: string): Promise<{ ok: boolean }> {
-    return request(`/admin/subscriptions/${subId}/components/${encodeURIComponent(key)}`, { method: "DELETE", token });
+  async updateSubscriptionRemna(token: string, subId: string, data: UpdateClientRemnaPayload): Promise<unknown> {
+    return request(`/admin/subscriptions/${subId}/remna`, { method: "PATCH", body: JSON.stringify(data), token });
   },
   async subscriptionRemnaUnlink(token: string, subId: string): Promise<{ ok: boolean }> {
     return request(`/admin/subscriptions/${subId}/remna/unlink`, { method: "POST", token });
@@ -1114,13 +1121,11 @@ export const api = {
   async subscriptionRemnaResetTraffic(token: string, subId: string): Promise<unknown> {
     return request(`/admin/subscriptions/${subId}/remna/reset-traffic`, { method: "POST", token });
   },
-  async subscriptionRemnaSquadAdd(token: string, subId: string, squadUuid: string, componentKey?: string): Promise<unknown> {
-    const query = componentKey ? `?componentKey=${encodeURIComponent(componentKey)}` : "";
-    return request(`/admin/subscriptions/${subId}/remna/squads/add${query}`, { method: "POST", body: JSON.stringify({ squadUuid }), token });
+  async subscriptionRemnaSquadAdd(token: string, subId: string, squadUuid: string): Promise<unknown> {
+    return request(`/admin/subscriptions/${subId}/remna/squads/add`, { method: "POST", body: JSON.stringify({ squadUuid }), token });
   },
-  async subscriptionRemnaSquadRemove(token: string, subId: string, squadUuid: string, componentKey?: string): Promise<unknown> {
-    const query = componentKey ? `?componentKey=${encodeURIComponent(componentKey)}` : "";
-    return request(`/admin/subscriptions/${subId}/remna/squads/remove${query}`, { method: "POST", body: JSON.stringify({ squadUuid }), token });
+  async subscriptionRemnaSquadRemove(token: string, subId: string, squadUuid: string): Promise<unknown> {
+    return request(`/admin/subscriptions/${subId}/remna/squads/remove`, { method: "POST", body: JSON.stringify({ squadUuid }), token });
   },
   async getSubscriptionRemnaDevices(token: string, subId: string): Promise<RemnaHwidDevicesResponse> {
     return request(`/admin/subscriptions/${subId}/remna/devices`, { token });
@@ -1232,6 +1237,28 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ referrerId, lookupBy }),
     });
+  },
+
+  async getPartners(token: string): Promise<{ partners: Partner[] }> {
+    return request("/admin/partners", { token });
+  },
+  async getPartner(token: string, id: string): Promise<{ partner: PartnerDetail }> {
+    return request(`/admin/partners/${encodeURIComponent(id)}`, { token });
+  },
+  async getPartnerNetwork(token: string, id: string): Promise<{ nodes: Array<{ id: string; name: string; status: string; referralsCount: number }>; links: Array<{ source: string; target: string }>; stats: { direct: number; total: number } }> {
+    return request(`/admin/partners/${encodeURIComponent(id)}/network`, { token });
+  },
+  async createPartner(token: string, payload: PartnerInput): Promise<Partner> {
+    return request("/admin/partners", { token, method: "POST", body: JSON.stringify(payload) });
+  },
+  async updatePartner(token: string, id: string, payload: Partial<PartnerInput>): Promise<Partner> {
+    return request(`/admin/partners/${encodeURIComponent(id)}`, { token, method: "PATCH", body: JSON.stringify(payload) });
+  },
+  async deletePartner(token: string, id: string): Promise<{ success: boolean }> {
+    return request(`/admin/partners/${encodeURIComponent(id)}`, { token, method: "DELETE" });
+  },
+  async payPartner(token: string, id: string): Promise<{ count: number; amount: number }> {
+    return request(`/admin/partners/${encodeURIComponent(id)}/payout`, { token, method: "POST" });
   },
 
   async getTrafficAbuseAnalytics(
@@ -2038,6 +2065,7 @@ export const api = {
     trialName?: string | null;
     trialConvertEnabled?: boolean;
     componentQuotas?: ComponentQuota[];
+    trafficQuota?: ClientTrafficQuota | null;
     message?: string;
   }> {
     return request("/client/subscription", { token });
@@ -2077,6 +2105,7 @@ export const api = {
       /** конвертация триала разрешена в любой тариф. */
       trialConvertAllTariffs?: boolean;
       componentQuotas?: ComponentQuota[];
+      trafficQuota?: ClientTrafficQuota | null;
     }>;
   }> {
     return request("/client/subscription/all", { token });
@@ -2908,6 +2937,10 @@ export interface MarketplaceStatusDto {
   lastConnectStatus: string | null;
 }
 
+export type Partner = { id: string; name: string; code: string; commissionPct: number; signupBonus: number; signupBonusType: "BALANCE" | "SUBSCRIPTION"; signupTariffId: string | null; payoutDetails: string | null; isActive: boolean; createdAt: string; referrals: number; pending: number; paid: number };
+export type PartnerInput = Pick<Partner, "name" | "code" | "commissionPct" | "signupBonus" | "signupBonusType" | "signupTariffId" | "payoutDetails" | "isActive">;
+export type PartnerDetail = Omit<Partner, "referrals"> & { referrals: Array<{ id: string; createdAt: string; signupBonus: number; client: { id: string; email: string | null; telegramUsername: string | null; balance: number; createdAt: string }; commissions: Array<{ amount: number; status: string; createdAt: string }> }> };
+
 export interface MarketplaceSettingsUpdate {
   enabled?: boolean;
   role?: "client" | "hub";
@@ -3209,6 +3242,14 @@ export type UpdateSettingsPayload = {
   trialSquadUuid?: string | null;
   trialDeviceLimit?: number | null;
   trialTrafficLimitBytes?: number | null;
+  trialExpiryReminderEnabled?: boolean;
+  trialExpiryReminderHours?: string;
+  trialExpiryReminderText?: string | null;
+  trialExpiryReminderButtonText?: string;
+  subscriptionExpiryReminderEnabled?: boolean;
+  subscriptionExpiryReminderHours?: string;
+  subscriptionExpiryReminderText?: string | null;
+  subscriptionExpiryReminderButtonText?: string;
   serviceName?: string;
   logo?: string | null;
   logoBot?: string | null;
@@ -3340,6 +3381,7 @@ export type UpdateSettingsPayload = {
   adminFrontNotificationsEnabled?: boolean;
   skipEmailVerification?: boolean;
   onboardingEmailRequired?: boolean;
+  onboarding2faEnabled?: boolean;
   stealthAccent?: string | null;
   stealthHeroImage?: string | null;
   multiSubscriptionsEnabled?: boolean;
@@ -3521,6 +3563,18 @@ export interface ClientRecord {
   balance: number;
   referralCode: string | null;
   remnawaveUuid: string | null;
+  /** Все Remnawave UUID подписок клиента, включая подаренные. */
+  remnawaveUuids?: string[];
+  /** Краткие данные подписок для таблицы клиентов. */
+  subscriptions?: Array<{
+    id: string;
+    subscriptionIndex: number;
+    tariffId: string | null;
+    tariffName: string | null;
+    isTrial: boolean;
+    expireAt: string | null;
+    active: boolean;
+  }>;
   trialUsed: boolean;
   isBlocked: boolean;
   blockReason: string | null;
@@ -3555,6 +3609,7 @@ export type UpdateClientPayload = {
   personalDiscountPercent?: number | null;
   /** T-one-time-discount (14.05.2026). */
   personalDiscountIsOneTime?: boolean;
+  trialUsed?: boolean;
 };
 
 export type UpdateClientRemnaPayload = {
@@ -3573,7 +3628,6 @@ export interface AdminClientSubscriptionItem {
   isPrimary: boolean;
   remnawaveUuid: string | null;
   subscriptionUrl?: string;
-  components?: AdminSubscriptionComponentItem[];
   tariffId: string | null;
   tariffName: string | null;
   giftStatus: string | null;
@@ -3586,33 +3640,9 @@ export interface AdminClientSubscriptionItem {
   createdAt: string;
 }
 
-export interface AdminSubscriptionComponentItem {
-  key: string;
-  adminName: string;
-  managedManually: boolean;
-  required: boolean;
-  mergeOrder: number;
-  remnawaveUuid: string | null;
-  trafficLimitBytes: string | null;
-  trafficResetMode: string;
-  internalSquadUuids: string[];
-  lastKnownStatus: string | null;
-  lastSyncError: string | null;
-}
-
 export type AdminSubscriptionRemnaResponse = {
   response?: RemnaUserFull;
   subscriptionUrl: string;
-  components: Array<{
-    key: string;
-    adminName: string;
-    managedManually: boolean;
-    required: boolean;
-    mergeOrder: number;
-    remnawaveUuid: string;
-    data: { response?: RemnaUserFull } | RemnaUserFull | null;
-    error: string | null;
-  }>;
 };
 
 export interface RemnaUserFull {
@@ -3733,6 +3763,14 @@ export interface AdminSettings {
   trialSquadUuid?: string | null;
   trialDeviceLimit?: number | null;
   trialTrafficLimitBytes?: number | null;
+  trialExpiryReminderEnabled?: boolean;
+  trialExpiryReminderHours?: string;
+  trialExpiryReminderText?: string | null;
+  trialExpiryReminderButtonText?: string;
+  subscriptionExpiryReminderEnabled?: boolean;
+  subscriptionExpiryReminderHours?: string;
+  subscriptionExpiryReminderText?: string | null;
+  subscriptionExpiryReminderButtonText?: string;
   serviceName: string;
   logo?: string | null;
   logoBot?: string | null;
@@ -3894,6 +3932,7 @@ export interface AdminSettings {
   /** Регистрация без подтверждения почты */
   skipEmailVerification?: boolean;
   onboardingEmailRequired?: boolean;
+  onboarding2faEnabled?: boolean;
   stealthAccent?: string | null;
   stealthHeroImage?: string | null;
   multiSubscriptionsEnabled?: boolean;
@@ -4286,18 +4325,6 @@ export interface AdminSecondarySubscriptionsResponse {
 }
 
 export interface AdminSecondarySubscriptionDetail extends AdminSecondarySubscription {
-  components?: Array<{
-    id: string;
-    key: string;
-    adminName: string;
-    required: boolean;
-    mergeOrder: number;
-    remnawaveUuid: string | null;
-    trafficLimitBytes: string | null;
-    lastKnownStatus: string | null;
-    lastSyncError: string | null;
-    lastSyncedAt: string | null;
-  }>;
   giftCodes: AdminGiftCodeBrief[];
   remnaData: Record<string, unknown> | null;
   history: {
@@ -4693,20 +4720,6 @@ export interface DeviceDiscountTier {
   discountPercent: number;
 }
 
-export interface RemnawaveComponentTemplate {
-  id?: string;
-  key: string;
-  adminName: string;
-  required: boolean;
-  mergeOrder: number;
-  internalSquadUuids: string[];
-  trafficLimitBytes: number | null;
-  trafficResetMode: string;
-  showQuotaToClient: boolean;
-  quotaDisplayName: string | null;
-  enabled: boolean;
-}
-
 export interface TariffRecord {
   id: string;
   categoryId: string;
@@ -4714,8 +4727,10 @@ export interface TariffRecord {
   description: string | null;
   durationDays: number;
   internalSquadUuids: string[];
-  trafficLimitBytes: number | null;
+  trafficLimitBytes: string | null;
   trafficResetMode: string;
+  trafficLimitMode: "REMNAWAVE" | "LOCAL_SQUAD";
+  meteredSquadUuid: string | null;
   deviceLimit: number | null;
   includedDevices: number;
   pricePerExtraDevice: number;
@@ -4724,6 +4739,7 @@ export interface TariffRecord {
   price: number;
   currency: string;
   sortOrder: number;
+  isBestChoice?: boolean;
   lavatopOfferId?: string | null;
   /** T11+T12 (11.05.2026) — rich-text список локаций тарифа. */
   locations?: string | null;
@@ -4732,9 +4748,34 @@ export interface TariffRecord {
   /** T-cooldown (13.05.2026) — кулдаун покупки тарифа в днях (null/0 = без ограничения). */
   purchaseCooldownDays?: number | null;
   priceOptions: TariffPriceOption[];
-  remnawaveComponents?: RemnawaveComponentTemplate[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AdminTrafficQuota {
+  id: string;
+  subscriptionId: string;
+  tariffIdAtPeriodStart: string | null;
+  meteredSquadUuid: string;
+  baseLimitBytes: string;
+  usedBytes: string;
+  status: string;
+  periodStartedAt: string;
+  periodEndsAt: string;
+}
+export interface AdminTrafficQuotaDetail {
+  quota: AdminTrafficQuota;
+  activeGrants: Array<{ id: string; bytes: string; scope: "CURRENT_PERIOD" | "WHILE_TARIFF_ACTIVE"; createdAt: string }>;
+  events: Array<{ id: string; kind: string; deltaBytes: string | null; usedBytes: string; limitBytes: string; createdAt: string }>;
+}
+export interface ClientTrafficQuota {
+  status: string;
+  usedBytes: string;
+  limitBytes: string;
+  remainingBytes: string;
+  remainingPercent: number;
+  periodStartedAt: string;
+  periodEndsAt: string;
 }
 
 // ─── Trial-пресеты ───
@@ -4750,7 +4791,10 @@ export interface TrialRecord {
   deviceLimit?: number | null;
   durationDays: number;
   /** T16 (12.05.2026) — опциональный лимит трафика триала в байтах (null = из тарифа). */
-  trafficLimitBytes: number | null;
+  trafficLimitBytes: string | null;
+  trafficLimitMode: "REMNAWAVE" | "LOCAL_SQUAD";
+  meteredSquadUuid: string | null;
+  trafficResetMode?: string | null;
   enabled: boolean;
   sortOrder: number;
   description: string | null;
@@ -4760,7 +4804,6 @@ export interface TrialRecord {
   convertAllTariffs?: boolean;
   /** тарифы, в которые можно конвертировать триал (переход на их сквады). */
   convertTariffIds?: string[];
-  remnawaveComponents?: RemnawaveComponentTemplate[];
   createdAt: string;
   updatedAt: string;
 }
@@ -4773,6 +4816,8 @@ export type CreateTrialPayload = {
   durationDays: number;
   /** T16 (12.05.2026) — опциональный лимит трафика триала в байтах. */
   trafficLimitBytes?: number | null;
+  trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
+  meteredSquadUuid?: string | null;
   enabled?: boolean;
   sortOrder?: number;
   description?: string | null;
@@ -4780,7 +4825,6 @@ export type CreateTrialPayload = {
   convertAllTariffs?: boolean;
   /** тарифы, в которые можно конвертировать триал. */
   convertTariffIds?: string[] | null;
-  remnawaveComponents?: Omit<RemnawaveComponentTemplate, "id">[];
 };
 
 export type UpdateTrialPayload = Partial<CreateTrialPayload>;
@@ -4874,6 +4918,8 @@ export type CreateTariffPayload = {
   durationDays?: number;
   internalSquadUuids: string[];
   trafficLimitBytes?: number | null;
+  trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
+  meteredSquadUuid?: string | null;
   trafficResetMode?: string;
   deviceLimit?: number | null;
   includedDevices?: number;
@@ -4883,6 +4929,7 @@ export type CreateTariffPayload = {
   price?: number;
   currency?: string;
   sortOrder?: number;
+  isBestChoice?: boolean;
   lavatopOfferId?: string | null;
   /** T11+T12 (11.05.2026) */
   locations?: string | null;
@@ -4891,7 +4938,6 @@ export type CreateTariffPayload = {
   /** T-cooldown (13.05.2026) — кулдаун покупки в днях (null/0 = без ограничения). */
   purchaseCooldownDays?: number | null;
   priceOptions?: { durationDays: number; price: number }[];
-  remnawaveComponents?: Omit<RemnawaveComponentTemplate, "id">[];
 };
 
 export type UpdateTariffPayload = {
@@ -4900,6 +4946,8 @@ export type UpdateTariffPayload = {
   durationDays?: number;
   internalSquadUuids?: string[];
   trafficLimitBytes?: number | null;
+  trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
+  meteredSquadUuid?: string | null;
   trafficResetMode?: string;
   deviceLimit?: number | null;
   includedDevices?: number;
@@ -4909,6 +4957,7 @@ export type UpdateTariffPayload = {
   price?: number;
   currency?: string;
   sortOrder?: number;
+  isBestChoice?: boolean;
   lavatopOfferId?: string | null;
   /** T11+T12 (11.05.2026) */
   locations?: string | null;
@@ -4917,7 +4966,6 @@ export type UpdateTariffPayload = {
   /** T-cooldown (13.05.2026) — кулдаун покупки в днях (null/0 = без ограничения). */
   purchaseCooldownDays?: number | null;
   priceOptions?: { durationDays: number; price: number }[];
-  remnawaveComponents?: Omit<RemnawaveComponentTemplate, "id">[];
 };
 
 // ——— Кабинет клиента ———
@@ -5301,6 +5349,7 @@ export interface PublicConfig {
   yandexMetrikaId?: string | null;
   skipEmailVerification?: boolean;
   onboardingEmailRequired?: boolean;
+  onboarding2faEnabled?: boolean;
   stealthAccent?: string | null;
   stealthHeroImage?: string | null;
   multiSubscriptionsEnabled?: boolean;

@@ -9,7 +9,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "test": "tsx --test src/keyboard.test.ts",
+    "test": "tsx --test src/*.test.ts",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts"
   },
