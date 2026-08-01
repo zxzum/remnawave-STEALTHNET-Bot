@@ -31,6 +31,15 @@ const appColors: Record<string, { tile: string; btn: string }> = {
   },
 };
 
+const manualConnectionSteps = [
+  "Скопируйте ссылку подписки кнопкой выше.",
+  "Откройте приложение HAPP или INCY.",
+  "Нажмите «+» для добавления подписки.",
+  "Вставьте ссылку из буфера обмена и подтвердите добавление.",
+  "В списке серверов выберите «Авто».",
+  "Нажмите большую кнопку подключения и пользуйтесь VPN.",
+];
+
 function detectPlatform() {
   const telegramPlatform = (window as { Telegram?: { WebApp?: { platform?: string } } }).Telegram?.WebApp?.platform;
   if (telegramPlatform === "ios") return "ios";
@@ -51,9 +60,9 @@ function DeeplinkButtons({ apps, keyUrl }: { apps: ReturnType<typeof useApp>["cl
   useEffect(() => {
     const showHelpAfterReturn = () => {
       if (document.visibilityState !== "visible") return;
-      const key = "stealthnet-happ-connect";
-      if (sessionStorage.getItem(key) !== keyUrl) return;
-      sessionStorage.removeItem(key);
+      const pending = sessionStorage.getItem("stealthnet-connect-pending");
+      if (pending !== keyUrl) return;
+      sessionStorage.removeItem("stealthnet-connect-pending");
       setHelpOpen(true);
     };
     document.addEventListener("visibilitychange", showHelpAfterReturn);
@@ -78,7 +87,7 @@ function DeeplinkButtons({ apps, keyUrl }: { apps: ReturnType<typeof useApp>["cl
           key={app.id}
           whileTap={{ scale: 0.96 }}
           onClick={() => {
-            if (app.name.toLowerCase() === "happ") sessionStorage.setItem("stealthnet-happ-connect", keyUrl);
+            sessionStorage.setItem("stealthnet-connect-pending", keyUrl);
             openAppLink(app.deeplink(keyUrl));
             toast({
               title: `Открываем ${app.name}…`,
@@ -103,17 +112,20 @@ function DeeplinkButtons({ apps, keyUrl }: { apps: ReturnType<typeof useApp>["cl
             <Dialog.Close className="absolute top-4 right-4 rounded-lg p-2 text-fog-500 hover:bg-white/10 hover:text-white" aria-label="Закрыть">
               <X className="h-5 w-5" />
             </Dialog.Close>
-            <Dialog.Title className="pr-8 text-xl font-extrabold">Не получилось подключиться?</Dialog.Title>
+            <Dialog.Title className="pr-8 text-xl font-extrabold">Не получилось добавить подписку?</Dialog.Title>
             <Dialog.Description className="mt-2 text-sm leading-relaxed text-fog-400">
-              Ничего страшного — добавьте подписку вручную в Happ.
+              Ничего страшного — добавьте подписку вручную через ссылку.
             </Dialog.Description>
             <ol className="mt-5 space-y-3 text-sm text-fog-300">
               <li><b className="text-white">1.</b> Скопируйте ссылку ниже.</li>
-              <li><b className="text-white">2.</b> Откройте Happ → добавьте подписку по ссылке.</li>
-              <li><b className="text-white">3.</b> Вставьте ссылку и подтвердите добавление.</li>
+              <li><b className="text-white">2.</b> Откройте HAPP или INCY и нажмите «+».</li>
+              <li><b className="text-white">3.</b> Вставьте ссылку из буфера обмена.</li>
+              <li><b className="text-white">4.</b> Выберите сервер «Авто».</li>
+              <li><b className="text-white">5.</b> Нажмите кнопку подключения и пользуйтесь VPN.</li>
             </ol>
             <div className="glass-inset mt-5 break-all rounded-2xl p-3 font-mono text-xs text-fog-300">{keyUrl}</div>
             <CopyButton text={keyUrl} label="Скопировать ссылку" className="mt-3" />
+            <Dialog.Close className="btn-ghost mt-3 w-full justify-center">Закрыть</Dialog.Close>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
@@ -278,14 +290,14 @@ export default function Keys() {
               </div>
               <div className="flex-1">
                 <p className="font-extrabold">Как подключиться</p>
-                <p className="text-sm text-fog-500">4 простых шага</p>
+                <p className="text-sm text-fog-500">6 простых шагов</p>
               </div>
               <ChevronDown className="h-5 w-5 text-fog-600 transition-transform duration-300 group-data-[state=open]:rotate-180" />
             </Accordion.Trigger>
           </Accordion.Header>
           <Accordion.Content className="overflow-hidden data-[state=closed]:animate-[accordion-up_0.25s_ease-out] data-[state=open]:animate-[accordion-down_0.25s_ease-out]">
             <ol className="flex flex-col gap-3 px-5 pb-5">
-              {primaryApp.steps.map((step, i) => (
+              {manualConnectionSteps.map((step, i) => (
                 <li key={i} className="glass-inset flex items-center gap-3 rounded-2xl px-4 py-3">
                   <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-accent-500/15 text-xs font-extrabold text-accent-400">
                     {i + 1}
