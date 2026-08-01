@@ -1165,7 +1165,14 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
         price: selectedOption?.price ?? tariff.price,
       }, selectedOption, payment.deviceCount ?? undefined, removeExtrasAfter);
       if (result.ok) {
-        await prisma.payment.update({ where: { id: payment.id }, data: { subscriptionId: extendsSecondaryId } }).catch(() => {});
+        const meta = (() => {
+          try { return payment.metadata ? JSON.parse(payment.metadata) as Record<string, unknown> : {}; } catch { return {}; }
+        })();
+        if (targetSub.trialId) meta.trialToTariff = true;
+        await prisma.payment.update({
+          where: { id: payment.id },
+          data: { subscriptionId: extendsSecondaryId, metadata: JSON.stringify(meta) },
+        }).catch(() => {});
         await resetOneTimeDiscount();
       }
       return result;
@@ -1234,9 +1241,9 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
     // ── Ветка 2: новая подписка (любая покупка тарифа без extendsSecondaryId) ──
     // покупка при активном триале ЗАМЕНЯЕТ его (триал удаляется,
     // новая подписка занимает слот). Выбор триала — metadata.replaceTrialSubId.
-    if (!isGiftPurchase) {
-      await replaceTrialOnPurchase(client.id, getReplaceTrialSubId(payment.metadata));
-    }
+    const replacedTrialId = !isGiftPurchase
+      ? await replaceTrialOnPurchase(client.id, getReplaceTrialSubId(payment.metadata))
+      : null;
     const result = await createAdditionalSubscription(client.id, {
       id: tariff.id,
       name: tariff.name,
@@ -1253,7 +1260,14 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
     }, { extraDevices: payment.deviceCount ?? 0, purchasedAsGift: isGiftPurchase, skipConfigCheck: true });
     if (result.ok) {
       await applyTrafficEntitlement(result.data.subscriptionId, entitlement, "NEW_PURCHASE");
-      await prisma.payment.update({ where: { id: payment.id }, data: { subscriptionId: result.data.subscriptionId } }).catch(() => {});
+      const meta = (() => {
+        try { return payment.metadata ? JSON.parse(payment.metadata) as Record<string, unknown> : {}; } catch { return {}; }
+      })();
+      if (replacedTrialId) meta.trialToTariff = true;
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: { subscriptionId: result.data.subscriptionId, metadata: JSON.stringify(meta) },
+      }).catch(() => {});
       await resetOneTimeDiscount();
       // Single-режим: подчищаем любые прочие подписки клиента (оставляем эту).
       const cfgMs2 = await getSystemConfig().catch(() => null);

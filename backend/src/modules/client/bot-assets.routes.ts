@@ -109,6 +109,7 @@ const ONBOARDING_ASSETS = new Set([
   "select-your-device.png",
   "happ-how-to-update.png",
   "incy-how-to-update.png",
+  "welcome.png",
 ]);
 
 botAssetsRouter.get("/bot-asset/onboarding/:name", async (req, res) => {

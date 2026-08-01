@@ -607,8 +607,6 @@ async function showSetupGuide(ctx: Context, token: string, platform: SetupPlatfo
   const access = await firstSubscriptionAccess(token);
   const recommended = platform === "ios" || platform === "android";
   const appName = app === "incy" ? "INCY" : "HAPP";
-  const imageName = app === "incy" ? "incy-how-to-update.png" : "happ-how-to-update.png";
-  const image = await api.getOnboardingAsset(imageName);
   const rows: ({ text: string; url: string } | { text: string; callback_data: string })[][] = [
     [{ text: `📱 Скачать ${appName}`, url: SETUP_DOWNLOADS[platform][app] }],
   ];
@@ -626,14 +624,15 @@ async function showSetupGuide(ctx: Context, token: string, platform: SetupPlatfo
   const recommendation = recommended && app === "incy"
     ? "\n\n⭐ Для этого устройства настоятельно рекомендуем INCY."
     : "";
-  await ctx.replyWithPhoto(new InputFile(image, imageName), {
-    caption:
-      `#Инструкция\n\nНастройка Лазейка VPN займёт 1–2 минуты 🚀${recommendation}\n\n` +
+  await ctx.reply(
+    `#Инструкция\n\nНастройка Лазейка VPN займёт 1–2 минуты 🚀${recommendation}\n\n` +
       `Шаг 1\nСкачайте ${appName} по первой кнопке.\n\n` +
       "Шаг 2\nНажмите «Добавить ключ», затем включите VPN большой кнопкой внутри приложения." +
       `${access.url ? `\n\nСсылка на подписку для ручной настройки:\n${access.url}` : ""}\n\nЕсли не получается — напишите в поддержку прямо в этом боте.`,
-    reply_markup: { inline_keyboard: rows },
-  });
+    {
+      reply_markup: { inline_keyboard: rows },
+    },
+  );
 }
 
 async function activateTrialForNewClient(token: string, config: Awaited<ReturnType<typeof api.getPublicConfig>>): Promise<void> {
@@ -1426,17 +1425,12 @@ function logoToMediaSource(logo: string | null | undefined): { source: InputFile
 type RichInlineKeyboard = { inline_keyboard: unknown[][] };
 
 /**
- * Публичный URL логотипа для rich `![](url)` (бэкенд отдаёт байты на /api/public/bot-asset/logo.png).
- * Берём logoBot (логотип из админки) → botWelcomeImage. Если ни того ни другого нет — null
- * (картинку не вставляем). `?v=<len>` — cache-bust: Telegram кэширует картинку по URL,
- * при смене логотипа в админке длина меняется → новый URL → Telegram перезапрашивает.
+ * Публичный URL приветственной картинки для главного rich-сообщения.
  */
-function botLogoUrl(config: { publicAppUrl?: string | null; logoBot?: string | null; botWelcomeImage?: string | null } | null | undefined): string | null {
+function botWelcomeAssetUrl(config: { publicAppUrl?: string | null } | null | undefined): string | null {
   const base = (config?.publicAppUrl ?? "").replace(/\/+$/, "");
   if (!base) return null;
-  const logo = config?.logoBot || config?.botWelcomeImage || "";
-  if (!logo) return null;
-  return `${base}/api/public/bot-asset/logo.png?v=${logo.length}`;
+  return `${base}/api/public/bot-asset/onboarding/welcome.png`;
 }
 
 /** Экранирование текста для ячейки rich-таблицы (| и переводы строк ломают разметку). */
@@ -2156,7 +2150,7 @@ composer.command("start", async (ctx) => {
           serviceName: name,
           balance: client?.balance ?? 0,
           currency: client?.preferredCurrency ?? config?.defaultCurrency ?? "usd",
-          logoUrl: botLogoUrl(config),
+          logoUrl: botWelcomeAssetUrl(config),
           allSubs: allSubsRes,
           infoBlock: config?.botInfoBlock ?? null,
           menuTexts: config?.botMenuTexts ?? config?.resolvedBotMenuTexts ?? null,

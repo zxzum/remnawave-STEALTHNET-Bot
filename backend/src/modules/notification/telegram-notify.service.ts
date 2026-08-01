@@ -28,6 +28,14 @@ export function subscriptionExpiryMarkup(label: string, callbackData = "menu:tar
 export const SUBSCRIPTION_UPDATE_TEXT =
   "Откройте HAPP или INCY и обновите подписку: нажмите кнопку ↻ рядом с её названием. Ссылка останется прежней.";
 
+function isTrialToTariffPayment(metadata: string | null): boolean {
+  try {
+    return JSON.parse(metadata ?? "{}").trialToTariff === true;
+  } catch {
+    return false;
+  }
+}
+
 async function sendSubscriptionUpdateGuides(telegramId: string, token: string): Promise<void> {
   try {
     const form = new FormData();
@@ -381,7 +389,8 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
     const noteBlock = (isAdminGrant && adminNote)
       ? `\n\n💬 <i>${escapeHtml(adminNote)}</i>`
       : "";
-    const updateBlock = isAdminGrant ? "" : `\n\n${SUBSCRIPTION_UPDATE_TEXT}`;
+    const trialToTariff = !isAdminGrant && isTrialToTariffPayment(payment?.metadata ?? null);
+    const updateBlock = trialToTariff ? `\n\n${SUBSCRIPTION_UPDATE_TEXT}` : "";
     const textClient = `${headline}.${noteBlock}${linkBlock}${updateBlock}`;
     const hasLocations = !!(payment?.tariff?.locations?.trim());
     type Row = ({ text: string; callback_data: string } | { text: string; url: string })[];
@@ -396,7 +405,7 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
       clientIdForBotToken: clientId,
     });
     const botToken = cfg.telegramBotToken?.trim();
-    if (!isAdminGrant && botToken) await sendSubscriptionUpdateGuides(client.telegramId, botToken);
+    if (trialToTariff && botToken) await sendSubscriptionUpdateGuides(client.telegramId, botToken);
   }
   const clientLabel = formatClientLabel(client);
   const lines = [

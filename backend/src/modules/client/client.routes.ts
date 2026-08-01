@@ -4235,6 +4235,7 @@ clientRouter.post("/payments/balance", async (req, res) => {
   let convertedFromTariffName: string | null = null;
   let convertedDaysForNotify: number | null = null;
   let createdSubscriptionId: string | null = null;
+  let trialToTariff = false;
   // Глобальный тумблер мульти-подписок (single-режим при выкл). Объявлен на уровне
   // хендлера — нужен и в конверт-ветке, и в сообщении/консолидации ниже.
   const multiSubEnabledBal = ((await getSystemConfig().catch(() => null)) as { multiSubscriptionsEnabled?: boolean } | null)?.multiSubscriptionsEnabled ?? true;
@@ -4242,7 +4243,7 @@ clientRouter.post("/payments/balance", async (req, res) => {
   if (extendsSecondarySubId) {
     const sec = await prisma.subscription.findUnique({
       where: { id: extendsSecondarySubId },
-      select: { ownerId: true, giftedToClientId: true },
+      select: { ownerId: true, giftedToClientId: true, trialId: true },
     });
     if (!sec || (sec.ownerId !== clientRaw.id && sec.giftedToClientId !== clientRaw.id)) {
       await prisma.client.update({ where: { id: clientRaw.id }, data: { balance: { increment: tariffPaySnap.amount } } }).catch(() => {});
@@ -4261,6 +4262,7 @@ clientRouter.post("/payments/balance", async (req, res) => {
     );
     isExtendingSecondary = true;
     createdSubscriptionId = extendsSecondarySubId;
+    trialToTariff = sec.trialId != null;
   } else {
     void asAdditional;
     // режим «одна подписка из категории»: если тариф из
@@ -4287,6 +4289,7 @@ clientRouter.post("/payments/balance", async (req, res) => {
       isConverted = activateResult.ok && !convertible.sameTariff;
       isExtendingSecondary = isExtendingSecondary || (activateResult.ok && convertible.sameTariff);
       createdSubscriptionId = convertible.id;
+      trialToTariff = convertible.trialId != null;
       if (isConverted) {
         convertedFromTariffName = convertible.tariffName;
         convertedDaysForNotify = activateResult.ok ? (activateResult.convertedDays ?? null) : null;
@@ -4295,7 +4298,7 @@ clientRouter.post("/payments/balance", async (req, res) => {
       // покупка при активном триале ЗАМЕНЯЕТ его полностью
       // (триал удаляется вместе с Remna-юзером). Выбор триала — replaceTrialSubId.
       const { replaceTrialOnPurchase } = await import("../tariff/tariff-activation.service.js");
-      await replaceTrialOnPurchase(clientRaw.id, replaceTrialSubId ?? null);
+      trialToTariff = (await replaceTrialOnPurchase(clientRaw.id, replaceTrialSubId ?? null)) != null;
       // Любая «новая покупка тарифа» — через единый createAdditionalSubscription.
       // Для свежего клиента она получит subscriptionIndex=0 (= главная). Для уже имеющего
       // подписки — следующий свободный индекс. Без затирания/смешивания.
@@ -4353,6 +4356,7 @@ clientRouter.post("/payments/balance", async (req, res) => {
   if (removeExtrasOnActivate === true) tariffMeta.removeExtrasOnActivate = true;
   // T-fix (11.05.2026): маркер покупки доп. подписки балансом (без gift).
   if (asAdditional && !extendsSecondarySubId) tariffMeta.isAdditionalSubscription = true;
+  if (trialToTariff) tariffMeta.trialToTariff = true;
   const payment = await createPayment({
     data: asPaymentUncheckedCreate({
       clientId: clientRaw.id,
