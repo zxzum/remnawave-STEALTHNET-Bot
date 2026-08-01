@@ -2162,14 +2162,10 @@ composer.command("start", async (ctx) => {
       }
     }
     if (!richMenuSent) {
-      const media = logoToMediaSource(config?.logoBot);
-      if (media) {
+      const welcomeImage = await api.getOnboardingAsset("welcome.png").catch(() => null);
+      if (welcomeImage) {
         const opts = { caption, caption_entities: captionEntities.length ? captionEntities : undefined, reply_markup: markup };
-        if (media.isGif) {
-          await ctx.replyWithAnimation(media.source, opts);
-        } else {
-          await ctx.replyWithPhoto(media.source, opts);
-        }
+        await ctx.replyWithPhoto(new InputFile(welcomeImage, "welcome.png"), opts);
       } else {
         await ctx.reply(text, { entities: entities.length ? entities : undefined, reply_markup: markup });
       }
