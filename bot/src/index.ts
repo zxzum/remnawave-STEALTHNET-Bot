@@ -699,6 +699,37 @@ async function showSetupDevicePicker(ctx: Context, token: string, config: Config
   }
 }
 
+async function showFirstWelcome(ctx: Context, userId: number, config: ConfigSnapshot | null): Promise<void> {
+  const configuredText = (config?.botWelcomeText ?? "").trim();
+  const text = configuredText || "Лазейка VPN\n\nВаш VPN, устройства и бонусы — в одном месте";
+  const trialDays = Number(config?.trialDays ?? 0);
+  const trialLabel = trialDays > 0
+    ? `🎁 Попробовать ${trialDays} ${formatDaysRu(trialDays)} бесплатно`
+    : "🎁 Попробовать бесплатно";
+  const markup = { inline_keyboard: [[{ text: trialLabel, callback_data: "welcome:try" }]] };
+  const banner = screenBannerUrl(config, "welcome");
+  const caption = text.length > TELEGRAM_CAPTION_MAX ? `${text.slice(0, TELEGRAM_CAPTION_MAX - 3)}...` : text;
+
+  if (banner) {
+    try {
+      const sent = await ctx.replyWithPhoto(banner, { caption, reply_markup: markup });
+      if (sent?.message_id) lastBotScreens.set(userId, { chatId: sent.chat.id, messageId: sent.message_id });
+      return;
+    } catch {
+      // Fallback ниже нужен, если Telegram временно не может скачать публичный URL.
+    }
+  }
+
+  const image = await api.getOnboardingAsset("welcome.png").catch(() => null);
+  if (image) {
+    const sent = await ctx.replyWithPhoto(new InputFile(image, "welcome.png"), { caption, reply_markup: markup });
+    if (sent?.message_id) lastBotScreens.set(userId, { chatId: sent.chat.id, messageId: sent.message_id });
+    return;
+  }
+  const sent = await ctx.reply(caption, { reply_markup: markup });
+  if (sent?.message_id) lastBotScreens.set(userId, { chatId: sent.chat.id, messageId: sent.message_id });
+}
+
 async function hasConnectedDevice(token: string): Promise<boolean> {
   const devices = await api.getClientDevices(token).catch(() => ({ total: 0, devices: [] }));
   if (devices.total > 0) return true;
@@ -2202,13 +2233,16 @@ composer.command("start", async (ctx) => {
     // Проверка подписки на канал
     if (await enforceSubscription(ctx, config)) return;
 
-    if (auth.isNewClient || isSetupPayload) {
-      if (auth.isNewClient) {
-        try {
-          await activateTrialForNewClient(auth.token, config);
-        } catch (e) {
-          console.error("[/start onboarding trial]", e instanceof Error ? e.message : e);
-        }
+    if (auth.isNewClient && !isSetupPayload) {
+      await showFirstWelcome(ctx, from.id, config);
+      return;
+    }
+
+    if (isSetupPayload) {
+      try {
+        await activateTrialForNewClient(auth.token, config);
+      } catch (e) {
+        console.error("[/start onboarding trial]", e instanceof Error ? e.message : e);
       }
       const access = await firstSubscriptionAccess(auth.token);
       if (!access.url) {
@@ -2333,7 +2367,7 @@ composer.command("start", async (ctx) => {
     if (!richMenuSent) {
       const welcomeImage = await api.getOnboardingAsset("welcome.png").catch(() => null);
       const previous = lastBotScreens.get(from.id);
-      const banner = screenBannerUrl(config, "main");
+      const banner = screenBannerUrl(config, "welcome");
       if (previous && activeTelegramApi && banner) {
         await activeTelegramApi.editMessageMedia(previous.chatId, previous.messageId, { type: "photo", media: banner, caption, caption_entities: captionEntities.length ? captionEntities : undefined }, { reply_markup: markup }).catch(() => {});
       } else if (welcomeImage) {
@@ -2908,57 +2942,20 @@ composer.on("callback_query:data", async (ctx) => {
     return;
   }
 
-  // ─── Приветствие → «Войти в кабинет» — открывает главное меню ───
-  if (data === "welcome:continue") {
+  // ─── Приветствие → пробный доступ ───
+  if (data === "welcome:try" || data === "welcome:continue") {
     const token = getToken(userId);
     if (!token) {
       await ctx.reply("Сессия истекла. Отправьте /start ещё раз.");
       return;
     }
     try {
-      // Помечаем что онбординг пройден (чтобы при showOnce=true приветствие больше не показывалось)
-      await api.completeOnboarding(token).catch(() => {});
       const config = await api.getPublicConfig();
       if (config?.translations) setTranslations(config.translations);
-      const me = await api.getMe(token);
-      const [subRes, proxyRes, singboxRes, allSubsRes] = await Promise.all([
-        api.getSubscription(token).catch(() => ({ subscription: null })),
-        api.getPublicProxyTariffs().catch(() => ({ items: [] })),
-        api.getPublicSingboxTariffs().catch(() => ({ items: [] })),
-        // для блок подписок в welcome.
-        api.getAllSubscriptions(token).catch(() => ({ items: [] })),
-      ]);
-      const vpnUrl = getSubscriptionUrl(subRes.subscription);
-      // T15: новый/legacy flow.
-      const trialAvail = await api.getAvailableTrials(token).catch(() => ({ items: [], hasAnyEnabled: false }));
-      const showTrial = trialAvail.hasAnyEnabled
-        ? trialAvail.items.length > 0
-        : Boolean(config?.trialEnabled && !me.trialUsed);
-      const showProxy = proxyRes.items?.some((c: { tariffs: unknown[] }) => c.tariffs?.length > 0) ?? false;
-      const showSingbox = singboxRes.items?.some((c: { tariffs: unknown[] }) => c.tariffs?.length > 0) ?? false;
-      const appUrl = config?.publicAppUrl?.replace(/\/$/, "") ?? null;
-      const { text, entities } = buildCompactMainMenuText(config?.serviceName?.trim() || "Кабинет", me.balance ?? 0, me.preferredCurrency ?? config?.defaultCurrency ?? "usd");
-      const hasVideoInstructions = config?.videoInstructionsEnabled && (config?.videoInstructions?.length ?? 0) > 0;
-      const hasSupportLinks = !!(supportBotLink() || config?.supportLink || config?.agreementLink || config?.offerLink || config?.instructionsLink || hasVideoInstructions);
-      const markup = mainMenu({
-        showTrial,
-        // T-fix (11.05.2026): кнопка vpn доступна если есть ЛЮБАЯ подписка (включая secondary/триал).
-        showVpn: Boolean(vpnUrl) || (allSubsRes.items?.length ?? 0) > 0,
-        showProxy,
-        showSingbox,
-        showGift: config?.giftSubscriptionsEnabled === true,
-        appUrl,
-        botButtons: config?.botButtons ?? null,
-        botBackLabel: config?.botBackLabel ?? null,
-        hasSupportLinks,
-        showTickets: config?.ticketsEnabled === true,
-        showExtraOptions: config?.sellOptionsEnabled === true && (config?.sellOptions?.length ?? 0) > 0,
-        buttonsPerRow: config?.botButtonsPerRow ?? 1,
-        remnaSubscriptionUrl: config?.useRemnaSubscriptionPage ? vpnUrl : null,
-      });
-      const isBotAdmin = config?.botAdminTelegramIds?.includes(String(userId)) ?? false;
-      if (isBotAdmin) markup.inline_keyboard.push([{ text: "⚙️ Панель админа", callback_data: "admin:menu" }]);
-      await editMessageContent(ctx, text, markup, entities, screenBannerUrl(config, "main") ?? undefined);
+      await activateTrialForNewClient(token, config);
+      const access = await firstSubscriptionAccess(token);
+      if (!access.url) throw new Error("Пробный доступ пока недоступен");
+      await showSetupDevicePicker(ctx, token, config);
     } catch (e) {
       console.error("[welcome:continue]", e instanceof Error ? e.message : e);
       await ctx.reply("Не удалось открыть меню. Попробуйте /start.");
@@ -3575,7 +3572,7 @@ composer.on("callback_query:data", async (ctx) => {
         backMarkup.inline_keyboard.push([{ text: "⚙️ Панель админа", callback_data: "admin:menu" }]);
       }
 
-      await editMessageContent(ctx, text, backMarkup, entities, screenBannerUrl(config, "main") ?? undefined);
+      await editMessageContent(ctx, text, backMarkup, entities, screenBannerUrl(config, "welcome") ?? undefined);
       return;
     }
 
