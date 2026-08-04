@@ -88,6 +88,7 @@ type Meta = Record<string, unknown> & {
   plategaActivationInProgressAt?: string;
   plategaActivationAttempts?: number;
   plategaActivationLastError?: string | null;
+  plategaNotificationSentAt?: string;
 };
 
 function pickFirstString(...values: unknown[]): string | null {
@@ -189,28 +190,41 @@ async function ensureTariffActivation(paymentId: string): Promise<ActivationOutc
   });
   const isExtraOption = row ? hasExtraOptionInMetadata(row.metadata) : false;
   let activation: { ok: boolean; error?: string; slotIds?: string[]; outcome?: "APPLIED" | "ALREADY_APPLIED" | "QUEUED" } = { ok: false };
-  if (isExtraOption) {
-    activation = await applyExtraOptionByPaymentId(paymentId);
-    if (activation.ok && activation.outcome === "APPLIED" && row?.clientId) {
-      const { notifyExtraOptionApplied } = await import("../notification/telegram-notify.service.js");
-      await notifyExtraOptionApplied(row.clientId, paymentId).catch(() => {});
+  try {
+    if (isExtraOption) {
+      activation = await applyExtraOptionByPaymentId(paymentId);
+      if (activation.ok && activation.outcome === "APPLIED" && row?.clientId) {
+        const { notifyExtraOptionApplied } = await import("../notification/telegram-notify.service.js");
+        await notifyExtraOptionApplied(row.clientId, paymentId).catch((error) => {
+          console.error("[Platega Webhook] Extra-option notification failed", { paymentId, error });
+        });
+      }
+    } else if (row?.proxyTariffId) {
+      const proxyResult = await createProxySlotsByPaymentId(paymentId);
+      activation = proxyResult.ok ? { ok: true, slotIds: proxyResult.slotIds } : { ok: false, error: proxyResult.error };
+      if (activation.ok && activation.slotIds?.length && row.clientId) {
+        const tariff = await prisma.proxyTariff.findUnique({ where: { id: row.proxyTariffId! }, select: { name: true } });
+        await notifyProxySlotsCreated(row.clientId, activation.slotIds, tariff?.name ?? undefined).catch((error) => {
+          console.error("[Platega Webhook] Proxy notification failed", { paymentId, error });
+        });
+      }
+    } else if (row?.singboxTariffId) {
+      const singboxResult = await createSingboxSlotsByPaymentId(paymentId);
+      activation = singboxResult.ok ? { ok: true, slotIds: singboxResult.slotIds } : { ok: false, error: singboxResult.error };
+      if (activation.ok && activation.slotIds?.length && row.clientId) {
+        const tariff = await prisma.singboxTariff.findUnique({ where: { id: row.singboxTariffId }, select: { name: true } });
+        await notifySingboxSlotsCreated(row.clientId, activation.slotIds, tariff?.name ?? undefined).catch((error) => {
+          console.error("[Platega Webhook] Sing-box notification failed", { paymentId, error });
+        });
+      }
+    } else {
+      activation = await activateTariffByPaymentId(paymentId);
     }
-  } else if (row?.proxyTariffId) {
-    const proxyResult = await createProxySlotsByPaymentId(paymentId);
-    activation = proxyResult.ok ? { ok: true, slotIds: proxyResult.slotIds } : { ok: false, error: proxyResult.error };
-    if (activation.ok && activation.slotIds?.length && row.clientId) {
-      const tariff = await prisma.proxyTariff.findUnique({ where: { id: row.proxyTariffId! }, select: { name: true } });
-      await notifyProxySlotsCreated(row.clientId, activation.slotIds, tariff?.name ?? undefined).catch(() => {});
-    }
-  } else if (row?.singboxTariffId) {
-    const singboxResult = await createSingboxSlotsByPaymentId(paymentId);
-    activation = singboxResult.ok ? { ok: true, slotIds: singboxResult.slotIds } : { ok: false, error: singboxResult.error };
-    if (activation.ok && activation.slotIds?.length && row.clientId) {
-      const tariff = await prisma.singboxTariff.findUnique({ where: { id: row.singboxTariffId }, select: { name: true } });
-      await notifySingboxSlotsCreated(row.clientId, activation.slotIds, tariff?.name ?? undefined).catch(() => {});
-    }
-  } else {
-    activation = await activateTariffByPaymentId(paymentId);
+  } catch (error) {
+    activation = {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
   await prisma.$transaction(async (tx) => {
     const row = await tx.payment.findUnique({
@@ -238,6 +252,30 @@ async function ensureTariffActivation(paymentId: string): Promise<ActivationOutc
   }
   console.error("[Platega Webhook] Tariff activation failed", { paymentId, error: activation.error });
   return { applied: true, ok: false, error: activation.error ?? "unknown activation error" };
+}
+
+async function notifyTariffActivationIfNeeded(
+  clientId: string,
+  paymentId: string,
+  outcome: ActivationOutcome,
+): Promise<boolean> {
+  if (!(outcome.ok && (outcome.applied || outcome.reason === "already_applied"))) return true;
+
+  const payment = await prisma.payment.findUnique({ where: { id: paymentId }, select: { metadata: true } });
+  const meta = parseMeta(payment?.metadata ?? null);
+  if (meta.plategaNotificationSentAt) return true;
+
+  try {
+    if (!await notifyTariffActivated(clientId, paymentId)) return false;
+    await prisma.payment.update({
+      where: { id: paymentId },
+      data: { metadata: JSON.stringify({ ...meta, plategaNotificationSentAt: new Date().toISOString() }) },
+    });
+    return true;
+  } catch (error) {
+    console.error("[Platega Webhook] Tariff notification failed", { paymentId, error });
+    return false;
+  }
 }
 
 /**
@@ -352,7 +390,7 @@ plategaWebhooksRouter.post("/platega", async (req, res) => {
     }
   }
 
-  // Возвращаем 200, чтобы провайдер не спамил ретраями при наших внутренних ошибках.
+  // Для внутренних ошибок оставляем провайдеру возможность повторить callback.
   try {
     const data = parsedBody;
     if (!data || Object.keys(data).length === 0) {
@@ -497,14 +535,21 @@ plategaWebhooksRouter.post("/platega", async (req, res) => {
     // получали «успех», а реальная ошибка тихо лежала в metadata. Теперь уведомляем
     // только когда активация реально применена, а при фейле шлём админам алерт.
     const activationOutcome = await ensureTariffActivation(payment.id);
-    if (payment.tariffId) {
-      if (activationOutcome.applied && activationOutcome.ok) {
-        await notifyTariffActivated(payment.clientId, payment.id).catch(() => {});
-      } else if (!activationOutcome.ok) {
-        await notifyTariffActivationFailed(payment.clientId, payment.id, activationOutcome.error).catch(() => {});
+    if (!activationOutcome.ok) {
+      if (payment.tariffId) {
+        await notifyTariffActivationFailed(payment.clientId, payment.id, activationOutcome.error).catch((error) => {
+          console.error("[Platega Webhook] Activation failure notification failed", { paymentId: payment.id, error });
+        });
       }
-      // applied=false (already_applied / in_progress) — уведомление уже уходило при
-      // первичной активации; повторный webhook больше не дублирует его.
+      ack(500, "error", activationOutcome.error, payment.id);
+      return res.status(500).json({ message: "Payment activation failed" });
+    }
+    if (payment.tariffId) {
+      const notified = await notifyTariffActivationIfNeeded(payment.clientId, payment.id, activationOutcome);
+      if (!notified) {
+        ack(500, "error", "Telegram notification was not delivered", payment.id);
+        return res.status(500).json({ message: "Telegram notification failed" });
+      }
     }
     // proxyTariffId: notifyProxySlotsCreated вызывается из ensureTariffActivation
 
@@ -522,7 +567,7 @@ plategaWebhooksRouter.post("/platega", async (req, res) => {
     return res.status(200).json({ received: true });
   } catch (e) {
     console.error("[Platega Webhook] Error:", e);
-    ack(200, "error", String(e));
-    return res.status(200).json({ received: true });
+    ack(500, "error", String(e));
+    return res.status(500).json({ message: "Webhook processing failed" });
   }
 });

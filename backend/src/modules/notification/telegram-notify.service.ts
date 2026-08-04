@@ -77,13 +77,13 @@ type AdminNotificationPreferenceRow = {
 
 export type TelegramUserSendOptions = { clientIdForBotToken?: string };
 
-export async function sendTelegramToUser(
+async function sendTelegramToUserChecked(
   telegramId: string,
   text: string,
   messageThreadId?: number | null,
   replyMarkup?: Record<string, unknown>,
   _opts?: TelegramUserSendOptions,
-): Promise<void> {
+): Promise<boolean> {
   // v5.0.0: единственный бот, токен берётся из system_settings (или env).
   let token: string | undefined;
   {
@@ -92,10 +92,10 @@ export async function sendTelegramToUser(
   }
   if (!token) {
     console.warn("[Telegram notify] Bot token not configured, skip notification");
-    return;
+    return false;
   }
   const chatId = telegramId.trim();
-  if (!chatId) return;
+  if (!chatId) return false;
 
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
   const payload: Record<string, unknown> = {
@@ -116,10 +116,23 @@ export async function sendTelegramToUser(
     const data = (await res.json().catch(() => ({}))) as { ok?: boolean; description?: string };
     if (!res.ok || !data.ok) {
       console.warn("[Telegram notify] sendMessage failed", { chatId: chatId.slice(0, 8) + "...", error: data.description ?? res.statusText });
+      return false;
     }
+    return true;
   } catch (e) {
     console.warn("[Telegram notify] sendMessage error", e);
+    return false;
   }
+}
+
+export async function sendTelegramToUser(
+  telegramId: string,
+  text: string,
+  messageThreadId?: number | null,
+  replyMarkup?: Record<string, unknown>,
+  opts?: TelegramUserSendOptions,
+): Promise<void> {
+  await sendTelegramToUserChecked(telegramId, text, messageThreadId, replyMarkup, opts);
 }
 
 function getTopicIdForEvent(config: Record<string, unknown>, eventType: AdminNotificationEventType): number | null {
@@ -227,6 +240,43 @@ function formatMoney(amount: number, currency: string): string {
   return `${amount.toFixed(2)} ${curr}`;
 }
 
+export type TariffAdminNotificationData = {
+  isAdminGrant: boolean;
+  clientLabel: string;
+  telegramId?: string | null;
+  tariffName: string;
+  durationDays?: number | null;
+  amount?: number | null;
+  currency?: string | null;
+  provider?: string | null;
+  date: Date;
+};
+
+export function buildTariffAdminNotificationText(data: TariffAdminNotificationData): string {
+  const lines = [
+    data.isAdminGrant ? `🎁 <b>Администратор выдал подписку</b>` : `📦 <b>Оплата тарифа</b>`,
+    ``,
+    `👤 Клиент: ${escapeHtml(data.clientLabel)}`,
+  ];
+  if (data.telegramId) lines.push(`🆔 TG ID: <code>${escapeHtml(data.telegramId)}</code>`);
+  lines.push(`📋 Тариф: <b>${escapeHtml(data.tariffName)}</b>`);
+  if (data.durationDays) lines.push(`📅 Срок: ${data.durationDays} дн.`);
+  if (!data.isAdminGrant && data.amount != null) lines.push(`💵 Сумма: <b>${formatMoney(data.amount, data.currency ?? "RUB")}</b>`);
+  if (!data.isAdminGrant && data.provider) lines.push(`🏦 Провайдер: ${escapeHtml(data.provider)}`);
+  lines.push(`🕐 ${formatDate(data.date)}`);
+  return lines.join("\n");
+}
+
+export function formatPartnerNotificationLine(partner: {
+  email?: string | null;
+  telegramUsername?: string | null;
+  telegramId?: string | null;
+  id?: string;
+}): string {
+  const details = partner.telegramId ? ` (TG ID: ${partner.telegramId})` : "";
+  return `🤝 Партнёр: ${escapeHtml(formatClientLabel(partner))}${details}`;
+}
+
 /**
  * Отправить уведомление о пополнении баланса.
  */
@@ -260,12 +310,12 @@ export async function notifyBalanceToppedUp(clientId: string, amount: number, cu
 /**
  * Отправить уведомление об оплате и активации тарифа.
  */
-export async function notifyTariffActivated(clientId: string, paymentId: string): Promise<void> {
+export async function notifyTariffActivated(clientId: string, paymentId: string): Promise<boolean> {
   const client = await prisma.client.findUnique({
     where: { id: clientId },
     select: { telegramId: true, email: true, telegramUsername: true, id: true, balance: true },
   });
-  if (!client) return;
+  if (!client) return false;
 
   const payment = await prisma.payment.findUnique({
     where: { id: paymentId },
@@ -281,6 +331,7 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
     },
   });
   const tariffName = payment?.tariff?.name?.trim() || "Тариф";
+  let clientNotificationDelivered = !client.telegramId;
   // если оплачена подарочная подписка — автогенерируем GiftCode
   // и шлём клиенту текст по ТЗ (Стандарт / Unblock с трафиком) с готовой ссылкой.
   // если выдан админом — меняем заголовок «Тариф ... оплачен и активирован»
@@ -337,7 +388,7 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
         const shareText = `У меня для тебя подарок 🎁\n \nПодписка на сервис безопасного удалённого доступа 🛡 \n\n💡 Нажми на ссылку, чтобы активировать:\n\n${giftUrl}`;
         const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(giftUrl)}&text=${encodeURIComponent(shareText)}`;
         if (botToken) {
-          await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+          const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -351,7 +402,9 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
                 ],
               },
             }),
-          }).catch((e) => console.error("[notify] gift purchase send failed:", e));
+          });
+          const result = await response.json().catch(() => ({})) as { ok?: boolean };
+          clientNotificationDelivered = response.ok && result.ok !== false;
         }
       }
     } catch (e) {
@@ -401,27 +454,26 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
     }
     rows.push([{ text: "📋 Мои подписки", callback_data: "menu:my_subs" }]);
     rows.push([{ text: cfg.botBackLabel ?? "🏠 Главное меню", callback_data: "menu:main" }]);
-    await sendTelegramToUser(client.telegramId, textClient, null, { inline_keyboard: rows }, {
+    const sent = await sendTelegramToUserChecked(client.telegramId, textClient, null, { inline_keyboard: rows }, {
       clientIdForBotToken: clientId,
     });
+    clientNotificationDelivered = sent;
     const botToken = cfg.telegramBotToken?.trim();
     if (trialToTariff && botToken) await sendSubscriptionUpdateGuides(client.telegramId, botToken);
   }
-  const clientLabel = formatClientLabel(client);
-  const lines = [
-    `📦 <b>Оплата тарифа</b>`,
-    ``,
-    `👤 Клиент: ${escapeHtml(clientLabel)}`,
-  ];
-  if (client.telegramId) lines.push(`🆔 TG ID: <code>${escapeHtml(client.telegramId)}</code>`);
-  lines.push(`📋 Тариф: <b>${escapeHtml(tariffName)}</b>`);
-  // Срок берём из выбранной опции длительности (если есть), иначе fallback на базовый срок тарифа.
   const durationDays = payment?.tariffPriceOption?.durationDays ?? payment?.tariff?.durationDays;
-  if (durationDays) lines.push(`📅 Срок: ${durationDays} дн.`);
-  if (payment?.amount != null) lines.push(`💵 Сумма: <b>${formatMoney(payment.amount, payment.currency ?? "RUB")}</b>`);
-  if (payment?.provider) lines.push(`🏦 Провайдер: ${escapeHtml(payment.provider)}`);
-  lines.push(`🕐 ${formatDate(new Date())}`);
-  await sendTelegramToAdminsForEvent("tariff_payment", lines.join("\n"));
+  await sendTelegramToAdminsForEvent("tariff_payment", buildTariffAdminNotificationText({
+    isAdminGrant,
+    clientLabel: formatClientLabel(client),
+    telegramId: client.telegramId,
+    tariffName,
+    durationDays,
+    amount: payment?.amount,
+    currency: payment?.currency,
+    provider: payment?.provider,
+    date: new Date(),
+  }));
+  return clientNotificationDelivered;
 }
 
 /**
@@ -661,7 +713,14 @@ export async function notifyAdminsAboutTicketStatusChange(params: {
 export async function notifyAdminsAboutNewClient(clientId: string): Promise<void> {
   const client = await prisma.client.findUnique({
     where: { id: clientId },
-    select: { id: true, email: true, telegramId: true, telegramUsername: true, createdAt: true },
+    select: {
+      id: true,
+      email: true,
+      telegramId: true,
+      telegramUsername: true,
+      createdAt: true,
+      referrer: { select: { id: true, email: true, telegramId: true, telegramUsername: true } },
+    },
   });
   if (!client) return;
   const config = await getSystemConfig();
@@ -676,6 +735,7 @@ export async function notifyAdminsAboutNewClient(clientId: string): Promise<void
   if (client.telegramId) lines.push(`🆔 TG ID: <code>${escapeHtml(client.telegramId)}</code>`);
   if (client.telegramUsername) lines.push(`📱 Username: @${escapeHtml(client.telegramUsername)}`);
   if (client.email) lines.push(`📧 Email: ${escapeHtml(client.email)}`);
+  if (client.referrer) lines.push(formatPartnerNotificationLine(client.referrer));
   if (totalClients != null) lines.push(`📊 Всего клиентов: <b>${totalClients}</b>`);
   lines.push(`🕐 ${formatDate(client.createdAt)}`);
   if (baseUrl) lines.push(`\n🔗 <a href="${escapeHtml(`${baseUrl}/admin/clients`)}">Открыть в админке</a>`);
