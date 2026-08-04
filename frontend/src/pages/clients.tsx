@@ -1122,8 +1122,8 @@ function ClientEditModal({
   return (
     <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="left-0 top-0 flex h-[100dvh] w-screen max-w-none translate-x-0 translate-y-0 grid-cols-[minmax(0,1fr)] flex-col gap-0 overflow-hidden rounded-none border-white/10 bg-background/95 p-0 shadow-2xl backdrop-blur-3xl sm:left-[50%] sm:top-[50%] sm:h-[min(860px,calc(100dvh-3rem))] sm:w-[calc(100vw-3rem)] sm:max-w-[1120px] sm:translate-x-[-50%] sm:translate-y-[-50%] sm:rounded-[1.5rem] [&>button]:z-50">
-        <div className="absolute top-0 right-0 w-[500px] h-[300px] bg-primary/10 blur-[100px] pointer-events-none rounded-full" />
-        <div className="absolute bottom-0 left-0 w-[400px] h-[300px] bg-purple-500/10 blur-[100px] pointer-events-none rounded-full" />
+        <div className="absolute right-0 top-0 h-[300px] w-[500px] max-w-full rounded-full bg-primary/10 blur-[100px] pointer-events-none" />
+        <div className="absolute bottom-0 left-0 h-[300px] w-[400px] max-w-full rounded-full bg-purple-500/10 blur-[100px] pointer-events-none" />
         <div className="relative z-10 shrink-0 border-b border-white/10 bg-white/5 p-3 pr-12 sm:p-6 sm:pr-14">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
@@ -1218,17 +1218,17 @@ function ClientEditModal({
         <div className="relative z-10 min-w-0 px-3 pb-6 pt-4 sm:px-6">
           <Tabs value={tab} onValueChange={changeTab}>
             <TabsList className="sticky top-0 z-20 grid w-full grid-cols-4 rounded-xl border border-white/5 bg-background/95 p-1 shadow-sm backdrop-blur-xl">
-              <TabsTrigger value="overview" className="gap-1.5 rounded-lg px-2 text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md">
-                <User className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Обзор</span>
+              <TabsTrigger value="overview" className="h-auto flex-col gap-1 rounded-lg px-1 py-2 text-[10px] data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md sm:flex-row sm:px-2 sm:text-xs">
+                <User className="h-3.5 w-3.5" /> <span>Обзор</span>
               </TabsTrigger>
-              <TabsTrigger value="subscriptions" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                <Package className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Подписки</span>
+              <TabsTrigger value="subscriptions" className="h-auto flex-col gap-1 rounded-lg px-1 py-2 text-[10px] data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md sm:flex-row sm:px-2 sm:text-xs">
+                <Package className="h-3.5 w-3.5" /> <span>Подписки</span>
               </TabsTrigger>
-              <TabsTrigger value="monitoring" className="gap-1.5 rounded-lg px-2 text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md">
-                <Activity className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Мониторинг</span>
+              <TabsTrigger value="monitoring" className="h-auto flex-col gap-1 rounded-lg px-1 py-2 text-[10px] data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md sm:flex-row sm:px-2 sm:text-xs">
+                <Activity className="h-3.5 w-3.5" /> <span className="sm:hidden">Активность</span><span className="hidden sm:inline">Мониторинг</span>
               </TabsTrigger>
-              <TabsTrigger value="management" className="gap-1.5 rounded-lg px-2 text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md">
-                <KeyRound className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Управление</span>
+              <TabsTrigger value="management" className="h-auto flex-col gap-1 rounded-lg px-1 py-2 text-[10px] data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md sm:flex-row sm:px-2 sm:text-xs">
+                <KeyRound className="h-3.5 w-3.5" /> <span className="sm:hidden">Ещё</span><span className="hidden sm:inline">Управление</span>
               </TabsTrigger>
             </TabsList>
 
