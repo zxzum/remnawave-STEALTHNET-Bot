@@ -701,12 +701,20 @@ async function showSetupDevicePicker(ctx: Context, token: string, config: Config
 
 async function showFirstWelcome(ctx: Context, userId: number, config: ConfigSnapshot | null): Promise<void> {
   const configuredText = (config?.botWelcomeText ?? "").trim();
-  const text = configuredText || "Лазейка VPN\n\nВаш VPN, устройства и бонусы — в одном месте";
+  const legacyGenericWelcome = /^что умеет этот бот\b/i.test(configuredText);
+  const text = !configuredText || legacyGenericWelcome
+    ? "Лазейка VPN\n\nВаш VPN, устройства и бонусы — в одном месте"
+    : configuredText;
   const trialDays = Number(config?.trialDays ?? 0);
   const trialLabel = trialDays > 0
     ? `🎁 Попробовать ${trialDays} ${formatDaysRu(trialDays)} бесплатно`
     : "🎁 Попробовать бесплатно";
-  const markup = { inline_keyboard: [[{ text: trialLabel, callback_data: "welcome:try" }]] };
+  const markup = {
+    inline_keyboard: [
+      [{ text: trialLabel, callback_data: "welcome:try" }],
+      [{ text: "🔐 Войти в кабинет", callback_data: "menu:main" }],
+    ],
+  };
   const banner = screenBannerUrl(config, "welcome");
   const caption = text.length > TELEGRAM_CAPTION_MAX ? `${text.slice(0, TELEGRAM_CAPTION_MAX - 3)}...` : text;
 
@@ -3528,6 +3536,9 @@ composer.on("callback_query:data", async (ctx) => {
       : undefined;
 
     if (data === "menu:main") {
+      // Вход в кабинет с welcome-экрана завершает просмотр приветствия,
+      // но сам по себе не активирует пробный доступ.
+      await api.completeOnboarding(token).catch(() => {});
       // defensive cleanup — выходя в главное меню сбрасываем addsub-флаг.
       addsubPending.delete(userId);
       const [client, subRes, proxyRes, singboxRes, allSubsRes] = await Promise.all([
