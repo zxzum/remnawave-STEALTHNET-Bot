@@ -26,7 +26,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Pencil, Trash2, Ban, ShieldCheck, Wifi, Ticket, KeyRound, Search,
   Copy, Check, Smartphone, Activity, User, Users, HardDrive, Link,
-  RefreshCw, Loader2, Package, Gift, Coins, MailX, MailCheck, RotateCw, Plus, Zap, MessageCircle,
+  RefreshCw, Loader2, Package, Gift, Coins, MailX, MailCheck, RotateCw, Plus, Zap, MessageCircle, History,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -75,6 +75,12 @@ function getOnlineStatus(onlineAt: string | null): { isOnline: boolean; label: s
   if (diff < 24 * 60 * 60 * 1000) return { isOnline: false, label: `${Math.floor(diff / 3600000)} ч назад` };
   return { isOnline: false, label: `${Math.floor(diff / 86400000)} дн назад` };
 }
+
+function initialClientPageSize(): number {
+  const value = Number(new URLSearchParams(window.location.search).get("pageSize"));
+  return value === 50 || value === 100 ? value : 20;
+}
+
 export function ClientsPage() {
   const pageVisible = usePageVisibility();
   const { t } = useTranslation();
@@ -82,6 +88,7 @@ export function ClientsPage() {
   const [data, setData] = useState<{ items: ClientRecord[]; total: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(initialClientPageSize);
   const [editing, setEditing] = useState<ClientRecord | null>(null);
   const [editForm, setEditForm] = useState<UpdateClientPayload & Partial<UpdateClientRemnaPayload>>({});
   const [settings, setSettings] = useState<{ activeLanguages: string[]; activeCurrencies: string[] } | null>(null);
@@ -94,6 +101,9 @@ export function ClientsPage() {
   const [searchApplied, setSearchApplied] = useState("");
   const [filterBlocked, setFilterBlocked] = useState<"all" | "blocked" | "active">("all");
   const [filterSubscription, setFilterSubscription] = useState<"all" | "any" | "active">("all");
+  const [filterTariffId, setFilterTariffId] = useState("");
+  const [filterSubscriptionType, setFilterSubscriptionType] = useState<"all" | "trial" | "regular" | "gifted" | "received">("all");
+  const [filterTariffs, setFilterTariffs] = useState<{ id: string; name: string }[]>([]);
 
   // ─── Bulk-actions state ───────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -105,7 +115,12 @@ export function ClientsPage() {
   const [bulkAmount, setBulkAmount] = useState("");
   const [bulkReason, setBulkReason] = useState("");
 
-  const [onlineStatuses, setOnlineStatuses] = useState<Record<string, { onlineAt: string | null }>>({});
+  const [onlineStatuses, setOnlineStatuses] = useState<Record<string, {
+    onlineAt: string | null;
+    lastConnectedNodeUuid: string | null;
+    lastConnectedNode: string | null;
+    lastConnectedAt: string | null;
+  }>>({});
 
   const token = state.accessToken!;
 
@@ -113,14 +128,36 @@ export function ClientsPage() {
     api.getSettings(token).then((s) => setSettings({ activeLanguages: s.activeLanguages, activeCurrencies: s.activeCurrencies })).catch(() => {});
   }, [token]);
 
+  useEffect(() => {
+    api.getTariffCategories(token)
+      .then((response) => setFilterTariffs(response.items.flatMap((category) => (category.tariffs ?? []).map((tariff) => ({ id: tariff.id, name: tariff.name })))))
+      .catch(() => setFilterTariffs([]));
+  }, [token]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSearchApplied(search);
+      setPage(1);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    query.set("pageSize", String(pageSize));
+    window.history.replaceState(null, "", `${window.location.pathname}?${query.toString()}`);
+  }, [pageSize]);
+
   const loadClients = () => {
     setLoading(true);
     const isBlocked =
       filterBlocked === "blocked" ? true : filterBlocked === "active" ? false : undefined;
-    api.getClients(token, page, 20, {
+    api.getClients(token, page, pageSize, {
       search: searchApplied || undefined,
       isBlocked,
       subscription: filterSubscription,
+      tariffId: filterTariffId || undefined,
+      subscriptionType: filterSubscriptionType,
     }).then((r) => {
       setData({ items: r.items, total: r.total });
       setLoading(false);
@@ -206,7 +243,7 @@ export function ClientsPage() {
 
   useEffect(() => {
     loadClients();
-  }, [token, page, searchApplied, filterBlocked, filterSubscription]);
+  }, [token, page, pageSize, searchApplied, filterBlocked, filterSubscription, filterTariffId, filterSubscriptionType]);
 
   useEffect(() => {
     const uuids = Array.from(new Set(data?.items
@@ -215,19 +252,18 @@ export function ClientsPage() {
     if (!pageVisible || uuids.length === 0) return;
     
     const poll = () => {
-      api.getClientsOnlineStatuses(token, uuids)
-        .then(setOnlineStatuses)
+      // Backend keeps each Remnawave request bounded to 100 UUIDs; secondary
+      // subscriptions may make one page contain more UUIDs than clients.
+      const batches: string[][] = [];
+      for (let index = 0; index < uuids.length; index += 100) batches.push(uuids.slice(index, index + 100));
+      Promise.all(batches.map((batch) => api.getClientsOnlineStatuses(token, batch)))
+        .then((parts) => setOnlineStatuses(Object.assign({}, ...parts)))
         .catch(() => {});
     };
     poll();
     const interval = setInterval(poll, 30000);
     return () => clearInterval(interval);
   }, [token, data?.items, pageVisible]);
-
-  const applySearch = () => {
-    setSearchApplied(search);
-    setPage(1);
-  };
 
   function openEdit(c: ClientRecord) {
     setEditing(c);
@@ -321,7 +357,7 @@ export function ClientsPage() {
     }
   }
 
-  const totalPages = data ? Math.ceil(data.total / 20) : 0;
+  const totalPages = data ? Math.ceil(data.total / pageSize) : 0;
   return (
     <div className="space-y-6 relative min-h-screen">
       {/* Ambient Glows */}
@@ -382,16 +418,18 @@ export function ClientsPage() {
               placeholder={t("admin.clients.search_placeholder")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && applySearch()}
-              className="pl-9 pr-20 bg-foreground/[0.03] dark:bg-white/[0.02] border-white/10 focus-visible:ring-primary/50 rounded-xl"
+              className="pl-9 pr-10 bg-foreground/[0.03] dark:bg-white/[0.02] border-white/10 focus-visible:ring-primary/50 rounded-xl"
             />
-            <Button
-              variant="secondary" size="sm"
-              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 px-3 text-xs bg-primary/15 hover:bg-primary/25 text-primary border border-primary/20 rounded-lg"
-              onClick={applySearch}
-            >
-              {t("admin.clients.find")}
-            </Button>
+            {search && (
+              <button
+                type="button"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground hover:text-foreground"
+                onClick={() => setSearch("")}
+                aria-label="Очистить поиск"
+              >
+                ×
+              </button>
+            )}
           </div>
           <div className="flex items-center gap-1 bg-foreground/[0.03] dark:bg-white/[0.02] p-1 rounded-xl border border-white/5">
             {(["all", "active", "blocked"] as const).map((f) => (
@@ -421,6 +459,44 @@ export function ClientsPage() {
             <option value="all">Все подписки</option>
             <option value="any">Есть подписка</option>
             <option value="active">Активная подписка</option>
+          </select>
+          <select
+            value={filterSubscriptionType}
+            onChange={(event) => {
+              setFilterSubscriptionType(event.target.value as typeof filterSubscriptionType);
+              setPage(1);
+            }}
+            className="h-9 rounded-xl border border-white/10 bg-background/60 px-3 text-xs font-medium text-foreground"
+            aria-label="Тип подписки"
+          >
+            <option value="all">Любой тип</option>
+            <option value="trial">Только trial</option>
+            <option value="regular">Обычные</option>
+            <option value="gifted">Куплены в подарок</option>
+            <option value="received">Получены в подарок</option>
+          </select>
+          <select
+            value={filterTariffId}
+            onChange={(event) => {
+              setFilterTariffId(event.target.value);
+              setPage(1);
+            }}
+            className="h-9 max-w-[220px] rounded-xl border border-white/10 bg-background/60 px-3 text-xs font-medium text-foreground"
+            aria-label="Фильтр по тарифу"
+          >
+            <option value="">Любой тариф</option>
+            {filterTariffs.map((tariff) => <option key={tariff.id} value={tariff.id}>{tariff.name}</option>)}
+          </select>
+          <select
+            value={pageSize}
+            onChange={(event) => {
+              setPageSize(Number(event.target.value));
+              setPage(1);
+            }}
+            className="h-9 rounded-xl border border-white/10 bg-background/60 px-3 text-xs font-medium text-foreground"
+            aria-label="Количество клиентов на странице"
+          >
+            {[20, 50, 100].map((size) => <option key={size} value={size}>{size} / стр.</option>)}
           </select>
         </div>
       </Card>
@@ -602,10 +678,18 @@ export function ClientsPage() {
               </thead>
               <tbody className="divide-y divide-white/5">
                 {data.items.map((c, idx) => {
-                  const onlineAt = (c.remnawaveUuids ?? (c.remnawaveUuid ? [c.remnawaveUuid] : []))
-                    .map((uuid) => onlineStatuses[uuid]?.onlineAt)
-                    .filter((value): value is string => Boolean(value))
-                    .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? c.onlineAt ?? null;
+                  const states = (c.remnawaveUuids ?? (c.remnawaveUuid ? [c.remnawaveUuid] : []))
+                    .map((uuid) => onlineStatuses[uuid])
+                    .filter((value): value is NonNullable<typeof value> => Boolean(value));
+                  const onlineAt = states.reduce<string | null>((latest, state) => {
+                    if (!state.onlineAt) return latest;
+                    return !latest || Date.parse(state.onlineAt) > Date.parse(latest) ? state.onlineAt : latest;
+                  }, c.onlineAt ?? null);
+                  const latestState = [...states].filter((state) => state.lastConnectedNode || state.lastConnectedNodeUuid).sort((a, b) =>
+                    Date.parse(b.lastConnectedAt ?? b.onlineAt ?? "") - Date.parse(a.lastConnectedAt ?? a.onlineAt ?? "")
+                  )[0];
+                  const lastConnectedNode = latestState?.lastConnectedNode ?? c.lastConnectedNode ?? c.activeNode ?? null;
+                  const lastConnectedAt = latestState?.lastConnectedAt ?? c.lastConnectedAt ?? null;
                   const status = getOnlineStatus(onlineAt);
                   
                   return (
@@ -687,12 +771,17 @@ export function ClientsPage() {
                               <Ban className="h-3 w-3 mr-1" /> {t("admin.clients.block")}
                             </span>
                           )}
-                          {c.activeNode && (
+                          {lastConnectedNode && (
                             <span className="inline-flex items-center rounded-full bg-emerald-500/15 text-emerald-400 px-2.5 py-0.5 text-[11px] font-medium border border-emerald-500/20 backdrop-blur-md max-w-fit shadow-sm">
-                              <Activity className="h-3 w-3 mr-1" /> {c.activeNode}
+                              <Activity className="h-3 w-3 mr-1" /> {lastConnectedNode}
                             </span>
                           )}
-                          {!c.isBlocked && !c.activeNode && (
+                          {(lastConnectedAt || c.lastConnectedNodeUuid) && (
+                            <span className="text-[10px] text-muted-foreground">
+                              {lastConnectedAt ? `подключался ${fmtMsk(lastConnectedAt)}` : `UUID: ${c.lastConnectedNodeUuid?.slice(0, 8)}…`}
+                            </span>
+                          )}
+                          {!c.isBlocked && !lastConnectedNode && (
                             <span className="text-muted-foreground text-xs">—</span>
                           )}
                         </div>
@@ -815,6 +904,7 @@ function ClientEditModal({
   // T-admin-services (портировано из WolfVPN): доступ к вкладке «Услуги» — ADMIN или action manage_services.
   const canManageServices = state.admin?.role === "ADMIN" || (Array.isArray(state.admin?.allowedSections) && state.admin.allowedSections.includes("action:manage_services"));
   const [tab, setTab] = useState("profile");
+  const [refreshKey, setRefreshKey] = useState(0);
   const [remnaUser, setRemnaUser] = useState<RemnaUserFull | null>(null);
   const [, setRemnaLoading] = useState(false);
   // devices-список теперь во вложенном <ClientAllDevicesTab>.
@@ -922,10 +1012,22 @@ function ClientEditModal({
   useEffect(() => {
     loadRemnaUser();
     loadDevices();
-    loadUsage();
     loadSecondarySubs();
     loadReferrer();
-  }, [loadRemnaUser, loadDevices, loadUsage, loadSecondarySubs, loadReferrer]);
+  }, [loadRemnaUser, loadDevices, loadSecondarySubs, loadReferrer]);
+
+  // Тяжёлая статистика нужна только на вкладке «Трафик».
+  useEffect(() => {
+    if (tab === "traffic") loadUsage();
+  }, [tab, loadUsage]);
+
+  const refreshClientData = useCallback(() => {
+    setRefreshKey((value) => value + 1);
+    loadRemnaUser();
+    loadDevices();
+    loadSecondarySubs();
+    if (tab === "traffic") loadUsage();
+  }, [loadDevices, loadRemnaUser, loadSecondarySubs, loadUsage, tab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -980,10 +1082,7 @@ function ClientEditModal({
         setGrantNote("");
         setGrantTrafficGb("");
         setGrantCustomDays("");
-        loadRemnaUser();
-        loadDevices();
-        loadUsage();
-        loadSecondarySubs();
+        refreshClientData();
       } else {
         setGrantMessage({ type: "err", text: res.message ?? t("admin.clients.grant_tariff_error", "Не удалось выдать тариф") });
       }
@@ -1011,10 +1110,10 @@ function ClientEditModal({
 
   return (
     <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto p-0 gap-0 bg-background/80 backdrop-blur-3xl border-white/10 shadow-2xl sm:rounded-[2rem] [&>button]:z-50">
+      <DialogContent className="w-[calc(100vw-1rem)] max-w-4xl max-h-[calc(100dvh-1rem)] overflow-y-auto p-0 gap-0 bg-background/90 backdrop-blur-3xl border-white/10 shadow-2xl rounded-2xl sm:rounded-[2rem] [&>button]:z-50">
         <div className="absolute top-0 right-0 w-[500px] h-[300px] bg-primary/10 blur-[100px] pointer-events-none rounded-full" />
         <div className="absolute bottom-0 left-0 w-[400px] h-[300px] bg-purple-500/10 blur-[100px] pointer-events-none rounded-full" />
-        <div className="p-6 border-b border-white/10 relative z-10 bg-white/5">
+        <div className="p-4 sm:p-6 border-b border-white/10 relative z-10 bg-white/5">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-primary/20 to-purple-500/20 border border-white/10 flex items-center justify-center shadow-inner shrink-0">
@@ -1056,8 +1155,8 @@ function ClientEditModal({
         </div>
 
         {editing.remnawaveUuid && remnaUser && (
-          <div className="px-6 pt-4 relative z-10">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="px-3 sm:px-6 pt-4 relative z-10">
+            <div className="grid grid-cols-1 min-[420px]:grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="rounded-[1.5rem] bg-gradient-to-br from-foreground/[0.03] to-foreground/[0.05] dark:from-white/5 dark:to-white/10 border border-white/10 p-5 space-y-1.5 hover:from-foreground/[0.05] hover:to-foreground/[0.07] dark:hover:from-white/[0.08] dark:hover:to-white/[0.12] transition-colors">
                 <div className="text-[11px] text-muted-foreground uppercase tracking-wider">{t("admin.clients.traffic")}</div>
                 <div className="text-lg font-bold">{formatTrafficBytes(trafficUsed)}</div>
@@ -1103,9 +1202,9 @@ function ClientEditModal({
           </div>
         )}
 
-        <div className="px-6 pt-4 pb-6 relative z-10">
+        <div className="px-3 sm:px-6 pt-4 pb-6 relative z-10">
           <Tabs value={tab} onValueChange={setTab}>
-            <TabsList className="w-full flex flex-wrap bg-foreground/[0.04] dark:bg-white/[0.04] border border-white/5 rounded-xl p-1">
+            <TabsList className="w-full flex flex-nowrap justify-start overflow-x-auto bg-foreground/[0.04] dark:bg-white/[0.04] border border-white/5 rounded-xl p-1">
               <TabsTrigger value="profile" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
                 <User className="h-3.5 w-3.5" /> {t("admin.clients.info")}
               </TabsTrigger>
@@ -1128,6 +1227,12 @@ function ClientEditModal({
               </TabsTrigger>
               <TabsTrigger value="actions" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
                 <Activity className="h-3.5 w-3.5" /> {t("admin.clients.actions")}
+              </TabsTrigger>
+              <TabsTrigger value="traffic" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
+                <Wifi className="h-3.5 w-3.5" /> Трафик
+              </TabsTrigger>
+              <TabsTrigger value="activity" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
+                <History className="h-3.5 w-3.5" /> Активность
               </TabsTrigger>
               {canManageServices && (
                 <TabsTrigger value="services" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
@@ -1701,29 +1806,23 @@ function ClientEditModal({
                 Заменили старую вкладку «Remna» (client-scoped). Теперь для каждой
                 подписки клиента (primary + secondary) свой блок с собственными
                 Данными Remna, Лимитами, Сквадами и Быстрыми действиями. */}
-            {(editing.remnawaveUuid || secondarySubs.some((s) => s.remnawaveUuid)) && (
-              <TabsContent value="subscriptions">
-                <div className="space-y-4">
-                  <ClientSubsOverviewBlock clientId={editing.id} token={token} />
-                  <ClientSubscriptionsTab
-                    clientId={editing.id}
-                    token={token}
-                    onChanged={() => {
-                      loadDevices();
-                      loadUsage();
-                      loadSecondarySubs();
-                    }}
-                  />
-                </div>
-              </TabsContent>
-            )}
+            <TabsContent value="subscriptions">
+              <div className="space-y-4">
+                <ClientSubsOverviewBlock clientId={editing.id} token={token} refreshKey={refreshKey} />
+                <ClientSubscriptionsTab
+                  clientId={editing.id}
+                  token={token}
+                  tariffs={flatTariffs}
+                  refreshKey={refreshKey}
+                  onChanged={refreshClientData}
+                />
+              </div>
+            </TabsContent>
 
             {/* ────── Устройства (T-tabs-rework, 13.05.2026): со ВСЕХ подписок ────── */}
-            {(editing.remnawaveUuid || secondarySubs.some((s) => s.remnawaveUuid)) && (
-              <TabsContent value="devices">
-                <ClientAllDevicesTab clientId={editing.id} token={token} />
-              </TabsContent>
-            )}
+            <TabsContent value="devices">
+              <ClientAllDevicesTab clientId={editing.id} token={token} />
+            </TabsContent>
 
             {/* ────── Услуги (T-admin-services, портировано из WolfVPN) ────── */}
             {canManageServices && (
@@ -1733,19 +1832,13 @@ function ClientEditModal({
             )}
 
             {/* ────── Действия ────── */}
-            {(editing.remnawaveUuid || secondarySubs.some((s) => s.remnawaveUuid)) && (
-              <TabsContent value="actions">
-                <div className="space-y-5">
+            <TabsContent value="actions">
+              <div className="space-y-5">
                   {/* массовые операции — здесь, не сверху диалога. */}
                   <ClientBulkActionsPanel
                     client={editing}
                     token={token}
-                    onChanged={() => {
-                      loadRemnaUser();
-                      loadDevices();
-                      loadUsage();
-                      loadSecondarySubs();
-                    }}
+                    onChanged={refreshClientData}
                   />
 
                   {/* Per-subscription quick actions (Отозвать/Disable/Enable/Reset/Unlink)
@@ -1753,36 +1846,197 @@ function ClientEditModal({
                       Здесь оставлены ТОЛЬКО массовые операции — они в ClientBulkActionsPanel выше. */}
                   {actionMessage && <p className="text-sm text-muted-foreground mt-2">{actionMessage}</p>}
 
-                  {usageData && usageData.sparklineData && usageData.sparklineData.some((v) => v > 0) && (
-                    <div className="mt-4">
-                      <h3 className="font-semibold text-sm mb-3">{t("admin.clients.traffic_30d_chart")}</h3>
-                      <div className="flex items-end gap-px h-24 rounded-[1.5rem] bg-gradient-to-br from-white/5 to-transparent border border-white/10 p-3 overflow-hidden">
-                        {(() => {
-                          const data = usageData.sparklineData;
-                          const max = Math.max(...data, 1);
-                          return data.map((v, i) => (
-                            <div
-                              key={i}
-                              className="flex-1 bg-primary/60 hover:bg-primary rounded-t transition-colors min-w-[2px]"
-                              style={{ height: `${Math.max((v / max) * 100, v > 0 ? 4 : 1)}%` }}
-                              title={`${usageData.categories?.[i] ?? ""}: ${formatTrafficBytes(v)}`}
-                            />
-                          ));
-                        })()}
-                      </div>
-                      <div className="flex justify-between text-[10px] text-muted-foreground mt-1 px-1">
-                        <span>{usageData.categories?.[0] ?? ""}</span>
-                        <span>{usageData.categories?.[usageData.categories.length - 1] ?? ""}</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </TabsContent>
-            )}
+              </div>
+            </TabsContent>
+            <TabsContent value="traffic">
+              <ClientTrafficTab clientId={editing.id} token={token} usageData={usageData} refreshKey={refreshKey} />
+            </TabsContent>
+            <TabsContent value="activity">
+              <ClientActivityTab clientId={editing.id} token={token} refreshKey={refreshKey} />
+            </TabsContent>
           </Tabs>
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function ClientTrafficTab({
+  clientId,
+  token,
+  usageData,
+  refreshKey = 0,
+}: {
+  clientId: string;
+  token: string;
+  usageData: RemnaUserUsageResponse["response"] | null;
+  refreshKey?: number;
+}) {
+  const [sessions, setSessions] = useState<import("@/lib/api").ClientSessionItem[]>([]);
+  const [requestLogs, setRequestLogs] = useState<{ available: boolean; reason?: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [activeOnly, setActiveOnly] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await api.getClientSessions(token, clientId, { active: activeOnly, limit: 100 });
+      setSessions(response.sessions);
+      setRequestLogs(response.requestLogs);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось загрузить подключения");
+    } finally {
+      setLoading(false);
+    }
+  }, [activeOnly, clientId, token]);
+
+  useEffect(() => {
+    load();
+    const interval = window.setInterval(load, 30000);
+    return () => window.clearInterval(interval);
+  }, [load, refreshKey]);
+
+  const chartData = usageData?.sparklineData ?? [];
+  const chartMax = Math.max(...chartData, 1);
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <div>
+          <h3 className="font-semibold text-sm">Монитор подключений</h3>
+          <p className="text-[11px] text-muted-foreground">Обновляется только пока открыта эта вкладка.</p>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <select
+            className="h-8 rounded-lg border border-white/10 bg-background/70 px-2 text-xs"
+            value={activeOnly ? "active" : "all"}
+            onChange={(event) => setActiveOnly(event.target.value === "active")}
+          >
+            <option value="active">Только активные</option>
+            <option value="all">Все подключения</option>
+          </select>
+          <Button variant="ghost" size="sm" className="h-8 gap-1" onClick={load} disabled={loading}>
+            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} /> Обновить
+          </Button>
+        </div>
+      </div>
+
+      {error && <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+      {!loading && sessions.length === 0 && (
+        <div className="rounded-2xl border border-dashed border-white/15 p-8 text-center text-sm text-muted-foreground">
+          <Wifi className="mx-auto mb-2 h-7 w-7 opacity-40" />
+          Нет подключений по данным Remnawave.
+        </div>
+      )}
+      <div className="grid gap-3">
+        {sessions.map((session) => (
+          <div key={session.id} className="rounded-2xl border border-white/10 bg-foreground/[0.03] p-4 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={cn("h-2 w-2 rounded-full", session.active ? "bg-emerald-400 animate-pulse" : "bg-muted-foreground")} />
+              <span className="font-medium text-sm">{session.nodeName ?? "Нода неизвестна"}</span>
+              <span className="text-[11px] text-muted-foreground">{session.subscriptionIndex === 0 ? "Главная" : `#${session.subscriptionIndex}`}</span>
+              {session.tariffName && <span className="text-[11px] text-muted-foreground">· {session.tariffName}</span>}
+              <span className={cn("ml-auto rounded-full border px-2 py-0.5 text-[10px]", session.active ? "border-emerald-500/30 text-emerald-400" : "border-white/10 text-muted-foreground")}>
+                {session.active ? "Активна" : "Завершена"}
+              </span>
+            </div>
+            <div className="grid grid-cols-1 gap-1 text-[11px] text-muted-foreground sm:grid-cols-2">
+              <span>Последняя активность: {session.lastActivityAt ? fmtMsk(session.lastActivityAt) : "—"}</span>
+              <span>Последняя нода: {session.lastConnectedAt ? fmtMsk(session.lastConnectedAt) : "—"}</span>
+              <span className="truncate">Username: {session.username ?? "—"}</span>
+              <span className="truncate">UUID ноды: {session.nodeUuid ?? "—"}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {requestLogs && (
+        <div className="rounded-2xl border border-amber-500/25 bg-amber-500/[0.06] p-4">
+          <div className="font-medium text-sm">Журнал посещённых ресурсов</div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {requestLogs.available ? "Доступен" : requestLogs.reason ?? "Логирование не настроено."}
+          </p>
+        </div>
+      )}
+
+      <div className="rounded-2xl border border-white/10 bg-background/40 p-4 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="font-semibold text-sm">Трафик за 30 дней</h3>
+          <span className="text-xs text-muted-foreground">{formatTrafficBytes(chartData.reduce((sum, value) => sum + value, 0))}</span>
+        </div>
+        {chartData.length > 0 ? (
+          <div className="flex h-24 items-end gap-px overflow-hidden rounded-xl border border-white/10 bg-white/[0.02] p-3">
+            {chartData.map((value, index) => (
+              <div key={index} className="min-w-[2px] flex-1 rounded-t bg-primary/60" style={{ height: `${Math.max((value / chartMax) * 100, value > 0 ? 4 : 1)}%` }} title={`${usageData?.categories?.[index] ?? ""}: ${formatTrafficBytes(value)}`} />
+            ))}
+          </div>
+        ) : <p className="text-xs text-muted-foreground">Нет данных за период.</p>}
+      </div>
+    </div>
+  );
+}
+
+function ClientActivityTab({ clientId, token, refreshKey = 0 }: { clientId: string; token: string; refreshKey?: number }) {
+  const [items, setItems] = useState<import("@/lib/api").ClientActivityItem[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [kind, setKind] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async (cursor?: string, append = false) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await api.getClientActivity(token, clientId, { limit: 100, cursor });
+      setItems((current) => append ? [...current, ...response.items] : response.items);
+      setNextCursor(response.nextCursor);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось загрузить активность");
+    } finally {
+      setLoading(false);
+    }
+  }, [clientId, token]);
+
+  useEffect(() => { load(); }, [load, refreshKey]);
+
+  const kinds = [...new Set(items.map((item) => item.kind))];
+  const visible = kind ? items.filter((item) => item.kind === kind) : items;
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <div>
+          <h3 className="font-semibold text-sm">Активность клиента</h3>
+          <p className="text-[11px] text-muted-foreground">Админские действия, изменения подписок и операции с клиентом.</p>
+        </div>
+        <select className="ml-auto h-8 rounded-lg border border-white/10 bg-background/70 px-2 text-xs" value={kind} onChange={(event) => setKind(event.target.value)}>
+          <option value="">Все события</option>
+          {kinds.map((value) => <option key={value} value={value}>{value}</option>)}
+        </select>
+        <Button variant="ghost" size="sm" className="h-8 gap-1" onClick={() => load()} disabled={loading}>
+          <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} /> Обновить
+        </Button>
+      </div>
+      {error && <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+      {!loading && visible.length === 0 && <div className="rounded-2xl border border-dashed border-white/15 p-8 text-center text-sm text-muted-foreground">Событий пока нет.</div>}
+      <div className="space-y-2">
+        {visible.map((item) => (
+          <div key={item.id} className="rounded-xl border border-white/10 bg-foreground/[0.03] p-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="font-semibold">{item.kind}</span>
+              <span className="text-muted-foreground">{fmtMsk(item.createdAt)}</span>
+              <span className="ml-auto text-muted-foreground">{item.actorId ?? "система"}</span>
+            </div>
+            {item.payload && <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words text-[10px] text-muted-foreground">{JSON.stringify(item.payload, null, 2)}</pre>}
+          </div>
+        ))}
+      </div>
+      {nextCursor && !kind && (
+        <Button variant="outline" size="sm" className="w-full rounded-xl" onClick={() => load(nextCursor, true)} disabled={loading}>
+          {loading ? "Загрузка…" : "Загрузить ещё"}
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -2383,7 +2637,7 @@ function ClientAllDevicesTab({ clientId, token }: { clientId: string; token: str
 // сводка по всем подпискам клиента.
 // Показывает компактную таблицу — для каждой подписки строка с remna-метриками.
 // ─────────────────────────────────────────────────────────────────────────────
-function ClientSubsOverviewBlock({ clientId, token }: { clientId: string; token: string }) {
+function ClientSubsOverviewBlock({ clientId, token, refreshKey = 0 }: { clientId: string; token: string; refreshKey?: number }) {
   const { t } = useTranslation();
   const [data, setData] = useState<import("@/lib/api").ClientSubsOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -2408,7 +2662,7 @@ function ClientSubsOverviewBlock({ clientId, token }: { clientId: string; token:
       .finally(() => setLoading(false));
   }, [token, clientId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshKey]);
 
   async function grantExtend() {
     if (!extendFor || extendDays < 1) return;
@@ -2485,7 +2739,7 @@ function ClientSubsOverviewBlock({ clientId, token }: { clientId: string; token:
       </div>
 
       {/* Таблица подписок */}
-      <div className="overflow-x-auto">
+      <div className="hidden overflow-x-auto sm:block">
         <table className="w-full text-xs">
           <thead className="text-[10px] uppercase text-muted-foreground border-b border-white/10">
             <tr>
@@ -2592,6 +2846,75 @@ function ClientSubsOverviewBlock({ clientId, token }: { clientId: string; token:
             })}
           </tbody>
         </table>
+      </div>
+
+      <div className="space-y-2 sm:hidden">
+        {data.items.map((it) => {
+          const isPrimary = it.subscriptionIndex === 0;
+          const expiresSoon = it.remna?.expireAt
+            ? new Date(it.remna.expireAt).getTime() - Date.now() < 3 * 86_400_000
+            : false;
+          const isExpired = it.remna?.expireAt
+            ? new Date(it.remna.expireAt).getTime() <= Date.now()
+            : false;
+          return (
+            <div key={it.subscriptionId} className="rounded-2xl border border-white/10 bg-background/30 p-3 text-xs">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5 font-medium">
+                    <span className={cn(
+                      "rounded-md border px-1.5 py-0.5 text-[10px] font-semibold",
+                      isPrimary ? "border-primary/30 bg-primary/10 text-primary" : "border-white/10 bg-muted text-muted-foreground"
+                    )}>
+                      {isPrimary ? t("admin.clients.sub_primary", "Главная") : `#${it.subscriptionIndex}`}
+                    </span>
+                    {it.tariffEmoji && <span>{it.tariffEmoji}</span>}
+                    <span className="truncate">{it.tariffName ?? (it.isTrial ? (it.trialName ?? "Trial") : "—")}</span>
+                    {it.isTrial && <span className="text-[9px] text-amber-400">trial</span>}
+                    {it.purchasedAsGift && <Gift className="h-3 w-3 text-pink-400" />}
+                  </div>
+                  <p className={cn("mt-1 text-[11px]", isExpired ? "text-red-400" : expiresSoon ? "text-amber-400" : "text-muted-foreground")}>
+                    Истекает: {it.remna?.expireAt ? fmtMskDate(it.remna.expireAt) : "—"}
+                  </p>
+                </div>
+                {it.remna ? (
+                  <span className={cn(
+                    "shrink-0 rounded-md border px-1.5 py-0.5 text-[10px]",
+                    it.remna.status === "ACTIVE" && "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
+                    it.remna.status === "DISABLED" && "border-red-500/30 bg-red-500/10 text-red-400",
+                    it.remna.status === "LIMITED" && "border-amber-500/30 bg-amber-500/10 text-amber-400",
+                    it.remna.status === "EXPIRED" && "border-gray-500/30 bg-gray-500/10 text-gray-400",
+                  )}>
+                    {it.remna.status ?? "—"}
+                  </span>
+                ) : <span className="shrink-0 text-[10px] text-muted-foreground">нет Remna</span>}
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
+                <span>Трафик: {it.remna ? `${formatTrafficBytes(it.remna.trafficUsedBytes ?? 0)} / ${it.remna.trafficLimitBytes && it.remna.trafficLimitBytes > 0 ? formatTrafficBytes(it.remna.trafficLimitBytes) : "∞"}` : "—"}</span>
+                <span>Устройства: {it.remna ? `${it.remna.deviceCount} / ${it.remna.hwidDeviceLimit ?? "∞"}` : "—"}</span>
+                <span>Нода: {it.remna?.lastConnectedNode ?? "—"}</span>
+                <span>Squads: {it.remna?.activeSquadNames?.join(", ") || "—"}</span>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-3 h-8 w-full gap-1 text-xs text-primary hover:bg-primary/10"
+                title="Продлить подписку вручную (компенсация/бонус)"
+                onClick={() => {
+                  setExtendFor({
+                    subId: it.subscriptionId,
+                    label: `${isPrimary ? "Главная" : `#${it.subscriptionIndex}`}${it.tariffName ? ` — ${it.tariffName}` : ""}`,
+                  });
+                  setExtendDays(30);
+                  setExtendError(null);
+                }}
+              >
+                <Zap className="h-3 w-3" />
+                Продлить
+              </Button>
+            </div>
+          );
+        })}
       </div>
 
       {extendDone && (
