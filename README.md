@@ -439,8 +439,18 @@ All variables are described in `.env.example`:
 | `REMNA_API_URL`          |   yes    | Remnawave panel URL                    |
 | `REMNA_ADMIN_TOKEN`      |   yes    | Remnawave API token                    |
 | `BOT_TOKEN`              |    no    | Telegram bot token                     |
+| `SUPPORT_BOT_USERNAME`   |    no    | Username отдельного SupportBot (default `stealthnet_support_bot`) |
+| `SUPPORT_API_KEY`        |    no    | Секрет для internal API SupportBot     |
 | `USE_BUILTIN_NGINX`      |    no    | `true` for built-in nginx              |
 | `CERTBOT_EMAIL`          |    no    | Email for Let's Encrypt                |
+
+### 🧑‍💼 Separate SupportBot
+
+The main bot's help screen and `/support` link to `https://t.me/<SUPPORT_BOT_USERNAME>`.
+The SupportBot uses its own Telegram token and SQLite database, and reads client context
+only through `GET /internal/support/client-context` with `SUPPORT_API_KEY`; it has no
+access to the main database or bot token. Keep the endpoint behind HTTPS and configure
+the same secret in the main backend and SupportBot environments.
 
 ### 🌐 Custom Nginx (instead of built-in)
 

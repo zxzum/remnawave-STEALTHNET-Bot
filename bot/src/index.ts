@@ -96,6 +96,16 @@ if (!BOT_TOKEN) {
   process.exit(1);
 }
 
+const SUPPORT_BOT_USERNAME = (process.env.SUPPORT_BOT_USERNAME || "stealthnet_support_bot")
+  .trim()
+  .replace(/^@+/, "");
+
+function supportBotLink(): string | null {
+  return /^[A-Za-z0-9_]{5,32}$/.test(SUPPORT_BOT_USERNAME)
+    ? `https://t.me/${SUPPORT_BOT_USERNAME}`
+    : null;
+}
+
 async function waitForApi(maxRetries = 10, delayMs = 3000): Promise<Awaited<ReturnType<typeof api.getPublicConfig>>> {
   for (let i = 1; i <= maxRetries; i++) {
     try {
@@ -2343,9 +2353,16 @@ composer.command("referral", async (ctx) => {
 composer.command("support", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  const supportLink = supportBotLink();
+  if (!supportLink) {
+    await ctx.reply("❌ Поддержка временно недоступна.");
+    return;
+  }
   const token = await getOrRestoreToken(userId, ctx.from?.username);
   if (!token) {
-    await ctx.reply("🔐 Сначала запустите бота через /start");
+    await ctx.reply("🧑‍💼 Открыть поддержку:", {
+      reply_markup: { inline_keyboard: [[{ text: "🧑‍💼 Написать в поддержку", url: supportLink }]] },
+    });
     return;
   }
   try {
@@ -2360,7 +2377,7 @@ composer.command("support", async (ctx) => {
     // тот же билд, что и callback menu:support → ID копируется.
     const { text, entities, markup } = buildHelpScreen({
       helpIntroText: cfg?.helpIntroText,
-      supportLink: cfg?.supportLink,
+      supportLink,
       botBackLabel: cfg?.botBackLabel,
       botEmojis: cfg?.botEmojis,
       tgId,
@@ -3507,7 +3524,7 @@ composer.on("callback_query:data", async (ctx) => {
       // единый билд экрана Помощи (см. buildHelpScreen).
       const { text, entities, markup } = buildHelpScreen({
         helpIntroText: config?.helpIntroText,
-        supportLink: config?.supportLink,
+        supportLink: supportBotLink(),
         botBackLabel: config?.botBackLabel,
         botEmojis: config?.botEmojis,
         tgId,
@@ -8410,7 +8427,7 @@ const botInstances: Bot[] = [];
   }
   const b = await createBotWithProxy(token);
   b.use(composer);
-  b.catch((err) => console.error(`[Bot ${token.slice(0, 6)}…] error:`, err));
+  b.catch((err) => console.error("[Bot] error:", err));
   botInstances.push(b);
 }
 // start() для long polling не завершается — нельзя await, иначе после старта код не пойдёт дальше.

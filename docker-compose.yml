@@ -59,6 +59,7 @@ services:
       REMNA_API_URL: "${REMNA_API_URL:-}"
       REMNA_ADMIN_TOKEN: "${REMNA_ADMIN_TOKEN:-}"
       REMNA_SECRET_KEY: "${REMNA_SECRET_KEY:-}"
+      SUPPORT_API_KEY: "${SUPPORT_API_KEY:-}"
       INIT_ADMIN_EMAIL: "${INIT_ADMIN_EMAIL:-admin@stealthnet.local}"
       INIT_ADMIN_PASSWORD: "${INIT_ADMIN_PASSWORD:-}"
       BOT_TOKEN: "${BOT_TOKEN:-}"
@@ -138,6 +139,7 @@ services:
       TZ: Europe/Moscow
       BOT_TOKEN: "${BOT_TOKEN:-}"
       API_URL: "http://api:5000"
+      SUPPORT_BOT_USERNAME: "${SUPPORT_BOT_USERNAME:-stealthnet_support_bot}"
     depends_on:
       api:
         condition: service_healthy
