@@ -917,8 +917,10 @@ function ClientEditModal({
   const { state } = useAuth();
   // T-admin-services (портировано из WolfVPN): доступ к вкладке «Услуги» — ADMIN или action manage_services.
   const canManageServices = state.admin?.role === "ADMIN" || (Array.isArray(state.admin?.allowedSections) && state.admin.allowedSections.includes("action:manage_services"));
-  const [tab, setTab] = useState("profile");
-  const [mountedTabs, setMountedTabs] = useState(() => new Set(["profile"]));
+  const [tab, setTab] = useState("overview");
+  const [monitorView, setMonitorView] = useState("activity");
+  const [manageView, setManageView] = useState("profile");
+  const [mountedTabs, setMountedTabs] = useState(() => new Set(["overview", "monitor:activity", "manage:profile"]));
   const [refreshKey, setRefreshKey] = useState(0);
   const [remnaUser, setRemnaUser] = useState<RemnaUserFull | null>(null);
   const [, setRemnaLoading] = useState(false);
@@ -984,6 +986,7 @@ function ClientEditModal({
       loadReferrer();
       setReferrerInput("");
       setReferrerMessage(res.referrerId ? "✅ Реферер привязан" : "Реферер убран");
+      void onClientChanged().catch(() => {});
     } catch (e) {
       setReferrerMessage(e instanceof Error ? e.message : "Ошибка привязки");
     } finally {
@@ -998,6 +1001,7 @@ function ClientEditModal({
       await api.setReferralReferrer(token, editing.id, null);
       setReferrerInfo(null);
       setReferrerMessage("Реферер убран");
+      void onClientChanged().catch(() => {});
     } catch (e) {
       setReferrerMessage(e instanceof Error ? e.message : "Ошибка");
     } finally {
@@ -1008,25 +1012,40 @@ function ClientEditModal({
   useEffect(() => {
     loadRemnaUser();
     loadDevices();
-    loadReferrer();
-  }, [loadRemnaUser, loadDevices, loadReferrer]);
+  }, [loadRemnaUser, loadDevices]);
+
+  useEffect(() => {
+    if (tab === "management" && manageView === "profile") loadReferrer();
+  }, [loadReferrer, manageView, tab]);
 
   // Тяжёлая статистика нужна только на вкладке «Трафик».
   useEffect(() => {
-    if (tab === "traffic") loadUsage();
-  }, [tab, loadUsage]);
+    if (tab === "monitoring" && monitorView === "traffic") loadUsage();
+  }, [tab, monitorView, loadUsage]);
 
   const refreshClientData = useCallback(() => {
     setRefreshKey((value) => value + 1);
     loadRemnaUser();
     loadDevices();
-    if (tab === "traffic") loadUsage();
+    if (tab === "monitoring" && monitorView === "traffic") loadUsage();
     void onClientChanged().catch(() => {});
-  }, [loadDevices, loadRemnaUser, loadUsage, onClientChanged, tab]);
+  }, [loadDevices, loadRemnaUser, loadUsage, monitorView, onClientChanged, tab]);
 
   const changeTab = useCallback((value: string) => {
     setTab(value);
     setMountedTabs((current) => current.has(value) ? current : new Set(current).add(value));
+  }, []);
+
+  const changeMonitorView = useCallback((value: string) => {
+    setMonitorView(value);
+    const key = `monitor:${value}`;
+    setMountedTabs((current) => current.has(key) ? current : new Set(current).add(key));
+  }, []);
+
+  const changeManageView = useCallback((value: string) => {
+    setManageView(value);
+    const key = `manage:${value}`;
+    setMountedTabs((current) => current.has(key) ? current : new Set(current).add(key));
   }, []);
 
   const flatTariffs: TariffRecord[] = tariffCategories.flatMap((c) => c.tariffs ?? []);
@@ -1102,7 +1121,7 @@ function ClientEditModal({
 
   return (
     <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="left-0 top-0 flex h-[100dvh] w-screen max-w-none translate-x-0 translate-y-0 grid-cols-[minmax(0,1fr)] flex-col gap-0 overflow-hidden rounded-none border-white/10 bg-background/95 p-0 shadow-2xl backdrop-blur-3xl sm:left-[50%] sm:top-[50%] sm:h-[min(900px,calc(100dvh-2rem))] sm:w-[calc(100vw-2rem)] sm:max-w-5xl sm:translate-x-[-50%] sm:translate-y-[-50%] sm:rounded-[2rem] [&>button]:z-50">
+      <DialogContent className="left-0 top-0 flex h-[100dvh] w-screen max-w-none translate-x-0 translate-y-0 grid-cols-[minmax(0,1fr)] flex-col gap-0 overflow-hidden rounded-none border-white/10 bg-background/95 p-0 shadow-2xl backdrop-blur-3xl sm:left-[50%] sm:top-[50%] sm:h-[min(860px,calc(100dvh-3rem))] sm:w-[calc(100vw-3rem)] sm:max-w-[1120px] sm:translate-x-[-50%] sm:translate-y-[-50%] sm:rounded-[1.5rem] [&>button]:z-50">
         <div className="absolute top-0 right-0 w-[500px] h-[300px] bg-primary/10 blur-[100px] pointer-events-none rounded-full" />
         <div className="absolute bottom-0 left-0 w-[400px] h-[300px] bg-purple-500/10 blur-[100px] pointer-events-none rounded-full" />
         <div className="relative z-10 shrink-0 border-b border-white/10 bg-white/5 p-3 pr-12 sm:p-6 sm:pr-14">
@@ -1148,7 +1167,7 @@ function ClientEditModal({
 
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
 
-        {editing.remnawaveUuid && remnaUser && (
+        {tab === "__legacy" && editing.remnawaveUuid && remnaUser && (
           <div className="px-3 sm:px-6 pt-4 relative z-10">
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
               <div className="rounded-[1.5rem] bg-gradient-to-br from-foreground/[0.03] to-foreground/[0.05] dark:from-white/5 dark:to-white/10 border border-white/10 p-5 space-y-1.5 hover:from-foreground/[0.05] hover:to-foreground/[0.07] dark:hover:from-white/[0.08] dark:hover:to-white/[0.12] transition-colors">
@@ -1198,47 +1217,126 @@ function ClientEditModal({
 
         <div className="relative z-10 min-w-0 px-3 pb-6 pt-4 sm:px-6">
           <Tabs value={tab} onValueChange={changeTab}>
-            <TabsList className="sticky top-0 z-20 flex w-full flex-nowrap justify-start overflow-x-auto rounded-xl border border-white/5 bg-background/95 p-1 shadow-sm backdrop-blur-xl">
-              <TabsTrigger value="profile" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                <User className="h-3.5 w-3.5" /> {t("admin.clients.info")}
+            <TabsList className="sticky top-0 z-20 grid w-full grid-cols-4 rounded-xl border border-white/5 bg-background/95 p-1 shadow-sm backdrop-blur-xl">
+              <TabsTrigger value="overview" className="gap-1.5 rounded-lg px-2 text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md">
+                <User className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Обзор</span>
               </TabsTrigger>
-              {/* после унификации Client.remnawaveUuid может быть null,
-                  но у клиента есть Subscription[0].remnawaveUuid. Показываем вкладки если ЕСТЬ
-                  хоть одна подписка с remnawaveUuid (включая primary). */}
-              {/* вкладка «Подписки» заменила «Remna».
-                  Данные Remna / Лимиты / Сквады / Быстрые действия теперь per-subscription.
-                  Вкладка «Действия» оставлена для МАССОВЫХ операций (применяются ко ВСЕМ подпискам). */}
-              {/* показываем вкладки и если у клиента есть подписки БЕЗ
-                  remna (например, migrate_inactive не создаёт Remna user — он добавляется при
-                  первой покупке). Иначе кнопка «Открыть детально» в инлайн-блоке switch'ала
-                  на несуществующий tab. */}
               <TabsTrigger value="subscriptions" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                <Package className="h-3.5 w-3.5" /> Подписки
+                <Package className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Подписки</span>
               </TabsTrigger>
-              <TabsTrigger value="devices" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                <Smartphone className="h-3.5 w-3.5" /> {t("admin.clients.devices")}
-                {devicesTotal > 0 && <span className="ml-1 rounded-full bg-primary/10 px-1.5 text-[10px] font-bold text-primary">{devicesTotal}</span>}
+              <TabsTrigger value="monitoring" className="gap-1.5 rounded-lg px-2 text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md">
+                <Activity className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Мониторинг</span>
               </TabsTrigger>
-              <TabsTrigger value="actions" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                <Activity className="h-3.5 w-3.5" /> {t("admin.clients.actions")}
+              <TabsTrigger value="management" className="gap-1.5 rounded-lg px-2 text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md">
+                <KeyRound className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Управление</span>
               </TabsTrigger>
-              <TabsTrigger value="traffic" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                <Wifi className="h-3.5 w-3.5" /> Трафик
-              </TabsTrigger>
-              <TabsTrigger value="activity" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                <History className="h-3.5 w-3.5" /> Активность
-              </TabsTrigger>
-              {canManageServices && (
-                <TabsTrigger value="services" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                  <Gift className="h-3.5 w-3.5" /> Услуги
-                </TabsTrigger>
-              )}
             </TabsList>
 
+            <TabsContent value="overview" keepMounted={mountedTabs.has("overview")}>
+              {editing.remnawaveUuid && remnaUser && (
+                <section className="mb-4 grid grid-cols-2 divide-x divide-y divide-white/10 overflow-hidden rounded-2xl border border-white/10 bg-foreground/[0.03] lg:grid-cols-4 lg:divide-y-0">
+                  <div className="p-3 sm:p-4"><span className="block text-[10px] uppercase text-muted-foreground">Статус</span><span className="mt-1 flex items-center gap-1.5 text-sm font-semibold"><span className={cn("h-2 w-2 rounded-full", isOnline ? "bg-emerald-500" : "bg-muted-foreground")} />{isOnline ? "Онлайн" : "Оффлайн"}</span></div>
+                  <div className="p-3 sm:p-4"><span className="block text-[10px] uppercase text-muted-foreground">Трафик</span><span className="mt-1 block text-sm font-semibold">{formatTrafficBytes(trafficUsed)}</span><span className="text-[10px] text-muted-foreground">{trafficLimit > 0 ? `из ${formatTrafficBytes(trafficLimit)}` : "Безлимит"}</span></div>
+                  <div className="p-3 sm:p-4"><span className="block text-[10px] uppercase text-muted-foreground">Устройства</span><span className="mt-1 block text-sm font-semibold">{devicesTotal} / {remnaUser.hwidDeviceLimit ?? "—"}</span></div>
+                  <div className="p-3 sm:p-4"><span className="block text-[10px] uppercase text-muted-foreground">Последний вход</span><span className="mt-1 block text-xs font-medium">{onlineAt ? fmtMsk(onlineAt) : "Нет данных"}</span></div>
+                </section>
+              )}
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+                <ClientSubsOverviewBlock clientId={editing.id} token={token} refreshKey={refreshKey} onChanged={refreshClientData} />
+                <section className="rounded-2xl border border-white/10 bg-foreground/[0.03] p-4">
+                  <h3 className="text-sm font-semibold">Что нужно сделать?</h3>
+                  <div className="mt-3 grid gap-2">
+                    <Button className="justify-start gap-2 rounded-xl" onClick={() => changeTab("subscriptions")}>
+                      <Package className="h-4 w-4" /> Управлять подпиской
+                    </Button>
+                    <Button variant="outline" className="justify-start gap-2 rounded-xl" onClick={() => changeTab("monitoring")}>
+                      <Activity className="h-4 w-4" /> Посмотреть активность
+                    </Button>
+                    <Button variant="outline" className="justify-start gap-2 rounded-xl" onClick={() => changeTab("management")}>
+                      <KeyRound className="h-4 w-4" /> Изменить клиента
+                    </Button>
+                  </div>
+                </section>
+              </div>
+
+              <section className="mt-4 grid gap-3 rounded-2xl border border-white/10 bg-background/40 p-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <div><span className="block text-xs text-muted-foreground">Email</span><span className="break-all">{editing.email || "—"}</span></div>
+                <div><span className="block text-xs text-muted-foreground">Telegram</span><span>{editing.telegramUsername ? `@${editing.telegramUsername}` : editing.telegramId || "—"}</span></div>
+                <div><span className="block text-xs text-muted-foreground">Баланс</span><span>{editing.balance} {editing.preferredCurrency?.toUpperCase()}</span></div>
+                <div><span className="block text-xs text-muted-foreground">Рефералы</span><span>{editing._count?.referrals ?? 0}</span></div>
+              </section>
+            </TabsContent>
+
+            <TabsContent value="subscriptions" keepMounted={mountedTabs.has("subscriptions")}>
+              <div className="space-y-4">
+                <section className="rounded-2xl border border-primary/20 bg-primary/[0.06] p-4 sm:p-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <Label>Выдать или заменить тариф</Label>
+                      <select
+                        className="h-10 w-full rounded-xl border border-input bg-background/80 px-3 text-sm"
+                        value={selectedGrantTariffId}
+                        onChange={(event) => {
+                          setSelectedGrantTariffId(event.target.value);
+                          setSelectedGrantOptionId("");
+                        }}
+                        disabled={grantLoading}
+                      >
+                        <option value="">Выберите тариф</option>
+                        {tariffCategories.map((category) => (
+                          <optgroup key={category.id} label={category.name}>
+                            {(category.tariffs ?? []).map((tariff) => <option key={tariff.id} value={tariff.id}>{tariff.name}</option>)}
+                          </optgroup>
+                        ))}
+                      </select>
+                    </div>
+                    {selectedGrantTariffId && (() => {
+                      const options = flatTariffs.find((item) => item.id === selectedGrantTariffId)?.priceOptions ?? [];
+                      if (options.length < 2) return null;
+                      return (
+                        <div className="min-w-0 flex-1 space-y-1.5">
+                          <Label>Период</Label>
+                          <select className="h-10 w-full rounded-xl border border-input bg-background/80 px-3 text-sm" value={selectedGrantOptionId} onChange={(event) => setSelectedGrantOptionId(event.target.value)}>
+                            <option value="">По умолчанию</option>
+                            {[...options].sort((a, b) => a.durationDays - b.durationDays).map((option) => <option key={option.id} value={option.id}>{option.durationDays} дн. · {option.price}</option>)}
+                          </select>
+                        </div>
+                      );
+                    })()}
+                    <Button className="h-10 shrink-0 gap-2 rounded-xl" onClick={handleGrantTariff} disabled={!selectedGrantTariffId || grantLoading}>
+                      {grantLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Gift className="h-4 w-4" />}
+                      Выдать тариф
+                    </Button>
+                  </div>
+
+                  <details className="mt-3 text-sm">
+                    <summary className="cursor-pointer text-xs text-muted-foreground">Дополнительные параметры</summary>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                      <div className="space-y-1.5"><Label>Трафик, GB</Label><Input type="number" min={0} value={grantTrafficGb} onChange={(event) => setGrantTrafficGb(event.target.value)} placeholder="По тарифу" /></div>
+                      <div className="space-y-1.5"><Label>Срок, дней</Label><Input type="number" min={1} max={3650} value={grantCustomDays} onChange={(event) => setGrantCustomDays(event.target.value)} placeholder="По тарифу" /></div>
+                      <div className="space-y-1.5"><Label>Комментарий</Label><Input value={grantNote} onChange={(event) => setGrantNote(event.target.value)} placeholder="Необязательно" maxLength={500} /></div>
+                    </div>
+                  </details>
+                  {grantMessage && <p className={cn("mt-3 text-xs", grantMessage.type === "ok" ? "text-emerald-500" : "text-destructive")}>{grantMessage.text}</p>}
+                </section>
+
+                <ClientSubscriptionsTab clientId={editing.id} token={token} tariffs={flatTariffs} refreshKey={refreshKey} onChanged={refreshClientData} />
+              </div>
+            </TabsContent>
+
+            <TabsContent value="management" keepMounted={mountedTabs.has("management")}>
+              <Tabs value={manageView} onValueChange={changeManageView}>
+                <TabsList className="flex w-full justify-start gap-1 overflow-x-auto rounded-xl bg-foreground/[0.03] p-1">
+                  <TabsTrigger value="profile" className="shrink-0 rounded-lg text-xs"><User className="h-3.5 w-3.5" /> Профиль</TabsTrigger>
+                  <TabsTrigger value="devices" className="shrink-0 rounded-lg text-xs"><Smartphone className="h-3.5 w-3.5" /> Устройства {devicesTotal > 0 && `· ${devicesTotal}`}</TabsTrigger>
+                  {canManageServices && <TabsTrigger value="services" className="shrink-0 rounded-lg text-xs"><Gift className="h-3.5 w-3.5" /> Услуги</TabsTrigger>}
+                  <TabsTrigger value="actions" className="shrink-0 rounded-lg text-xs"><Zap className="h-3.5 w-3.5" /> Системные действия</TabsTrigger>
+                </TabsList>
+
             {/* ────── Профиль ────── */}
-            <TabsContent value="profile" keepMounted={mountedTabs.has("profile")}>
+            <TabsContent value="profile" keepMounted={mountedTabs.has("manage:profile")}>
               <div className="space-y-5">
-                <details className="group space-y-3 rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/10 to-purple-500/10 p-4 text-sm sm:p-5">
+                <details className="hidden">
                   <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
                     <Gift className="h-4 w-4 text-primary" />
                     {t("admin.clients.grant_tariff_title", "Выдать тариф")}
@@ -1451,7 +1549,7 @@ function ClientEditModal({
                     {t("admin.clients.info")}
                     <span className="ml-auto normal-case tracking-normal group-open:hidden">Показать реквизиты</span>
                   </summary>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1.5">
+                  <div className="grid grid-cols-1 gap-x-8 gap-y-1.5 sm:grid-cols-2 [&>div]:min-w-0 [&>div]:gap-3 [&>div>span:last-child]:break-all [&>div>span:last-child]:text-right">
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Email</span>
                       <span>{editing.email || "—"}</span>
@@ -1589,59 +1687,38 @@ function ClientEditModal({
                       onChange={(e) => setEditForm((f) => ({ ...f, balance: Number(e.target.value) || 0 }))}
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label>{t("admin.clients.referral_percent")}</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={editForm.referralPercent ?? ""}
-                      onChange={(e) =>
-                        setEditForm((f) => ({
-                          ...f,
-                          referralPercent: e.target.value === "" ? undefined : Number(e.target.value),
-                        }))
-                      }
-                      placeholder={t("admin.clients.referral_default")}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="flex items-center gap-2">
-                      {t("admin.clients.personal_discount")}
-                      <span className="text-[11px] font-normal text-muted-foreground">
-                        {t("admin.clients.personal_discount_hint")}
-                      </span>
-                    </Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={100}
-                      step="0.1"
-                      value={editForm.personalDiscountPercent ?? ""}
-                      onChange={(e) =>
-                        setEditForm((f) => ({
-                          ...f,
-                          personalDiscountPercent: e.target.value === "" ? undefined : Number(e.target.value),
-                        }))
-                      }
-                      placeholder={t("admin.clients.personal_discount_placeholder")}
-                    />
-                    {/* чекбокс одноразовости. */}
-                    <label className="flex items-start gap-2 cursor-pointer text-xs text-muted-foreground pt-1">
-                      <input
-                        type="checkbox"
-                        checked={editForm.personalDiscountIsOneTime ?? false}
-                        onChange={(e) =>
-                          setEditForm((f) => ({ ...f, personalDiscountIsOneTime: e.target.checked }))
-                        }
-                        className="mt-0.5 h-3.5 w-3.5 rounded border-white/20 bg-background/60 accent-primary"
-                      />
-                      <span>
-                        🎁 Одноразовая — сгорит после первой продуктовой покупки
-                        {editing.personalDiscountIsOneTime ? <span className="ml-1 text-amber-400">(сейчас активна)</span> : null}
-                      </span>
-                    </label>
-                  </div>
+                  <details className="rounded-xl border border-white/10 bg-background/40 p-3 sm:col-span-2">
+                    <summary className="cursor-pointer text-sm font-medium">Продажи и реферальные настройки</summary>
+                    <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>{t("admin.clients.referral_percent")}</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={editForm.referralPercent ?? ""}
+                          onChange={(e) => setEditForm((f) => ({ ...f, referralPercent: e.target.value === "" ? undefined : Number(e.target.value) }))}
+                          placeholder={t("admin.clients.referral_default")}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>{t("admin.clients.personal_discount")}</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={100}
+                          step="0.1"
+                          value={editForm.personalDiscountPercent ?? ""}
+                          onChange={(e) => setEditForm((f) => ({ ...f, personalDiscountPercent: e.target.value === "" ? undefined : Number(e.target.value) }))}
+                          placeholder={t("admin.clients.personal_discount_placeholder")}
+                        />
+                        <label className="flex cursor-pointer items-start gap-2 pt-1 text-xs text-muted-foreground">
+                          <input type="checkbox" checked={editForm.personalDiscountIsOneTime ?? false} onChange={(e) => setEditForm((f) => ({ ...f, personalDiscountIsOneTime: e.target.checked }))} className="mt-0.5 h-3.5 w-3.5 accent-primary" />
+                          Одноразовая скидка на следующую покупку
+                        </label>
+                      </div>
+                    </div>
+                  </details>
                   <div className="space-y-2 flex items-end gap-2">
                     <label className="flex items-center gap-2">
                       <input
@@ -1731,7 +1808,7 @@ function ClientEditModal({
                 Заменили старую вкладку «Remna» (client-scoped). Теперь для каждой
                 подписки клиента (primary + secondary) свой блок с собственными
                 Данными Remna, Лимитами, Сквадами и Быстрыми действиями. */}
-            <TabsContent value="subscriptions" keepMounted={mountedTabs.has("subscriptions")}>
+            <TabsContent value="subscriptions" keepMounted={false}>
               <div className="space-y-4">
                 <ClientSubsOverviewBlock clientId={editing.id} token={token} refreshKey={refreshKey} onChanged={refreshClientData} />
                 <ClientSubscriptionsTab
@@ -1745,19 +1822,19 @@ function ClientEditModal({
             </TabsContent>
 
             {/* ────── Устройства (T-tabs-rework, 13.05.2026): со ВСЕХ подписок ────── */}
-            <TabsContent value="devices" keepMounted={mountedTabs.has("devices")}>
+            <TabsContent value="devices" keepMounted={mountedTabs.has("manage:devices")}>
               <ClientAllDevicesTab clientId={editing.id} token={token} refreshKey={refreshKey} onChanged={refreshClientData} />
             </TabsContent>
 
             {/* ────── Услуги (T-admin-services, портировано из WolfVPN) ────── */}
             {canManageServices && (
-              <TabsContent value="services" keepMounted={mountedTabs.has("services")}>
+              <TabsContent value="services" keepMounted={mountedTabs.has("manage:services")}>
                 <ClientServicesTab clientId={editing.id} token={token} refreshKey={refreshKey} onChanged={refreshClientData} />
               </TabsContent>
             )}
 
             {/* ────── Действия ────── */}
-            <TabsContent value="actions" keepMounted={mountedTabs.has("actions")}>
+            <TabsContent value="actions" keepMounted={mountedTabs.has("manage:actions")}>
               <div className="space-y-5">
                   {/* массовые операции — здесь, не сверху диалога. */}
                   <ClientBulkActionsPanel
@@ -1773,11 +1850,22 @@ function ClientEditModal({
 
               </div>
             </TabsContent>
-            <TabsContent value="traffic" keepMounted={mountedTabs.has("traffic")}>
-              <ClientTrafficTab clientId={editing.id} token={token} usageData={usageData} refreshKey={refreshKey} active={tab === "traffic"} />
+              </Tabs>
             </TabsContent>
-            <TabsContent value="activity" keepMounted={mountedTabs.has("activity")}>
-              <ClientActivityTab clientId={editing.id} token={token} refreshKey={refreshKey} />
+
+            <TabsContent value="monitoring" keepMounted={mountedTabs.has("monitoring")}>
+              <Tabs value={monitorView} onValueChange={changeMonitorView}>
+                <TabsList className="grid w-full grid-cols-2 rounded-xl bg-foreground/[0.03] p-1">
+                  <TabsTrigger value="activity" className="rounded-lg text-xs"><History className="h-3.5 w-3.5" /> История</TabsTrigger>
+                  <TabsTrigger value="traffic" className="rounded-lg text-xs"><Wifi className="h-3.5 w-3.5" /> Сессии и трафик</TabsTrigger>
+                </TabsList>
+                <TabsContent value="activity" keepMounted={mountedTabs.has("monitor:activity")}>
+                  <ClientActivityTab clientId={editing.id} token={token} refreshKey={refreshKey} />
+                </TabsContent>
+                <TabsContent value="traffic" keepMounted={mountedTabs.has("monitor:traffic")}>
+                  <ClientTrafficTab clientId={editing.id} token={token} usageData={usageData} refreshKey={refreshKey} active={tab === "monitoring" && monitorView === "traffic"} />
+                </TabsContent>
+              </Tabs>
             </TabsContent>
           </Tabs>
         </div>
@@ -1805,18 +1893,22 @@ function ClientTrafficTab({
   const [loading, setLoading] = useState(true);
   const [activeOnly, setActiveOnly] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestRef = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     setError(null);
     try {
       const response = await api.getClientSessions(token, clientId, { active: activeOnly, limit: 100 });
+      if (requestId !== requestRef.current) return;
       setSessions(response.sessions);
       setRequestLogs(response.requestLogs);
     } catch (e) {
+      if (requestId !== requestRef.current) return;
       setError(e instanceof Error ? e.message : "Не удалось загрузить подключения");
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) setLoading(false);
     }
   }, [activeOnly, clientId, token]);
 
@@ -1831,14 +1923,14 @@ function ClientTrafficTab({
   const chartMax = Math.max(...chartData, 1);
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div>
           <h3 className="font-semibold text-sm">Монитор подключений</h3>
           <p className="text-[11px] text-muted-foreground">Обновляется только пока открыта эта вкладка.</p>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
           <select
-            className="h-8 rounded-lg border border-white/10 bg-background/70 px-2 text-xs"
+            className="h-8 min-w-0 flex-1 rounded-lg border border-white/10 bg-background/70 px-2 text-xs sm:flex-none"
             value={activeOnly ? "active" : "all"}
             onChange={(event) => setActiveOnly(event.target.value === "active")}
           >
@@ -1910,17 +2002,21 @@ function ClientActivityTab({ clientId, token, refreshKey = 0 }: { clientId: stri
   const [detail, setDetail] = useState<{ events: TimelineEvent[]; stats: Record<string, number> } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestRef = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     setError(null);
     try {
       const response = await botConversationsApi.detail(token, clientId);
+      if (requestId !== requestRef.current) return;
       setDetail({ events: response.events, stats: response.stats });
     } catch (e) {
+      if (requestId !== requestRef.current) return;
       setError(e instanceof Error ? e.message : "Не удалось загрузить активность");
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) setLoading(false);
     }
   }, [clientId, token]);
 
@@ -1928,12 +2024,12 @@ function ClientActivityTab({ clientId, token, refreshKey = 0 }: { clientId: stri
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <div>
           <h3 className="font-semibold text-sm">Активность клиента</h3>
           <p className="text-[11px] text-muted-foreground">Оплаты, рассылки, тикеты, подарки и действия администратора.</p>
         </div>
-        <Button variant="ghost" size="sm" className="ml-auto h-8 gap-1" onClick={() => load()} disabled={loading}>
+        <Button variant="ghost" size="sm" className="h-8 w-full gap-1 sm:ml-auto sm:w-auto" onClick={() => load()} disabled={loading}>
           <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} /> Обновить
         </Button>
       </div>
