@@ -185,7 +185,7 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, tarif
     }
   }
 
-  async function runAction(successLabel: string, fn: () => Promise<unknown>, refresh = true) {
+  async function runAction(successLabel: string, fn: () => Promise<unknown>, refresh = true): Promise<boolean> {
     setActionMsg(null);
     try {
       const response = await fn();
@@ -197,19 +197,23 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, tarif
         : `✅ ${successLabel}`);
       if (refresh) await loadRemna();
       onChanged?.();
+      return true;
     } catch (e) {
       setActionMsg(`❌ ${e instanceof Error ? e.message : "Ошибка"}`);
+      return false;
     }
   }
 
   async function squadAdd(uuid: string) {
-    await runAction("Сквад добавлен", () => api.subscriptionRemnaSquadAdd(token, subscription.id, uuid));
-    setActiveSquads((prev) => (prev.includes(uuid) ? prev : [...prev, uuid]));
+    if (await runAction("Сквад добавлен", () => api.subscriptionRemnaSquadAdd(token, subscription.id, uuid))) {
+      setActiveSquads((prev) => (prev.includes(uuid) ? prev : [...prev, uuid]));
+    }
   }
 
   async function squadRemove(uuid: string) {
-    await runAction("Сквад удалён", () => api.subscriptionRemnaSquadRemove(token, subscription.id, uuid));
-    setActiveSquads((prev) => prev.filter((u) => u !== uuid));
+    if (await runAction("Сквад удалён", () => api.subscriptionRemnaSquadRemove(token, subscription.id, uuid))) {
+      setActiveSquads((prev) => prev.filter((u) => u !== uuid));
+    }
   }
 
   async function grantQuota(gb: number, scope: "CURRENT_PERIOD" | "WHILE_TARIFF_ACTIVE") {

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useAuth } from "@/contexts/auth";
 import {
   api,
@@ -7,7 +7,6 @@ import {
   type UpdateClientRemnaPayload,
   type RemnaUserFull,
   type RemnaUserUsageResponse,
-  type AdminClientSubscriptionItem,
   type TariffCategoryWithTariffs,
   type TariffRecord,
 } from "@/lib/api";
@@ -31,8 +30,9 @@ import {
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
-import { clientsBulkApi, type BulkClientAction } from "@/lib/admin-extras-api";
+import { botConversationsApi, clientsBulkApi, type BulkClientAction, type TimelineEvent } from "@/lib/admin-extras-api";
 import { ClientSubscriptionsTab } from "@/components/admin/client-subscriptions-tab";
+import { ClientTimeline } from "@/components/admin/client-timeline";
 import { fmtMsk, fmtMskDate } from "@/lib/datetime";
 import { usePageVisibility } from "@/hooks/use-page-visibility";
 
@@ -81,6 +81,21 @@ function initialClientPageSize(): number {
   return value === 50 || value === 100 ? value : 20;
 }
 
+function clientEditForm(client: ClientRecord): UpdateClientPayload & Partial<UpdateClientRemnaPayload> {
+  return {
+    email: client.email ?? undefined,
+    preferredLang: client.preferredLang,
+    preferredCurrency: client.preferredCurrency,
+    balance: client.balance,
+    isBlocked: client.isBlocked,
+    blockReason: client.blockReason ?? undefined,
+    referralPercent: client.referralPercent ?? undefined,
+    personalDiscountPercent: client.personalDiscountPercent ?? undefined,
+    personalDiscountIsOneTime: client.personalDiscountIsOneTime ?? false,
+    trialUsed: client.trialUsed,
+  };
+}
+
 export function ClientsPage() {
   const pageVisible = usePageVisibility();
   const { t } = useTranslation();
@@ -103,7 +118,8 @@ export function ClientsPage() {
   const [filterSubscription, setFilterSubscription] = useState<"all" | "any" | "active">("all");
   const [filterTariffId, setFilterTariffId] = useState("");
   const [filterSubscriptionType, setFilterSubscriptionType] = useState<"all" | "trial" | "regular" | "gifted" | "received">("all");
-  const [filterTariffs, setFilterTariffs] = useState<{ id: string; name: string }[]>([]);
+  const [tariffCategories, setTariffCategories] = useState<TariffCategoryWithTariffs[]>([]);
+  const filterTariffs = tariffCategories.flatMap((category) => (category.tariffs ?? []).map((tariff) => ({ id: tariff.id, name: tariff.name })));
 
   // ─── Bulk-actions state ───────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -121,6 +137,7 @@ export function ClientsPage() {
     lastConnectedNode: string | null;
     lastConnectedAt: string | null;
   }>>({});
+  const loadRequest = useRef(0);
 
   const token = state.accessToken!;
 
@@ -130,8 +147,8 @@ export function ClientsPage() {
 
   useEffect(() => {
     api.getTariffCategories(token)
-      .then((response) => setFilterTariffs(response.items.flatMap((category) => (category.tariffs ?? []).map((tariff) => ({ id: tariff.id, name: tariff.name })))))
-      .catch(() => setFilterTariffs([]));
+      .then((response) => setTariffCategories(response.items ?? []))
+      .catch(() => setTariffCategories([]));
   }, [token]);
 
   useEffect(() => {
@@ -148,21 +165,27 @@ export function ClientsPage() {
     window.history.replaceState(null, "", `${window.location.pathname}?${query.toString()}`);
   }, [pageSize]);
 
-  const loadClients = () => {
-    setLoading(true);
+  const loadClients = useCallback(async (silent = false) => {
+    const requestId = ++loadRequest.current;
+    if (!silent) setLoading(true);
     const isBlocked =
       filterBlocked === "blocked" ? true : filterBlocked === "active" ? false : undefined;
-    api.getClients(token, page, pageSize, {
-      search: searchApplied || undefined,
-      isBlocked,
-      subscription: filterSubscription,
-      tariffId: filterTariffId || undefined,
-      subscriptionType: filterSubscriptionType,
-    }).then((r) => {
+    try {
+      const r = await api.getClients(token, page, pageSize, {
+        search: searchApplied || undefined,
+        isBlocked,
+        subscription: filterSubscription,
+        tariffId: filterTariffId || undefined,
+        subscriptionType: filterSubscriptionType,
+      });
+      if (requestId !== loadRequest.current) return;
       setData({ items: r.items, total: r.total });
-      setLoading(false);
-    }).catch(() => setLoading(false));
-  };
+    } catch {
+      // Existing rows stay visible during a transient refresh failure.
+    } finally {
+      if (requestId === loadRequest.current) setLoading(false);
+    }
+  }, [filterBlocked, filterSubscription, filterSubscriptionType, filterTariffId, page, pageSize, searchApplied, token]);
 
   // ─── Bulk-actions helpers ─────────────────────────────────────────────
   const allRowIds = (data?.items ?? []).map((c) => c.id);
@@ -242,8 +265,8 @@ export function ClientsPage() {
   }
 
   useEffect(() => {
-    loadClients();
-  }, [token, page, pageSize, searchApplied, filterBlocked, filterSubscription, filterTariffId, filterSubscriptionType]);
+    void loadClients();
+  }, [loadClients]);
 
   useEffect(() => {
     const uuids = Array.from(new Set(data?.items
@@ -267,20 +290,18 @@ export function ClientsPage() {
 
   function openEdit(c: ClientRecord) {
     setEditing(c);
-    setEditForm({
-      email: c.email ?? undefined,
-      preferredLang: c.preferredLang,
-      preferredCurrency: c.preferredCurrency,
-      balance: c.balance,
-      isBlocked: c.isBlocked,
-      blockReason: c.blockReason ?? undefined,
-      referralPercent: c.referralPercent ?? undefined,
-      personalDiscountPercent: c.personalDiscountPercent ?? undefined,
-      personalDiscountIsOneTime: c.personalDiscountIsOneTime ?? false,
-      trialUsed: c.trialUsed,
-    });
+    setEditForm(clientEditForm(c));
     setActionMessage(null);
   }
+
+  const editingId = editing?.id;
+  const refreshEditingClient = useCallback(async () => {
+    if (!editingId) return;
+    const updated = await api.getClientDetail(token, editingId);
+    setEditing(updated);
+    setEditForm(clientEditForm(updated));
+    await loadClients(true);
+  }, [editingId, loadClients, token]);
 
   async function saveClient() {
     if (!editing) return;
@@ -300,22 +321,9 @@ export function ClientsPage() {
         trialUsed: editForm.trialUsed,
       });
       setEditing(updated);
-      // Пересоздаём форму из обновлённых данных, иначе input'ы (привязанные к editForm)
-      // показали бы пустые значения после save, и нужно было бы переоткрыть карточку.
-      setEditForm({
-        email: updated.email ?? undefined,
-        preferredLang: updated.preferredLang,
-        preferredCurrency: updated.preferredCurrency,
-        balance: updated.balance,
-        isBlocked: updated.isBlocked,
-        blockReason: updated.blockReason ?? undefined,
-        referralPercent: updated.referralPercent ?? undefined,
-        personalDiscountPercent: updated.personalDiscountPercent ?? undefined,
-        personalDiscountIsOneTime: updated.personalDiscountIsOneTime ?? false,
-        trialUsed: updated.trialUsed,
-      });
+      setEditForm(clientEditForm(updated));
       setActionMessage(t("admin.clients.saved"));
-      loadClients();
+      await loadClients(true);
     } catch (e) {
       setActionMessage(e instanceof Error ? e.message : t("admin.clients.error"));
     } finally {
@@ -404,7 +412,7 @@ export function ClientsPage() {
             </div>
           </div>
         </div>
-        <Button variant="ghost" size="icon" onClick={loadClients} disabled={loading} className="relative h-9 w-9 rounded-full hover:bg-foreground/[0.06] dark:hover:bg-white/10">
+        <Button variant="ghost" size="icon" onClick={() => void loadClients()} disabled={loading} className="relative h-9 w-9 rounded-full hover:bg-foreground/[0.06] dark:hover:bg-white/10">
           <RefreshCw className={cn("h-4 w-4 text-muted-foreground transition-all", loading && "animate-[spin_1.5s_linear_infinite] text-primary")} />
         </Button>
       </motion.div>
@@ -860,6 +868,8 @@ export function ClientsPage() {
           passwordMessage={passwordMessage}
           savingPassword={savingPassword}
           token={token}
+          onClientChanged={refreshEditingClient}
+          tariffCategories={tariffCategories}
         />
       )}
     </div>
@@ -882,6 +892,8 @@ function ClientEditModal({
   token,
   activeLanguages,
   activeCurrencies,
+  onClientChanged,
+  tariffCategories,
 }: {
   client: ClientRecord;
   editForm: UpdateClientPayload & Partial<UpdateClientRemnaPayload>;
@@ -898,12 +910,15 @@ function ClientEditModal({
   passwordMessage: string | null;
   savingPassword: boolean;
   token: string;
+  onClientChanged: () => Promise<void>;
+  tariffCategories: TariffCategoryWithTariffs[];
 }) {
   const { t } = useTranslation();
   const { state } = useAuth();
   // T-admin-services (портировано из WolfVPN): доступ к вкладке «Услуги» — ADMIN или action manage_services.
   const canManageServices = state.admin?.role === "ADMIN" || (Array.isArray(state.admin?.allowedSections) && state.admin.allowedSections.includes("action:manage_services"));
   const [tab, setTab] = useState("profile");
+  const [mountedTabs, setMountedTabs] = useState(() => new Set(["profile"]));
   const [refreshKey, setRefreshKey] = useState(0);
   const [remnaUser, setRemnaUser] = useState<RemnaUserFull | null>(null);
   const [, setRemnaLoading] = useState(false);
@@ -917,17 +932,6 @@ function ClientEditModal({
   const [referrerSaving, setReferrerSaving] = useState(false);
   const [referrerMessage, setReferrerMessage] = useState<string | null>(null);
   const [usageData, setUsageData] = useState<RemnaUserUsageResponse["response"] | null>(null);
-  // раньше тут грузили через getSecondarySubscriptions(search=clientId).
-  // Этот endpoint был для глобальной страницы /admin/secondary-subscriptions и работал
-  // через text-search по нескольким полям — для мигрированных клиентов случались
-  // false-negatives (показывало «У клиента ещё нет подписок» когда subs в DB были).
-  // Теперь используем дедикатед /admin/clients/:id/subscriptions — точный фильтр по
-  // ownerId + giftedToClientId, возвращает ВСЕ subs клиента (включая root index=0).
-  const [secondarySubs, setSecondarySubs] = useState<AdminClientSubscriptionItem[]>([]);
-  const [secondarySubsLoading, setSecondarySubsLoading] = useState(false);
-  const primarySubscriptionUrl = secondarySubs.find((subscription) => subscription.isPrimary)?.subscriptionUrl ?? null;
-
-  const [tariffCategories, setTariffCategories] = useState<TariffCategoryWithTariffs[]>([]);
   const [selectedGrantTariffId, setSelectedGrantTariffId] = useState<string>("");
   // Выбранная опция длительности из priceOptions выбранного тарифа
   const [selectedGrantOptionId, setSelectedGrantOptionId] = useState<string>("");
@@ -963,14 +967,6 @@ function ClientEditModal({
       setUsageData(d.response ?? null);
     }).catch(() => {});
   }, [token, editing.id, editing.remnawaveUuid]);
-
-  const loadSecondarySubs = useCallback(() => {
-    setSecondarySubsLoading(true);
-    api.getClientSubscriptionsList(token, editing.id)
-      .then((r) => setSecondarySubs(r.items ?? []))
-      .catch(() => setSecondarySubs([]))
-      .finally(() => setSecondarySubsLoading(false));
-  }, [token, editing.id]);
 
   // догружаем реферера (список клиентов его не отдаёт).
   const loadReferrer = useCallback(() => {
@@ -1012,9 +1008,8 @@ function ClientEditModal({
   useEffect(() => {
     loadRemnaUser();
     loadDevices();
-    loadSecondarySubs();
     loadReferrer();
-  }, [loadRemnaUser, loadDevices, loadSecondarySubs, loadReferrer]);
+  }, [loadRemnaUser, loadDevices, loadReferrer]);
 
   // Тяжёлая статистика нужна только на вкладке «Трафик».
   useEffect(() => {
@@ -1025,17 +1020,14 @@ function ClientEditModal({
     setRefreshKey((value) => value + 1);
     loadRemnaUser();
     loadDevices();
-    loadSecondarySubs();
     if (tab === "traffic") loadUsage();
-  }, [loadDevices, loadRemnaUser, loadSecondarySubs, loadUsage, tab]);
+    void onClientChanged().catch(() => {});
+  }, [loadDevices, loadRemnaUser, loadUsage, onClientChanged, tab]);
 
-  useEffect(() => {
-    let cancelled = false;
-    api.getTariffCategories(token)
-      .then((r) => { if (!cancelled) setTariffCategories(r.items ?? []); })
-      .catch(() => { /* ignore */ });
-    return () => { cancelled = true; };
-  }, [token]);
+  const changeTab = useCallback((value: string) => {
+    setTab(value);
+    setMountedTabs((current) => current.has(value) ? current : new Set(current).add(value));
+  }, []);
 
   const flatTariffs: TariffRecord[] = tariffCategories.flatMap((c) => c.tariffs ?? []);
 
@@ -1110,14 +1102,14 @@ function ClientEditModal({
 
   return (
     <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="w-[calc(100vw-1rem)] max-w-4xl max-h-[calc(100dvh-1rem)] overflow-y-auto p-0 gap-0 bg-background/90 backdrop-blur-3xl border-white/10 shadow-2xl rounded-2xl sm:rounded-[2rem] [&>button]:z-50">
+      <DialogContent className="left-0 top-0 flex h-[100dvh] w-screen max-w-none translate-x-0 translate-y-0 grid-cols-[minmax(0,1fr)] flex-col gap-0 overflow-hidden rounded-none border-white/10 bg-background/95 p-0 shadow-2xl backdrop-blur-3xl sm:left-[50%] sm:top-[50%] sm:h-[min(900px,calc(100dvh-2rem))] sm:w-[calc(100vw-2rem)] sm:max-w-5xl sm:translate-x-[-50%] sm:translate-y-[-50%] sm:rounded-[2rem] [&>button]:z-50">
         <div className="absolute top-0 right-0 w-[500px] h-[300px] bg-primary/10 blur-[100px] pointer-events-none rounded-full" />
         <div className="absolute bottom-0 left-0 w-[400px] h-[300px] bg-purple-500/10 blur-[100px] pointer-events-none rounded-full" />
-        <div className="p-4 sm:p-6 border-b border-white/10 relative z-10 bg-white/5">
+        <div className="relative z-10 shrink-0 border-b border-white/10 bg-white/5 p-3 pr-12 sm:p-6 sm:pr-14">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-primary/20 to-purple-500/20 border border-white/10 flex items-center justify-center shadow-inner shrink-0">
-                <User className="h-6 w-6 text-primary" />
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-gradient-to-br from-primary/20 to-purple-500/20 shadow-inner sm:h-12 sm:w-12 sm:rounded-2xl">
+                <User className="h-5 w-5 text-primary sm:h-6 sm:w-6" />
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1154,9 +1146,11 @@ function ClientEditModal({
           </DialogHeader>
         </div>
 
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
+
         {editing.remnawaveUuid && remnaUser && (
           <div className="px-3 sm:px-6 pt-4 relative z-10">
-            <div className="grid grid-cols-1 min-[420px]:grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
               <div className="rounded-[1.5rem] bg-gradient-to-br from-foreground/[0.03] to-foreground/[0.05] dark:from-white/5 dark:to-white/10 border border-white/10 p-5 space-y-1.5 hover:from-foreground/[0.05] hover:to-foreground/[0.07] dark:hover:from-white/[0.08] dark:hover:to-white/[0.12] transition-colors">
                 <div className="text-[11px] text-muted-foreground uppercase tracking-wider">{t("admin.clients.traffic")}</div>
                 <div className="text-lg font-bold">{formatTrafficBytes(trafficUsed)}</div>
@@ -1202,9 +1196,9 @@ function ClientEditModal({
           </div>
         )}
 
-        <div className="px-3 sm:px-6 pt-4 pb-6 relative z-10">
-          <Tabs value={tab} onValueChange={setTab}>
-            <TabsList className="w-full flex flex-nowrap justify-start overflow-x-auto bg-foreground/[0.04] dark:bg-white/[0.04] border border-white/5 rounded-xl p-1">
+        <div className="relative z-10 min-w-0 px-3 pb-6 pt-4 sm:px-6">
+          <Tabs value={tab} onValueChange={changeTab}>
+            <TabsList className="sticky top-0 z-20 flex w-full flex-nowrap justify-start overflow-x-auto rounded-xl border border-white/5 bg-background/95 p-1 shadow-sm backdrop-blur-xl">
               <TabsTrigger value="profile" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
                 <User className="h-3.5 w-3.5" /> {t("admin.clients.info")}
               </TabsTrigger>
@@ -1242,13 +1236,14 @@ function ClientEditModal({
             </TabsList>
 
             {/* ────── Профиль ────── */}
-            <TabsContent value="profile">
+            <TabsContent value="profile" keepMounted={mountedTabs.has("profile")}>
               <div className="space-y-5">
-                <div className="rounded-[1.5rem] bg-gradient-to-br from-primary/10 to-purple-500/10 border border-primary/20 p-5 space-y-3 text-sm">
-                  <div className="flex items-center gap-2 font-semibold text-sm">
+                <details className="group space-y-3 rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/10 to-purple-500/10 p-4 text-sm sm:p-5">
+                  <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
                     <Gift className="h-4 w-4 text-primary" />
                     {t("admin.clients.grant_tariff_title", "Выдать тариф")}
-                  </div>
+                    <span className="ml-auto text-xs text-muted-foreground group-open:hidden">Открыть форму</span>
+                  </summary>
                   <p className="text-xs text-muted-foreground">
                     {t("admin.clients.grant_tariff_hint", "Активирует выбранный тариф для клиента без оплаты. Будет создана запись платежа со статусом PAID и суммой 0. Реферальные бонусы не начисляются.")}
                   </p>
@@ -1449,10 +1444,13 @@ function ClientEditModal({
                       {grantMessage.text}
                     </div>
                   )}
-                </div>
+                </details>
 
-                <div className="rounded-[1.5rem] bg-gradient-to-br from-background/80 to-background/40 border border-white/10 p-5 space-y-3 text-sm hover:bg-white/5 transition-colors">
-                  <div className="font-medium text-xs uppercase tracking-wider text-muted-foreground mb-2">{t("admin.clients.info")}</div>
+                <details className="group space-y-3 rounded-2xl border border-white/10 bg-background/50 p-4 text-sm sm:p-5">
+                  <summary className="mb-2 flex cursor-pointer list-none items-center text-xs font-medium uppercase tracking-wider text-muted-foreground [&::-webkit-details-marker]:hidden">
+                    {t("admin.clients.info")}
+                    <span className="ml-auto normal-case tracking-normal group-open:hidden">Показать реквизиты</span>
+                  </summary>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1.5">
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Email</span>
@@ -1509,11 +1507,11 @@ function ClientEditModal({
                           <span className="text-muted-foreground text-xs">не привязан</span>
                         )}
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex flex-col gap-2 sm:flex-row">
                         <select
                           value={referrerLookupBy}
                           onChange={(e) => setReferrerLookupBy(e.target.value as typeof referrerLookupBy)}
-                          className="h-9 rounded-lg border border-input bg-background px-2 text-xs shrink-0"
+                          className="h-9 w-full shrink-0 rounded-lg border border-input bg-background px-2 text-xs sm:w-auto"
                           disabled={referrerSaving}
                         >
                           <option value="referralCode">Реф. код</option>
@@ -1531,7 +1529,7 @@ function ClientEditModal({
                         <Button
                           type="button"
                           size="sm"
-                          className="h-9 shrink-0 rounded-lg"
+                          className="h-9 w-full shrink-0 rounded-lg sm:w-auto"
                           onClick={attachReferrer}
                           disabled={referrerSaving || !referrerInput.trim()}
                         >
@@ -1540,91 +1538,12 @@ function ClientEditModal({
                       </div>
                       {referrerMessage && <p className="text-[11px] text-muted-foreground">{referrerMessage}</p>}
                     </div>
-                    {primarySubscriptionUrl && (
-                      <div className="flex justify-between sm:col-span-2">
-                        <span className="text-muted-foreground flex items-center gap-1"><Link className="h-3 w-3" /> {t("admin.clients.subscription")}</span>
-                        <span className="flex items-center gap-1 max-w-[60%]">
-                          <code className="text-xs truncate">{primarySubscriptionUrl}</code>
-                          <CopyButton text={primarySubscriptionUrl} />
-                        </span>
-                      </div>
-                    )}
                   </div>
-                </div>
+                </details>
 
-                <div className="rounded-[1.5rem] bg-gradient-to-br from-background/80 to-background/40 border border-white/10 p-5 space-y-3 text-sm hover:bg-white/5 transition-colors">
-                  <div className="font-medium text-xs uppercase tracking-wider text-muted-foreground mb-2">
-                    Подписки клиента
-                  </div>
-                  {secondarySubsLoading ? (
-                    <div className="text-sm text-muted-foreground">{t("admin.clients.loading_short")}</div>
-                  ) : secondarySubs.length === 0 ? (
-                    <div className="text-sm text-muted-foreground">У клиента ещё нет подписок</div>
-                  ) : (
-                    <div className="space-y-2">
-                      {secondarySubs.map((s) => {
-                        const status =
-                          s.giftStatus === "GIFT_RESERVED"
-                            ? "Код создан"
-                            : s.giftStatus === "GIFTED"
-                              ? "Подарена"
-                              : "Активна";
-                        // relation теперь из ownerId/giftedToClientId
-                        // (endpoint /admin/clients/:id/subscriptions включает обе ветки).
-                        const relation = s.ownerId === editing.id ? "Владелец" : "Получатель";
-                        // помечаем подарочные подписки (purchasedAsGift=true)
-                        // в админке отдельным бейджем — чтобы админ сразу видел что это подарок, а не обычная подписка.
-                        const isGiftPurchase = s.purchasedAsGift === true;
-                        return (
-                          <div key={s.id} className={cn(
-                            "flex items-center justify-between rounded-xl border px-4 py-3 gap-3 transition-colors",
-                            isGiftPurchase
-                              ? "border-pink-500/30 bg-pink-500/[0.04] hover:bg-pink-500/[0.08]"
-                              : "border-white/10 bg-foreground/[0.03] dark:bg-white/[0.03] hover:bg-foreground/[0.06] dark:hover:bg-white/[0.08]"
-                          )}>
-                            <div className="min-w-0">
-                              <div className="text-xs font-medium flex items-center gap-1.5 flex-wrap">
-                                <span>
-                                  {s.isPrimary ? "Главная" : `#${s.subscriptionIndex}`} · {s.tariffName ?? "Тариф не указан"}
-                                </span>
-                                {isGiftPurchase && (
-                                  <span className="inline-flex items-center gap-1 rounded-md bg-pink-500/15 text-pink-400 border border-pink-500/30 px-1.5 py-0.5 text-[10px] font-semibold">
-                                    <Gift className="h-2.5 w-2.5" /> Подарочная
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-[11px] text-muted-foreground">
-                                {relation} · {status}
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                              {s.remnawaveUuid && (
-                                <span className="text-[10px] text-muted-foreground truncate max-w-[140px]" title={s.remnawaveUuid}>
-                                  {s.remnawaveUuid}
-                                </span>
-                              )}
-                              {/* раньше эта кнопка вела на
-                                  /admin/secondary-subscriptions?search=<sub.id>, но та страница
-                                  (legacy «secondary subs» admin) для unify-схемы возвращала 0
-                                  результатов и не имела управления root-подпиской. Теперь
-                                  переключаем на вкладку «Подписки» в этом же диалоге — там
-                                  per-subscription панель: лимиты, сквады, продление, удаление. */}
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setTab("subscriptions")}
-                              >
-                                Открыть детально
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-2">
+                <section className="rounded-2xl border border-white/10 bg-foreground/[0.02] p-4 sm:p-5">
+                  <h3 className="mb-4 text-sm font-semibold">Профиль и доступ</h3>
+                  <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label>Email</Label>
                     <Input
@@ -1751,23 +1670,25 @@ function ClientEditModal({
                       />
                     </div>
                   )}
-                </div>
+                  </div>
+                  {actionMessage && <p className="mt-3 text-sm text-muted-foreground">{actionMessage}</p>}
+                  <div className="sticky bottom-0 z-10 -mx-2 mt-4 border-t border-white/10 bg-background/95 p-2 backdrop-blur sm:static sm:m-0 sm:mt-4 sm:border-0 sm:bg-transparent sm:p-0">
+                    <Button
+                      onClick={onSave}
+                      disabled={saving}
+                      className="w-full rounded-xl border border-primary/30 bg-primary shadow-md shadow-primary/20 transition-all hover:bg-primary/90 sm:w-auto"
+                    >
+                      {saving ? t("admin.clients.saving") : t("admin.clients.save_profile")}
+                    </Button>
+                  </div>
+                </section>
 
-                {actionMessage && <p className="text-sm text-muted-foreground">{actionMessage}</p>}
-                <Button 
-                  onClick={onSave} 
-                  disabled={saving} 
-                  className="rounded-xl bg-primary hover:bg-primary/90 shadow-md shadow-primary/20 border border-primary/30 transition-all"
-                >
-                  {saving ? t("admin.clients.saving") : t("admin.clients.save_profile")}
-                </Button>
-
-                <hr />
-                <div>
-                  <h3 className="font-semibold mb-2 flex items-center gap-2 text-sm">
+                <details className="rounded-2xl border border-white/10 bg-background/40 p-4">
+                  <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
                     <KeyRound className="h-4 w-4" /> {t("admin.clients.cabinet_password")}
-                  </h3>
-                  <div className="grid gap-3 sm:grid-cols-2">
+                    <span className="ml-auto text-xs font-normal text-muted-foreground">Изменить</span>
+                  </summary>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <Input
                       type="password"
                       value={passwordForm.newPassword}
@@ -1795,10 +1716,14 @@ function ClientEditModal({
                   >
                     {savingPassword ? t("admin.clients.saving") : t("admin.clients.set_password")}
                   </Button>
-                </div>
+                </details>
 
-                <hr />
-                <TariffRestrictionsSection clientId={editing.id} editing={editing} token={token} />
+                <details className="rounded-2xl border border-white/10 bg-background/40 p-4">
+                  <summary className="cursor-pointer list-none text-sm font-semibold [&::-webkit-details-marker]:hidden">Ограничения тарифов</summary>
+                  <div className="mt-4">
+                    <TariffRestrictionsSection clientId={editing.id} editing={editing} token={token} />
+                  </div>
+                </details>
               </div>
             </TabsContent>
 
@@ -1806,9 +1731,9 @@ function ClientEditModal({
                 Заменили старую вкладку «Remna» (client-scoped). Теперь для каждой
                 подписки клиента (primary + secondary) свой блок с собственными
                 Данными Remna, Лимитами, Сквадами и Быстрыми действиями. */}
-            <TabsContent value="subscriptions">
+            <TabsContent value="subscriptions" keepMounted={mountedTabs.has("subscriptions")}>
               <div className="space-y-4">
-                <ClientSubsOverviewBlock clientId={editing.id} token={token} refreshKey={refreshKey} />
+                <ClientSubsOverviewBlock clientId={editing.id} token={token} refreshKey={refreshKey} onChanged={refreshClientData} />
                 <ClientSubscriptionsTab
                   clientId={editing.id}
                   token={token}
@@ -1820,19 +1745,19 @@ function ClientEditModal({
             </TabsContent>
 
             {/* ────── Устройства (T-tabs-rework, 13.05.2026): со ВСЕХ подписок ────── */}
-            <TabsContent value="devices">
-              <ClientAllDevicesTab clientId={editing.id} token={token} />
+            <TabsContent value="devices" keepMounted={mountedTabs.has("devices")}>
+              <ClientAllDevicesTab clientId={editing.id} token={token} refreshKey={refreshKey} onChanged={refreshClientData} />
             </TabsContent>
 
             {/* ────── Услуги (T-admin-services, портировано из WolfVPN) ────── */}
             {canManageServices && (
-              <TabsContent value="services">
-                <ClientServicesTab clientId={editing.id} token={token} />
+              <TabsContent value="services" keepMounted={mountedTabs.has("services")}>
+                <ClientServicesTab clientId={editing.id} token={token} refreshKey={refreshKey} onChanged={refreshClientData} />
               </TabsContent>
             )}
 
             {/* ────── Действия ────── */}
-            <TabsContent value="actions">
+            <TabsContent value="actions" keepMounted={mountedTabs.has("actions")}>
               <div className="space-y-5">
                   {/* массовые операции — здесь, не сверху диалога. */}
                   <ClientBulkActionsPanel
@@ -1848,13 +1773,14 @@ function ClientEditModal({
 
               </div>
             </TabsContent>
-            <TabsContent value="traffic">
-              <ClientTrafficTab clientId={editing.id} token={token} usageData={usageData} refreshKey={refreshKey} />
+            <TabsContent value="traffic" keepMounted={mountedTabs.has("traffic")}>
+              <ClientTrafficTab clientId={editing.id} token={token} usageData={usageData} refreshKey={refreshKey} active={tab === "traffic"} />
             </TabsContent>
-            <TabsContent value="activity">
+            <TabsContent value="activity" keepMounted={mountedTabs.has("activity")}>
               <ClientActivityTab clientId={editing.id} token={token} refreshKey={refreshKey} />
             </TabsContent>
           </Tabs>
+        </div>
         </div>
       </DialogContent>
     </Dialog>
@@ -1866,11 +1792,13 @@ function ClientTrafficTab({
   token,
   usageData,
   refreshKey = 0,
+  active,
 }: {
   clientId: string;
   token: string;
   usageData: RemnaUserUsageResponse["response"] | null;
   refreshKey?: number;
+  active: boolean;
 }) {
   const [sessions, setSessions] = useState<import("@/lib/api").ClientSessionItem[]>([]);
   const [requestLogs, setRequestLogs] = useState<{ available: boolean; reason?: string } | null>(null);
@@ -1893,10 +1821,11 @@ function ClientTrafficTab({
   }, [activeOnly, clientId, token]);
 
   useEffect(() => {
+    if (!active) return;
     load();
     const interval = window.setInterval(load, 30000);
     return () => window.clearInterval(interval);
-  }, [load, refreshKey]);
+  }, [active, load, refreshKey]);
 
   const chartData = usageData?.sparklineData ?? [];
   const chartMax = Math.max(...chartData, 1);
@@ -1978,19 +1907,16 @@ function ClientTrafficTab({
 }
 
 function ClientActivityTab({ clientId, token, refreshKey = 0 }: { clientId: string; token: string; refreshKey?: number }) {
-  const [items, setItems] = useState<import("@/lib/api").ClientActivityItem[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [kind, setKind] = useState("");
+  const [detail, setDetail] = useState<{ events: TimelineEvent[]; stats: Record<string, number> } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async (cursor?: string, append = false) => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await api.getClientActivity(token, clientId, { limit: 100, cursor });
-      setItems((current) => append ? [...current, ...response.items] : response.items);
-      setNextCursor(response.nextCursor);
+      const response = await botConversationsApi.detail(token, clientId);
+      setDetail({ events: response.events, stats: response.stats });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось загрузить активность");
     } finally {
@@ -1998,44 +1924,25 @@ function ClientActivityTab({ clientId, token, refreshKey = 0 }: { clientId: stri
     }
   }, [clientId, token]);
 
-  useEffect(() => { load(); }, [load, refreshKey]);
+  useEffect(() => { void load(); }, [load, refreshKey]);
 
-  const kinds = [...new Set(items.map((item) => item.kind))];
-  const visible = kind ? items.filter((item) => item.kind === kind) : items;
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex items-center gap-2">
         <div>
           <h3 className="font-semibold text-sm">Активность клиента</h3>
-          <p className="text-[11px] text-muted-foreground">Админские действия, изменения подписок и операции с клиентом.</p>
+          <p className="text-[11px] text-muted-foreground">Оплаты, рассылки, тикеты, подарки и действия администратора.</p>
         </div>
-        <select className="ml-auto h-8 rounded-lg border border-white/10 bg-background/70 px-2 text-xs" value={kind} onChange={(event) => setKind(event.target.value)}>
-          <option value="">Все события</option>
-          {kinds.map((value) => <option key={value} value={value}>{value}</option>)}
-        </select>
-        <Button variant="ghost" size="sm" className="h-8 gap-1" onClick={() => load()} disabled={loading}>
+        <Button variant="ghost" size="sm" className="ml-auto h-8 gap-1" onClick={() => load()} disabled={loading}>
           <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} /> Обновить
         </Button>
       </div>
       {error && <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
-      {!loading && visible.length === 0 && <div className="rounded-2xl border border-dashed border-white/15 p-8 text-center text-sm text-muted-foreground">Событий пока нет.</div>}
-      <div className="space-y-2">
-        {visible.map((item) => (
-          <div key={item.id} className="rounded-xl border border-white/10 bg-foreground/[0.03] p-3">
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="font-semibold">{item.kind}</span>
-              <span className="text-muted-foreground">{fmtMsk(item.createdAt)}</span>
-              <span className="ml-auto text-muted-foreground">{item.actorId ?? "система"}</span>
-            </div>
-            {item.payload && <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words text-[10px] text-muted-foreground">{JSON.stringify(item.payload, null, 2)}</pre>}
-          </div>
-        ))}
-      </div>
-      {nextCursor && !kind && (
-        <Button variant="outline" size="sm" className="w-full rounded-xl" onClick={() => load(nextCursor, true)} disabled={loading}>
-          {loading ? "Загрузка…" : "Загрузить ещё"}
-        </Button>
-      )}
+      {loading && !detail ? (
+        <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
+      ) : detail ? (
+        <ClientTimeline events={detail.events} stats={detail.stats} compact />
+      ) : null}
     </div>
   );
 }
@@ -2351,7 +2258,7 @@ function TariffRestrictionsSection({ clientId, editing, token }: { clientId: str
 }
 
 // T-admin-services (портировано из WolfVPN): вкладка «Услуги» — выдать/забрать доп. устройства подписке.
-function ClientServicesTab({ clientId, token }: { clientId: string; token: string }) {
+function ClientServicesTab({ clientId, token, refreshKey, onChanged }: { clientId: string; token: string; refreshKey: number; onChanged: () => void }) {
   const [items, setItems] = useState<import("@/lib/api").ClientServiceItem[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -2368,7 +2275,7 @@ function ClientServicesTab({ clientId, token }: { clientId: string; token: strin
       .catch(() => setItems(null))
       .finally(() => setLoading(false));
   }, [token, clientId]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshKey]);
 
   const linkedSubs = (items ?? []).filter((s) => s.linked);
 
@@ -2378,7 +2285,7 @@ function ClientServicesTab({ clientId, token }: { clientId: string; token: strin
     try {
       await api.grantClientDevices(token, clientId, { subscriptionId: grantSubId, deviceCount: grantCount, monthlyPrice: Math.max(0, grantPrice) });
       setGrantOpen(false); setGrantCount(1); setGrantPrice(0); setGrantSubId("");
-      load();
+      onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось выдать услугу");
     } finally { setBusy(null); }
@@ -2389,7 +2296,7 @@ function ClientServicesTab({ clientId, token }: { clientId: string; token: strin
     setBusy(subId); setError("");
     try {
       await api.removeClientServiceDevices(token, clientId, subId);
-      load();
+      onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось забрать услугу");
     } finally { setBusy(null); }
@@ -2502,7 +2409,7 @@ function ClientServicesTab({ clientId, token }: { clientId: string; token: strin
   );
 }
 
-function ClientAllDevicesTab({ clientId, token }: { clientId: string; token: string }) {
+function ClientAllDevicesTab({ clientId, token, refreshKey, onChanged }: { clientId: string; token: string; refreshKey: number; onChanged: () => void }) {
   const { t } = useTranslation();
   const [data, setData] = useState<import("@/lib/api").ClientAllDevicesResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -2515,7 +2422,7 @@ function ClientAllDevicesTab({ clientId, token }: { clientId: string; token: str
       .finally(() => setLoading(false));
   }, [token, clientId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshKey]);
 
   const deleteDevice = async (subId: string, uuid: string | null, hwid: string) => {
     if (!uuid) return;
@@ -2525,7 +2432,7 @@ function ClientAllDevicesTab({ clientId, token }: { clientId: string; token: str
       // если устройство с primary; иначе — через прямой Remna-uuid (надо отдельный endpoint).
       // Для минимального решения — оставляем через clientId — работает для primary subscription.
       await api.deleteClientRemnaDevice(token, clientId, hwid);
-      load();
+      onChanged();
     } catch (e) {
       alert(e instanceof Error ? e.message : t("admin.clients.delete_error"));
     }
@@ -2637,7 +2544,7 @@ function ClientAllDevicesTab({ clientId, token }: { clientId: string; token: str
 // сводка по всем подпискам клиента.
 // Показывает компактную таблицу — для каждой подписки строка с remna-метриками.
 // ─────────────────────────────────────────────────────────────────────────────
-function ClientSubsOverviewBlock({ clientId, token, refreshKey = 0 }: { clientId: string; token: string; refreshKey?: number }) {
+function ClientSubsOverviewBlock({ clientId, token, refreshKey = 0, onChanged }: { clientId: string; token: string; refreshKey?: number; onChanged: () => void }) {
   const { t } = useTranslation();
   const [data, setData] = useState<import("@/lib/api").ClientSubsOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -2676,7 +2583,7 @@ function ClientSubsOverviewBlock({ clientId, token, refreshKey = 0 }: { clientId
       setExtendDone(`Подписка продлена на ${r.tariff.durationDays} дн. (${r.tariff.name})`);
       setExtendFor(null);
       setExtendNote("");
-      load();
+      onChanged();
       setTimeout(() => setExtendDone(null), 4000);
     } catch (e) {
       setExtendError(e instanceof Error ? e.message : "Ошибка продления");
@@ -2694,7 +2601,7 @@ function ClientSubsOverviewBlock({ clientId, token, refreshKey = 0 }: { clientId
       setExtendDone(`Remna-юзер привязан как подписка #${r.subscriptionIndex}`);
       setAttachOpen(false);
       setAttachQuery("");
-      load();
+      onChanged();
       setTimeout(() => setExtendDone(null), 4000);
     } catch (e) {
       setAttachError(e instanceof Error ? e.message : "Ошибка привязки");
