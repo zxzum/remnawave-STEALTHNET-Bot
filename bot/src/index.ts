@@ -122,9 +122,10 @@ async function waitForApi(maxRetries = 10, delayMs = 3000): Promise<Awaited<Retu
 
 async function createBotWithProxy(token: string): Promise<Bot> {
   try {
-    const cfg = await waitForApi();
-    if (cfg?.proxyEnabled && cfg?.proxyTelegram && cfg?.proxyUrl?.trim()) {
-      const url = cfg.proxyUrl.trim();
+    const envProxy = process.env.TELEGRAM_PROXY?.trim();
+    const cfg = envProxy ? null : await waitForApi();
+    const url = envProxy || (cfg?.proxyEnabled && cfg?.proxyTelegram ? cfg.proxyUrl?.trim() : "");
+    if (url) {
       const lower = url.toLowerCase();
       if (lower.startsWith("http://") || lower.startsWith("https://")) {
         console.log("[Proxy] Telegram Bot API через HTTP прокси");

@@ -140,6 +140,9 @@ services:
       BOT_TOKEN: "${BOT_TOKEN:-}"
       API_URL: "http://api:5000"
       SUPPORT_BOT_USERNAME: "${SUPPORT_BOT_USERNAME:-stealthnet_support_bot}"
+      TELEGRAM_PROXY: "${TELEGRAM_PROXY:-}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       api:
         condition: service_healthy
