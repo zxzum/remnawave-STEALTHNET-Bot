@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { Component, lazy as reactLazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from "react-router-dom";
 
 const routerFutureFlags = {
@@ -21,6 +21,65 @@ import CabinetProfile from "@/cabinet/pages/Profile";
 import { CustomBuild, ExtraOptions, Gifts, ProxyService, SingboxService, Tickets } from "@/cabinet/pages/Services";
 import { Layout as ClientLayout } from "@/cabinet/components/Layout";
 import { AppProvider as ClientAppProvider, useApp as useClientApp } from "@/cabinet/store/AppContext";
+
+const lazyRouteRetryKey = "__stealthnet_lazy_route_retry__";
+
+function shouldRetryLazyRoute() {
+  if (typeof window === "undefined") return false;
+
+  try {
+    const lastAttempt = Number(window.sessionStorage.getItem(lazyRouteRetryKey) ?? 0);
+    if (Date.now() - lastAttempt < 60_000) return false;
+    window.sessionStorage.setItem(lazyRouteRetryKey, String(Date.now()));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function lazy<T extends React.ComponentType<any>>(loader: () => Promise<{ default: T }>) {
+  return reactLazy(async () => {
+    try {
+      return await loader();
+    } catch (error) {
+      // ponytail: one reload per minute prevents an infinite loop on a persistently broken chunk.
+      if (shouldRetryLazyRoute()) {
+        window.location.reload();
+        await new Promise<never>(() => {});
+      }
+      throw error;
+    }
+  });
+}
+
+class LazyRouteErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+
+  static getDerivedStateFromError(error: unknown) {
+    return { error: error instanceof Error ? error : new Error("Не удалось загрузить раздел") };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error("[admin] lazy route failed", error);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+
+    return (
+      <div className="min-h-48 flex flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+        <p>Не удалось загрузить раздел.</p>
+        <button
+          type="button"
+          className="rounded-lg border border-white/10 px-3 py-2 hover:bg-white/5"
+          onClick={() => window.location.reload()}
+        >
+          Повторить
+        </button>
+      </div>
+    );
+  }
+}
 
 const LoginPage = lazy(() => import("@/pages/login").then(({ LoginPage }) => ({ default: LoginPage })));
 const ChangePasswordPage = lazy(() => import("@/pages/change-password").then(({ ChangePasswordPage }) => ({ default: ChangePasswordPage })));
@@ -199,7 +258,8 @@ function AppRoutes() {
 
   return (
     <Suspense fallback={lazyPageFallback}>
-      <Routes>
+      <LazyRouteErrorBoundary>
+        <Routes>
       {/* Главная: лендинг (если включён в настройках) или редирект в кабинет */}
       <Route path="/" element={<RootRoute />} />
       <Route path="/offer" element={<LegalOfferPage />} />
@@ -368,7 +428,8 @@ function AppRoutes() {
       </Route>
       {/* Всё неизвестное тоже ведём в кабинет */}
       <Route path="*" element={<Navigate to="/cabinet" replace />} />
-      </Routes>
+        </Routes>
+      </LazyRouteErrorBoundary>
     </Suspense>
   );
 }
