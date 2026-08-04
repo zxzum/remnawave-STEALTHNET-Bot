@@ -53,24 +53,20 @@ botConversationsRouter.get(
     const q = parsed.data?.q?.trim();
     const limit = parsed.data?.limit ?? 50;
 
-    const where: Prisma.ClientWhereInput = q
-      ? {
-          OR: [
-            { telegramUsername: { contains: q, mode: "insensitive" } },
-            { telegramId: { contains: q } },
-            { email: { contains: q, mode: "insensitive" } },
-          ],
-        }
-      : {};
+    const where: Prisma.ClientWhereInput = {
+      telegramId: { not: null },
+      ...(q ? {
+        OR: [
+          { telegramUsername: { contains: q, mode: "insensitive" as const } },
+          { telegramId: { contains: q } },
+          { email: { contains: q, mode: "insensitive" as const } },
+        ],
+      } : {}),
+    };
 
     // Берём клиентов у кого была активность за последние 30 дней
     const items = await prisma.client.findMany({
-      where: {
-        ...where,
-        OR: [
-          { telegramId: { not: null } }, // имеет TG-аккаунт
-        ],
-      },
+      where,
       orderBy: { updatedAt: "desc" },
       take: limit,
       select: {
@@ -138,16 +134,43 @@ botConversationsRouter.get(
       detail: client.telegramUsername ? `@${client.telegramUsername}` : client.email ?? client.telegramId ?? "—",
     });
 
+    const [payments, autoLogs, tickets, gifts, adminEvents] = await Promise.all([
+      prisma.payment.findMany({
+        where: { clientId },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+        select: {
+          id: true, status: true, amount: true, currency: true, provider: true,
+          createdAt: true, paidAt: true, tariffId: true,
+        },
+      }),
+      prisma.autoBroadcastLog.findMany({
+        where: { clientId },
+        orderBy: { sentAt: "desc" },
+        take: 50,
+        include: { rule: { select: { name: true, channel: true, triggerType: true } } },
+      }),
+      prisma.ticket.findMany({
+        where: { clientId },
+        orderBy: { createdAt: "desc" },
+        take: 30,
+        include: { messages: { orderBy: { createdAt: "asc" }, take: 50 } },
+      }),
+      prisma.giftHistory.findMany({
+        where: { clientId },
+        orderBy: { createdAt: "desc" },
+        take: 30,
+        select: { id: true, eventType: true, createdAt: true, metadata: true },
+      }),
+      prisma.adminEvent.findMany({
+        where: { targetType: "client", targetId: clientId },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+        select: { id: true, kind: true, actorId: true, payload: true, createdAt: true },
+      }),
+    ]);
+
     // 2. Payments
-    const payments = await prisma.payment.findMany({
-      where: { clientId },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-      select: {
-        id: true, status: true, amount: true, currency: true, provider: true,
-        createdAt: true, paidAt: true, tariffId: true,
-      },
-    });
     for (const p of payments) {
       const ts = (p.paidAt ?? p.createdAt).toISOString();
       let kind: TimelineEvent["kind"] = "payment_failed";
@@ -166,12 +189,6 @@ botConversationsRouter.get(
     }
 
     // 3. Auto-broadcast logs
-    const autoLogs = await prisma.autoBroadcastLog.findMany({
-      where: { clientId },
-      orderBy: { sentAt: "desc" },
-      take: 50,
-      include: { rule: { select: { name: true, channel: true, triggerType: true } } },
-    });
     for (const l of autoLogs) {
       events.push({
         ts: l.sentAt.toISOString(),
@@ -183,12 +200,6 @@ botConversationsRouter.get(
     }
 
     // 4. Tickets + messages
-    const tickets = await prisma.ticket.findMany({
-      where: { clientId },
-      orderBy: { createdAt: "desc" },
-      take: 30,
-      include: { messages: { orderBy: { createdAt: "asc" }, take: 50 } },
-    });
     for (const t of tickets) {
       events.push({
         ts: t.createdAt.toISOString(),
@@ -210,12 +221,6 @@ botConversationsRouter.get(
     }
 
     // 5. Gift history
-    const gifts = await prisma.giftHistory.findMany({
-      where: { clientId },
-      orderBy: { createdAt: "desc" },
-      take: 30,
-      select: { id: true, eventType: true, createdAt: true, metadata: true },
-    });
     for (const g of gifts) {
       events.push({
         ts: g.createdAt.toISOString(),
@@ -226,12 +231,6 @@ botConversationsRouter.get(
     }
 
     // 6. Admin events targeting this client
-    const adminEvents = await prisma.adminEvent.findMany({
-      where: { targetType: "client", targetId: clientId },
-      orderBy: { createdAt: "desc" },
-      take: 50,
-      select: { id: true, kind: true, actorId: true, payload: true, createdAt: true },
-    });
     for (const a of adminEvents) {
       events.push({
         ts: a.createdAt.toISOString(),

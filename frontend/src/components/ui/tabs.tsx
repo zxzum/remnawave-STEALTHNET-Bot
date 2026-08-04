@@ -27,6 +27,7 @@ export function Tabs({
 export function TabsList({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
     <div
+      role="tablist"
       className={cn(
         "inline-flex h-10 items-center justify-center rounded-xl bg-muted/60 p-1.5 text-muted-foreground gap-0.5",
         className
@@ -47,10 +48,15 @@ export function TabsTrigger({
   children: React.ReactNode;
 }) {
   const ctx = React.useContext(TabsContext);
+  const isActive = ctx?.value === value;
+  const ref = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => {
+    if (isActive) ref.current?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [isActive]);
   if (!ctx) return null;
-  const isActive = ctx.value === value;
   return (
     <button
+      ref={ref}
       type="button"
       role="tab"
       aria-selected={isActive}
@@ -70,15 +76,20 @@ export function TabsContent({
   value,
   className,
   children,
+  keepMounted = false,
 }: {
   value: string;
   className?: string;
   children: React.ReactNode;
+  keepMounted?: boolean;
 }) {
   const ctx = React.useContext(TabsContext);
-  if (!ctx || ctx.value !== value) return null;
+  if (!ctx || (!keepMounted && ctx.value !== value)) return null;
   return (
-    <div className={cn("mt-4 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2", className)}>
+    <div
+      hidden={ctx.value !== value}
+      className={cn("mt-4 min-w-0 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2", className)}
+    >
       {children}
     </div>
   );

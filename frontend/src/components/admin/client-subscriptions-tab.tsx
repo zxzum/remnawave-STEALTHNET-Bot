@@ -36,9 +36,12 @@ export function ClientSubscriptionsTab({ clientId, token, tariffs = [], refreshK
     try {
       const res = await api.getClientSubscriptionsList(token, clientId);
       setItems(res.items);
-      // Раскрываем primary по умолчанию.
-      const primary = res.items.find((s) => s.isPrimary);
-      if (primary) setExpanded(new Set([primary.id]));
+      setExpanded((current) => {
+        const ids = new Set(res.items.map((item) => item.id));
+        const kept = new Set([...current].filter((id) => ids.has(id)));
+        const primary = res.items.find((item) => item.isPrimary);
+        return kept.size > 0 || !primary ? kept : new Set([primary.id]);
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка загрузки подписок");
     } finally {
@@ -109,7 +112,7 @@ export function ClientSubscriptionsTab({ clientId, token, tariffs = [], refreshK
           >
             <button
               onClick={() => toggle(sub.id)}
-              className="w-full flex items-center justify-between gap-3 px-3 sm:px-4 py-3 hover:bg-white/[0.04] transition-colors text-left"
+              className="flex w-full flex-col items-start justify-between gap-2 px-3 py-3 text-left transition-colors hover:bg-white/[0.04] sm:flex-row sm:items-center sm:px-4"
             >
               <div className="flex items-center gap-3 min-w-0">
                 {isOpen ? (
@@ -139,7 +142,7 @@ export function ClientSubscriptionsTab({ clientId, token, tariffs = [], refreshK
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
+              <div className="flex items-center gap-3 pl-7 text-xs text-muted-foreground sm:shrink-0 sm:pl-0">
                 {sub.expireAt && (
                   <span title={`Истекает: ${fmtMsk(sub.expireAt)}`}>
                     до {fmtMskDate(sub.expireAt)}
@@ -160,10 +163,9 @@ export function ClientSubscriptionsTab({ clientId, token, tariffs = [], refreshK
                   token={token}
                   remnaSquads={remnaSquads}
                   tariffs={tariffs}
-                  onChanged={() => {
-                    reload();
-                    onChanged?.();
-                  }}
+              onChanged={() => {
+                onChanged?.();
+              }}
                 />
               </div>
             )}
