@@ -16,6 +16,23 @@ test("admin clients list is subscription-aware and supports subscription filters
   assert.match(route, /ownedSubscriptions/);
   assert.match(route, /receivedSubscriptions/);
   assert.match(route, /return \{ \.\.\.client, subscriptions, remnawaveUuids \}/);
+  assert.doesNotMatch(route, /activeInternalSquads\[0\]/);
+  assert.match(route, /req\.query\.tariffId/);
+  assert.match(route, /req\.query\.subscriptionType/);
+  assert.match(route, /subscriptionType === "received"/);
+  assert.match(source, /lastConnectedNodeUuid/);
+  assert.match(source, /lastConnectedNode/);
+});
+
+test("client monitoring and trial conversion routes are present", async () => {
+  const source = await readFile(adminUrl, "utf8");
+  assert.match(source, /adminRouter\.get\("\/clients\/:id\/sessions"/);
+  assert.match(source, /requestLogs: \{/);
+  assert.match(source, /adminRouter\.get\("\/clients\/:id\/activity"/);
+  assert.match(source, /redactAdminActivityPayload/);
+  assert.match(source, /adminRouter\.post\("\/subscriptions\/:subId\/convert-trial"/);
+  assert.match(source, /extendSecondarySubscription\(sub\.id/);
+  assert.match(source, /convertMode=true/);
 });
 
 test("empty clients keep all tabs and never render @null", async () => {
@@ -24,6 +41,12 @@ test("empty clients keep all tabs and never render @null", async () => {
   assert.doesNotMatch(source, /editing\.email \|\| editing\.telegramUsername \? `@\$\{editing\.telegramUsername\}`/);
   assert.match(source, /editing\.email/);
   assert.match(source, /`tg\$\{editing\.telegramId\}`/);
+  assert.match(source, /setSearchApplied\(search\)/);
+  assert.match(source, /pageSize/);
+  assert.match(source, /value=\{filterTariffId\}/);
+  assert.match(source, /value=\{filterSubscriptionType\}/);
+  assert.match(source, /value="traffic"/);
+  assert.match(source, /value="activity"/);
 });
 
 test("cabinet tariff cards distinguish unlimited VPN from local whitelist quota and use included devices", async () => {

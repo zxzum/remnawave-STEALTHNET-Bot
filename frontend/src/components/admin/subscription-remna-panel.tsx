@@ -19,6 +19,7 @@ import {
   type RemnaUserFull,
   type UpdateClientRemnaPayload,
   type AdminTrafficQuotaDetail,
+  type TariffRecord,
 } from "@/lib/api";
 import { fmtMsk, isoToMskInputValue, mskInputValueToIso } from "@/lib/datetime";
 import { Button } from "@/components/ui/button";
@@ -97,6 +98,7 @@ interface Props {
   subscription: AdminClientSubscriptionItem;
   token: string;
   remnaSquads: { uuid: string; name?: string }[];
+  tariffs: TariffRecord[];
   /** Вызывается после любого действия которое могло изменить состояние подписки/клиента (для refresh parent). */
   onChanged?: () => void;
 }
@@ -115,7 +117,7 @@ function unwrapRemnaUser(raw: unknown): RemnaUserFull | null {
   return null;
 }
 
-export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onChanged }: Props) {
+export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, tariffs, onChanged }: Props) {
   const [innerTab, setInnerTab] = useState<InnerTab>("overview");
   const [remnaUser, setRemnaUser] = useState<RemnaUserFull | null>(null);
   const [activeSquads, setActiveSquads] = useState<string[]>([]);
@@ -125,6 +127,9 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
   const [editForm, setEditForm] = useState<UpdateClientRemnaPayload>({});
   const [subscriptionUrl, setSubscriptionUrl] = useState(subscription.subscriptionUrl ?? "");
   const [quota, setQuota] = useState<AdminTrafficQuotaDetail | null>(null);
+  const [convertTariffId, setConvertTariffId] = useState("");
+  const [convertOptionId, setConvertOptionId] = useState("");
+  const [convertBusy, setConvertBusy] = useState(false);
 
   const loadRemna = useCallback(async () => {
     if (!subscription.remnawaveUuid) {
@@ -214,6 +219,29 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
   async function quotaAction(action: "suspend" | "resume") {
     await runAction(action === "suspend" ? "Квота приостановлена" : "Квота возобновлена", () => api.setSubscriptionTrafficQuotaStatus(token, subscription.id, action), false);
     api.getSubscriptionTrafficQuota(token, subscription.id).then(setQuota).catch(() => setQuota(null));
+  }
+
+  async function convertTrial() {
+    if (!subscription.isTrial || !convertTariffId) return;
+    const tariff = tariffs.find((item) => item.id === convertTariffId);
+    if (!tariff || !confirm(`Перевести trial в тариф «${tariff.name}»?`)) return;
+    setConvertBusy(true);
+    setActionMsg(null);
+    try {
+      const result = await api.convertTrialSubscription(token, subscription.id, {
+        tariffId: convertTariffId,
+        tariffPriceOptionId: convertOptionId || undefined,
+      });
+      setActionMsg(`✅ Trial переведён в «${result.tariff.name}» на ${result.tariff.durationDays} дн.`);
+      setConvertTariffId("");
+      setConvertOptionId("");
+      await loadRemna();
+      onChanged?.();
+    } catch (e) {
+      setActionMsg(`❌ ${e instanceof Error ? e.message : "Ошибка конвертации"}`);
+    } finally {
+      setConvertBusy(false);
+    }
   }
 
   // Нет привязки к Remna → плашка.
@@ -466,6 +494,43 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, onCha
         {/* ─── ДЕЙСТВИЯ (быстрые действия per-subscription) ───────────── */}
         <TabsContent value="actions" className="mt-3">
           <h3 className="font-semibold text-sm mb-3">Быстрые действия Remna</h3>
+          {subscription.isTrial && (
+            <div className="mb-4 rounded-2xl border border-violet-500/25 bg-violet-500/[0.06] p-4 space-y-3">
+              <div>
+                <div className="font-semibold text-sm text-violet-300">Перевести trial в обычную подписку</div>
+                <p className="text-[11px] text-muted-foreground mt-1">Данные Remna обновятся на выбранный тариф, списания не будет.</p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <select
+                  className="h-9 min-w-0 rounded-xl border border-white/10 bg-background/70 px-3 text-sm"
+                  value={convertTariffId}
+                  onChange={(event) => { setConvertTariffId(event.target.value); setConvertOptionId(""); }}
+                  disabled={convertBusy}
+                >
+                  <option value="">Выберите тариф</option>
+                  {tariffs.map((tariff) => <option key={tariff.id} value={tariff.id}>{tariff.name}</option>)}
+                </select>
+                {(() => {
+                  const tariff = tariffs.find((item) => item.id === convertTariffId);
+                  const options = tariff?.priceOptions ?? [];
+                  return options.length > 0 ? (
+                    <select
+                      className="h-9 min-w-0 rounded-xl border border-white/10 bg-background/70 px-3 text-sm"
+                      value={convertOptionId}
+                      onChange={(event) => setConvertOptionId(event.target.value)}
+                      disabled={convertBusy}
+                    >
+                      <option value="">Короткая опция</option>
+                      {options.map((option) => <option key={option.id} value={option.id}>{option.durationDays} дн. · {option.price}</option>)}
+                    </select>
+                  ) : null;
+                })()}
+              </div>
+              <Button size="sm" onClick={convertTrial} disabled={convertBusy || !convertTariffId} className="rounded-xl">
+                {convertBusy ? "Конвертируем…" : "Конвертировать trial"}
+              </Button>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <Button
               variant="outline"

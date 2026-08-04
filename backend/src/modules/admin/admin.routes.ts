@@ -1526,6 +1526,16 @@ adminRouter.get("/clients", async (req, res) => {
     const skip = (page - 1) * limit;
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
     const isBlockedParam = req.query.isBlocked;
+    const tariffId = typeof req.query.tariffId === "string" ? req.query.tariffId.trim() : "";
+    const subscriptionType = req.query.subscriptionType === "trial"
+      ? "trial"
+      : req.query.subscriptionType === "regular"
+        ? "regular"
+        : req.query.subscriptionType === "gifted"
+          ? "gifted"
+          : req.query.subscriptionType === "received"
+            ? "received"
+            : "all";
     const subscriptionFilter = req.query.subscription === "active"
       ? "active"
       : req.query.subscription === "any"
@@ -1553,6 +1563,29 @@ adminRouter.get("/clients", async (req, res) => {
       const subscriptionWhere: Prisma.SubscriptionWhereInput = subscriptionFilter === "active"
         ? { deletionRequestedAt: null, remnawaveUuid: { not: null }, expireAt: { gt: new Date() } }
         : { deletionRequestedAt: null };
+      conditions.push({
+        OR: [
+          { ownedSubscriptions: { some: subscriptionWhere } },
+          { receivedSubscriptions: { some: subscriptionWhere } },
+        ],
+      });
+    }
+    if (tariffId) {
+      conditions.push({
+        OR: [
+          { ownedSubscriptions: { some: { deletionRequestedAt: null, tariffId } } },
+          { receivedSubscriptions: { some: { deletionRequestedAt: null, tariffId } } },
+        ],
+      });
+    }
+    if (subscriptionType !== "all") {
+      const subscriptionWhere: Prisma.SubscriptionWhereInput = subscriptionType === "trial"
+        ? { deletionRequestedAt: null, trialId: { not: null } }
+        : subscriptionType === "regular"
+          ? { deletionRequestedAt: null, trialId: null, tariffId: { not: null }, purchasedAsGift: false, giftedToClientId: null }
+          : subscriptionType === "gifted"
+            ? { deletionRequestedAt: null, purchasedAsGift: true }
+            : { deletionRequestedAt: null, giftedToClientId: { not: null } };
       conditions.push({
         OR: [
           { ownedSubscriptions: { some: subscriptionWhere } },
@@ -1636,57 +1669,18 @@ adminRouter.get("/clients", async (req, res) => {
       ].filter((uuid): uuid is string => Boolean(uuid)))];
       return { ...client, subscriptions, remnawaveUuids };
     });
-    let items = baseItems.map((client) => ({ ...client, activeNode: null as string | null, onlineAt: null as string | null }));
+    const items = baseItems.map((client) => ({
+      ...client,
+      activeNode: null as string | null,
+      lastConnectedNode: null as string | null,
+      lastConnectedNodeUuid: null as string | null,
+      lastConnectedAt: null as string | null,
+      onlineAt: null as string | null,
+    }));
 
-    // Попробуем обогатить клиентов информацией об активной ноде и onlineAt из Remna
-    if (isRemnaConfigured()) {
-      const uuids = [...new Set(baseItems.flatMap((client) => client.remnawaveUuids))];
-      const map: Record<string, { activeNode: string | null; onlineAt: string | null }> = {};
-      await Promise.all(
-        uuids.map(async (uuid) => {
-          try {
-            const resRemna = await remnaGetUser(uuid);
-            if (resRemna.error || !resRemna.data) {
-              map[uuid] = { activeNode: null, onlineAt: null };
-              return;
-            }
-            const raw = resRemna.data as Record<string, unknown>;
-            const resp = (raw.response ?? raw) as Record<string, unknown>;
-            let label: string | null = null;
-            // Пытаемся вытащить имя активной ноды из возможных полей ответа Remna
-            if (typeof resp.activeNodeName === "string" && resp.activeNodeName.trim()) {
-              label = resp.activeNodeName.trim();
-            } else if (typeof resp.currentNodeName === "string" && resp.currentNodeName.trim()) {
-              label = resp.currentNodeName.trim();
-            } else if (Array.isArray(resp.activeInternalSquads)) {
-              const first = resp.activeInternalSquads[0] as { uuid?: string; name?: string } | string | undefined;
-              if (first && typeof first === "object") {
-                label = (first.name || first.uuid || "").trim() || null;
-              }
-            }
-            // Извлекаем onlineAt из userTraffic
-            const traffic = resp.userTraffic as Record<string, unknown> | undefined;
-            const onlineAt = typeof traffic?.onlineAt === "string" ? traffic.onlineAt : null;
-            map[uuid] = { activeNode: label, onlineAt };
-          } catch {
-            map[uuid] = { activeNode: null, onlineAt: null };
-          }
-        })
-      );
-      items = baseItems.map((client) => {
-        const states = client.remnawaveUuids.map((uuid) => map[uuid]).filter(Boolean);
-        const onlineAt = states.reduce<string | null>((latest, state) => {
-          if (!state.onlineAt) return latest;
-          return !latest || new Date(state.onlineAt).getTime() > new Date(latest).getTime() ? state.onlineAt : latest;
-        }, null);
-        return {
-          ...client,
-          activeNode: states.find((state) => state.activeNode)?.activeNode ?? null,
-          onlineAt,
-        };
-      });
-    }
-
+    // Сетевые статусы и последняя нода загружаются отдельным polling-endpoint
+    // после рендера страницы. Это не превращает список из 100 клиентов в 100
+    // дополнительных запросов Remnawave при каждом поиске или фильтре.
     return res.json({ items, total, page, limit });
   } catch (e) {
     console.error("GET /admin/clients error:", e);
@@ -1698,21 +1692,40 @@ adminRouter.get("/clients", async (req, res) => {
 /**
  * POST /api/admin/clients/online-statuses
  * Лёгкий эндпоинт для поллинга онлайн-статусов клиентов.
- * Принимает { uuids: string[] } (remnawaveUuid), возвращает { [uuid]: { onlineAt: string | null } }
+ * Принимает { uuids: string[] } (remnawaveUuid), возвращает onlineAt и последнюю ноду.
  */
 adminRouter.post("/clients/online-statuses", async (req, res) => {
   try {
-    const { uuids } = req.body as { uuids?: string[] };
+    const { uuids } = req.body as { uuids?: unknown };
     if (!Array.isArray(uuids) || uuids.length === 0) {
       return res.json({});
     }
     // Ограничим до 100 uuid за запрос
-    const limited = uuids.slice(0, 100);
-    const result: Record<string, { onlineAt: string | null }> = {};
+    const limited = [...new Set(uuids.filter((uuid): uuid is string => typeof uuid === "string" && uuid.length > 0 && uuid.length <= 100))].slice(0, 100);
+    if (limited.length === 0) return res.json({});
+    const result: Record<string, {
+      onlineAt: string | null;
+      lastConnectedNodeUuid: string | null;
+      lastConnectedNode: string | null;
+      lastConnectedAt: string | null;
+    }> = {};
 
     if (!isRemnaConfigured()) {
-      for (const uuid of limited) result[uuid] = { onlineAt: null };
+      for (const uuid of limited) result[uuid] = { onlineAt: null, lastConnectedNodeUuid: null, lastConnectedNode: null, lastConnectedAt: null };
       return res.json(result);
+    }
+
+    const nodesResult = await remnaGetNodes();
+    const nodeNames = new Map<string, string>();
+    const rawNodes = nodesResult.data && typeof nodesResult.data === "object"
+      ? (nodesResult.data as { response?: unknown }).response
+      : null;
+    if (Array.isArray(rawNodes)) {
+      for (const node of rawNodes) {
+        if (!node || typeof node !== "object") continue;
+        const row = node as { uuid?: unknown; name?: unknown };
+        if (typeof row.uuid === "string" && typeof row.name === "string" && row.name.trim()) nodeNames.set(row.uuid, row.name.trim());
+      }
     }
 
     await Promise.all(
@@ -1720,17 +1733,22 @@ adminRouter.post("/clients/online-statuses", async (req, res) => {
         try {
           const resRemna = await remnaGetUser(uuid);
           if (resRemna.error || !resRemna.data) {
-            result[uuid] = { onlineAt: null };
+            result[uuid] = { onlineAt: null, lastConnectedNodeUuid: null, lastConnectedNode: null, lastConnectedAt: null };
             return;
           }
           const raw = resRemna.data as Record<string, unknown>;
           const resp = (raw.response ?? raw) as Record<string, unknown>;
           const traffic = resp.userTraffic as Record<string, unknown> | undefined;
+          const nodeUuid = typeof traffic?.lastConnectedNodeUuid === "string" ? traffic.lastConnectedNodeUuid : null;
+          const onlineAt = typeof traffic?.onlineAt === "string" ? traffic.onlineAt : null;
           result[uuid] = {
-            onlineAt: typeof traffic?.onlineAt === "string" ? traffic.onlineAt : null,
+            onlineAt,
+            lastConnectedNodeUuid: nodeUuid,
+            lastConnectedNode: nodeUuid ? nodeNames.get(nodeUuid) ?? `Нода ${nodeUuid.slice(0, 8)}` : null,
+            lastConnectedAt: typeof traffic?.lastConnectedAt === "string" ? traffic.lastConnectedAt : onlineAt,
           };
         } catch {
-          result[uuid] = { onlineAt: null };
+          result[uuid] = { onlineAt: null, lastConnectedNodeUuid: null, lastConnectedNode: null, lastConnectedAt: null };
         }
       })
     );
@@ -1743,6 +1761,135 @@ adminRouter.post("/clients/online-statuses", async (req, res) => {
 });
 
 const clientIdParam = z.object({ id: z.string().cuid() });
+
+/** История админских действий по клиенту и его подпискам. */
+function redactAdminActivityPayload(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactAdminActivityPayload);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+    key,
+    /token|password|secret|authorization|cookie/i.test(key) ? "[скрыто]" : redactAdminActivityPayload(entry),
+  ]));
+}
+
+adminRouter.get("/clients/:id/activity", asyncRoute(async (req, res) => {
+  const parsed = clientIdParam.safeParse(req.params);
+  if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
+
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+  const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
+  const subscriptions = await prisma.subscription.findMany({
+    where: {
+      OR: [{ ownerId: parsed.data.id }, { giftedToClientId: parsed.data.id }],
+    },
+    select: { id: true },
+  });
+  const targetIds = [parsed.data.id, ...subscriptions.map((subscription) => subscription.id)];
+  const events = await prisma.adminEvent.findMany({
+    where: {
+      OR: [
+        { targetType: "client", targetId: parsed.data.id },
+        { targetType: "subscription", targetId: { in: targetIds } },
+      ],
+    },
+    orderBy: { createdAt: "desc" },
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    select: {
+      id: true,
+      kind: true,
+      actorId: true,
+      targetType: true,
+      targetId: true,
+      payload: true,
+      createdAt: true,
+    },
+  });
+  const hasMore = events.length > limit;
+  const items = (hasMore ? events.slice(0, limit) : events).map((event) => ({
+    ...event,
+    payload: redactAdminActivityPayload(event.payload),
+  }));
+  return res.json({
+    items,
+    nextCursor: hasMore ? items[items.length - 1]?.id ?? null : null,
+  });
+}));
+
+/**
+ * Сводка подключений клиента. Remnawave не предоставляет журнал HTTP-запросов
+ * через текущий API, поэтому endpoint честно возвращает его недоступность,
+ * а не подменяет журнал данными `onlineAt`.
+ */
+adminRouter.get("/clients/:id/sessions", asyncRoute(async (req, res) => {
+  const parsed = clientIdParam.safeParse(req.params);
+  if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
+  const activeOnly = req.query.active === "true";
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+
+  const subscriptions = await prisma.subscription.findMany({
+    where: {
+      deletionRequestedAt: null,
+      OR: [{ ownerId: parsed.data.id }, { giftedToClientId: parsed.data.id }],
+    },
+    orderBy: { subscriptionIndex: "asc" },
+    select: { id: true, subscriptionIndex: true, remnawaveUuid: true, tariff: { select: { name: true } } },
+  });
+  const nodeResult = isRemnaConfigured() ? await remnaGetNodes() : null;
+  const nodeNames = new Map<string, string>();
+  const rawNodes = nodeResult?.data && typeof nodeResult.data === "object"
+    ? (nodeResult.data as { response?: unknown }).response
+    : null;
+  if (Array.isArray(rawNodes)) {
+    for (const node of rawNodes) {
+      if (!node || typeof node !== "object") continue;
+      const row = node as { uuid?: unknown; name?: unknown };
+      if (typeof row.uuid === "string") nodeNames.set(row.uuid, typeof row.name === "string" && row.name.trim() ? row.name.trim() : row.uuid);
+    }
+  }
+
+  const sessionResults = await Promise.all(subscriptions.filter((subscription) => subscription.remnawaveUuid).map(async (subscription) => {
+    const uuid = subscription.remnawaveUuid as string;
+    const result = await remnaGetUser(uuid);
+    if (result.error || !result.data) return null;
+    const raw = result.data as Record<string, unknown>;
+    const user = (raw.response ?? raw) as Record<string, unknown>;
+    const traffic = user.userTraffic as Record<string, unknown> | undefined;
+    const onlineAt = typeof traffic?.onlineAt === "string" ? traffic.onlineAt : null;
+    const nodeUuid = typeof traffic?.lastConnectedNodeUuid === "string" ? traffic.lastConnectedNodeUuid : null;
+    const lastConnectedAt = typeof traffic?.lastConnectedAt === "string" ? traffic.lastConnectedAt : onlineAt;
+    const isActive = Boolean(onlineAt && Date.now() - Date.parse(onlineAt) < 5 * 60 * 1000);
+    return {
+      id: `${subscription.id}:${uuid}`,
+      subscriptionId: subscription.id,
+      subscriptionIndex: subscription.subscriptionIndex,
+      tariffName: subscription.tariff?.name ?? null,
+      remnawaveUuid: uuid,
+      username: typeof user.username === "string" ? user.username : null,
+      status: typeof user.status === "string" ? user.status : null,
+      active: isActive,
+      startedAt: typeof traffic?.firstConnectedAt === "string" ? traffic.firstConnectedAt : null,
+      lastActivityAt: onlineAt,
+      lastConnectedAt,
+      nodeUuid,
+      nodeName: nodeUuid ? nodeNames.get(nodeUuid) ?? `Нода ${nodeUuid.slice(0, 8)}` : null,
+      source: "remnawave.userTraffic",
+    };
+  }));
+  const sessions = sessionResults
+    .filter((session): session is NonNullable<typeof session> => Boolean(session))
+    .filter((session) => !activeOnly || session.active)
+    .sort((a, b) => Date.parse(b.lastActivityAt ?? b.lastConnectedAt ?? "") - Date.parse(a.lastActivityAt ?? a.lastConnectedAt ?? ""))
+    .slice(0, limit);
+
+  return res.json({
+    sessions,
+    requestLogs: {
+      available: false,
+      reason: "Remnawave API не предоставляет журнал посещённых ресурсов для этого подключения.",
+    },
+  });
+}));
 
 adminRouter.get("/clients/:id", async (req, res) => {
   const parsed = clientIdParam.safeParse(req.params);
@@ -1857,6 +2004,7 @@ adminRouter.get("/clients/:id/services", requireAction("manage_services"), async
       tariff: { select: { name: true, menuEmoji: true, includedDevices: true, deviceLimit: true } },
     },
   });
+
   const items = subs.map((s) => ({
     subscriptionId: s.id,
     subscriptionIndex: s.subscriptionIndex,
@@ -2079,7 +2227,10 @@ adminRouter.get("/clients/:id/all-devices", asyncRoute(async (req, res) => {
   // root-подписка должна иметь Subscription-запись с subscriptionIndex=0).
   // Дедуп по UUID — на случай если две Subscription указывают на один Remna-юзер.
   const subs = await prisma.subscription.findMany({
-    where: { ownerId: parsed.data.id },
+    where: {
+      deletionRequestedAt: null,
+      OR: [{ ownerId: parsed.data.id }, { giftedToClientId: parsed.data.id }],
+    },
     orderBy: { subscriptionIndex: "asc" },
     select: {
       id: true,
@@ -2143,7 +2294,10 @@ adminRouter.get("/clients/:id/subscriptions-overview", asyncRoute(async (req, re
   if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
 
   const subs = await prisma.subscription.findMany({
-    where: { ownerId: parsed.data.id, deletionRequestedAt: null },
+    where: {
+      deletionRequestedAt: null,
+      OR: [{ ownerId: parsed.data.id }, { giftedToClientId: parsed.data.id }],
+    },
     orderBy: { subscriptionIndex: "asc" },
     select: {
       id: true,
@@ -2159,6 +2313,21 @@ adminRouter.get("/clients/:id/subscriptions-overview", asyncRoute(async (req, re
       trial: { select: { name: true, durationDays: true } },
     },
   });
+
+  const overviewNodeNames = new Map<string, string>();
+  if (isRemnaConfigured()) {
+    const nodesResult = await remnaGetNodes();
+    const rawNodes = nodesResult.data && typeof nodesResult.data === "object"
+      ? (nodesResult.data as { response?: unknown }).response
+      : null;
+    if (Array.isArray(rawNodes)) {
+      for (const node of rawNodes) {
+        if (!node || typeof node !== "object") continue;
+        const row = node as { uuid?: unknown; name?: unknown };
+        if (typeof row.uuid === "string") overviewNodeNames.set(row.uuid, typeof row.name === "string" && row.name.trim() ? row.name.trim() : row.uuid);
+      }
+    }
+  }
 
   const items = [] as Array<{
     subscriptionId: string;
@@ -2181,6 +2350,10 @@ adminRouter.get("/clients/:id/subscriptions-overview", asyncRoute(async (req, re
       hwidDeviceLimit: number | null;
       deviceCount: number;
       activeSquadsCount: number;
+      activeSquadNames: string[];
+      lastConnectedNodeUuid: string | null;
+      lastConnectedNode: string | null;
+      lastConnectedAt: string | null;
       subscriptionUrl: string | null;
       onlineAt: string | null;
     } | null;
@@ -2195,6 +2368,12 @@ adminRouter.get("/clients/:id/subscriptions-overview", asyncRoute(async (req, re
       const inner = (u?.response ?? u) as Record<string, unknown> | undefined;
       const traffic = (inner?.userTraffic ?? {}) as Record<string, unknown>;
       const squads = Array.isArray(inner?.activeInternalSquads) ? (inner.activeInternalSquads as unknown[]) : [];
+      const nodeUuid = typeof traffic.lastConnectedNodeUuid === "string" ? traffic.lastConnectedNodeUuid : null;
+      const squadNames = squads.map((s) => {
+        if (!s || typeof s !== "object") return "";
+        const name = (s as { name?: unknown }).name;
+        return typeof name === "string" ? name.trim() : "";
+      }).filter(Boolean);
       const deviceResult = await remnaGetUserHwidDevices(sub.remnawaveUuid).catch(() => ({ data: null }));
       const devices = getRemnaDevices(deviceResult.data);
       remna = {
@@ -2206,8 +2385,12 @@ adminRouter.get("/clients/:id/subscriptions-overview", asyncRoute(async (req, re
         hwidDeviceLimit: typeof inner?.hwidDeviceLimit === "number" ? inner.hwidDeviceLimit : null,
         deviceCount: devices.length,
         activeSquadsCount: squads.length,
+        activeSquadNames: squadNames,
+        lastConnectedNodeUuid: nodeUuid,
+        lastConnectedNode: nodeUuid ? overviewNodeNames.get(nodeUuid) ?? `Нода ${nodeUuid.slice(0, 8)}` : null,
+        lastConnectedAt: typeof traffic.lastConnectedAt === "string" ? traffic.lastConnectedAt : (typeof traffic.onlineAt === "string" ? traffic.onlineAt : null),
         subscriptionUrl: extractRemnaSubscriptionUrl(ownerResult?.data),
-        onlineAt: typeof inner?.onlineAt === "string" ? inner.onlineAt : null,
+        onlineAt: typeof traffic.onlineAt === "string" ? traffic.onlineAt : null,
       };
     }
     items.push({
@@ -2710,6 +2893,76 @@ adminRouter.post("/subscriptions/:subId/grant-extend", asyncRoute(async (req, re
     paymentId,
     subscriptionId: sub.id,
     subscriptionIndex: sub.subscriptionIndex,
+    tariff: { id: tariff.id, name: tariff.name, durationDays: effectiveDays },
+  });
+}));
+
+const convertTrialSchema = z.object({
+  tariffId: z.string().min(1),
+  tariffPriceOptionId: z.string().min(1).optional(),
+  note: z.string().max(500).optional(),
+});
+
+/** Перевести trial конкретной подписки в обычный тариф без списания денег. */
+adminRouter.post("/subscriptions/:subId/convert-trial", asyncRoute(async (req, res) => {
+  const subId = String(req.params.subId ?? "");
+  if (!subId) return res.status(400).json({ message: "Invalid subscription id" });
+  const body = convertTrialSchema.safeParse(req.body);
+  if (!body.success) return res.status(400).json({ message: "Invalid input", errors: body.error.flatten() });
+
+  const sub = await prisma.subscription.findUnique({
+    where: { id: subId },
+    select: { id: true, ownerId: true, subscriptionIndex: true, remnawaveUuid: true, trialId: true },
+  });
+  if (!sub) return res.status(404).json({ message: "Подписка не найдена" });
+  if (!sub.trialId) return res.status(400).json({ message: "Подписка не является trial" });
+  if (!sub.remnawaveUuid) return res.status(400).json({ message: "Trial не привязан к Remnawave" });
+
+  const tariff = await prisma.tariff.findUnique({
+    where: { id: body.data.tariffId },
+    include: { priceOptions: { orderBy: [{ sortOrder: "asc" }, { durationDays: "asc" }] } },
+  });
+  if (!tariff) return res.status(404).json({ message: "Тариф не найден" });
+
+  let selectedOption: { id: string; durationDays: number; price: number } | undefined;
+  if (body.data.tariffPriceOptionId) {
+    const option = tariff.priceOptions.find((item) => item.id === body.data.tariffPriceOptionId);
+    if (!option) return res.status(400).json({ message: "Опция цены не найдена в этом тарифе" });
+    selectedOption = { id: option.id, durationDays: option.durationDays, price: option.price };
+  } else if (tariff.priceOptions.length > 0) {
+    const option = [...tariff.priceOptions].sort((a, b) => a.durationDays - b.durationDays)[0]!;
+    selectedOption = { id: option.id, durationDays: option.durationDays, price: option.price };
+  }
+
+  const effectiveDays = selectedOption?.durationDays ?? tariff.durationDays;
+  const result = await extendSecondarySubscription(sub.id, sub.ownerId, {
+    id: tariff.id,
+    durationDays: effectiveDays,
+    trafficLimitBytes: tariff.trafficLimitBytes,
+    trafficLimitMode: tariff.trafficLimitMode,
+    meteredSquadUuid: tariff.meteredSquadUuid,
+    deviceLimit: tariff.deviceLimit,
+    includedDevices: tariff.includedDevices,
+    pricePerExtraDevice: tariff.pricePerExtraDevice,
+    maxExtraDevices: tariff.maxExtraDevices,
+    deviceDiscountTiers: tariff.deviceDiscountTiers,
+    internalSquadUuids: tariff.internalSquadUuids,
+    trafficResetMode: tariff.trafficResetMode ?? undefined,
+    price: selectedOption?.price ?? tariff.price,
+  }, selectedOption, undefined, false, true); // convertMode=true: бесплатный переход с trial
+
+  if (!result.ok) return res.status(result.status >= 400 ? result.status : 500).json({ ok: false, message: result.error });
+  await logAdmin(req, "subscription.convert_trial", { type: "subscription", id: sub.id }, {
+    tariffId: tariff.id,
+    days: effectiveDays,
+    convertedDays: result.convertedDays ?? 0,
+    note: body.data.note ?? null,
+  });
+  return res.json({
+    ok: true,
+    subscriptionId: sub.id,
+    subscriptionIndex: sub.subscriptionIndex,
+    convertedDays: result.convertedDays ?? 0,
     tariff: { id: tariff.id, name: tariff.name, durationDays: effectiveDays },
   });
 }));
@@ -7228,6 +7481,7 @@ adminRouter.get("/clients/:id/subscriptions", asyncRoute(async (req, res) => {
     orderBy: { subscriptionIndex: "asc" },
     include: {
       tariff: { select: { id: true, name: true } },
+      trial: { select: { name: true } },
     },
   });
   return res.json({
@@ -7241,6 +7495,8 @@ adminRouter.get("/clients/:id/subscriptions", asyncRoute(async (req, res) => {
         subscriptionUrl: extractRemnaSubscriptionUrl(result?.data),
         tariffId: s.tariffId,
         tariffName: s.tariff?.name ?? null,
+        isTrial: s.trialId != null,
+        trialName: s.trial?.name ?? null,
         giftStatus: s.giftStatus,
         // добавили в ответ: нужны для UI-бейджей «Подарочная» и
         // «Получена в подарок» в инлайн-блоке карточки клиента (clients.tsx).

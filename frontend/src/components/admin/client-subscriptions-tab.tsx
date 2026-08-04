@@ -9,7 +9,7 @@
  * per-subscription.
  */
 import { useState, useEffect, useCallback } from "react";
-import { api, type AdminClientSubscriptionItem } from "@/lib/api";
+import { api, type AdminClientSubscriptionItem, type TariffRecord } from "@/lib/api";
 import { SubscriptionRemnaPanel } from "./subscription-remna-panel";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
@@ -18,10 +18,12 @@ import { fmtMsk, fmtMskDate } from "@/lib/datetime";
 interface Props {
   clientId: string;
   token: string;
+  tariffs?: TariffRecord[];
+  refreshKey?: number;
   onChanged?: () => void;
 }
 
-export function ClientSubscriptionsTab({ clientId, token, onChanged }: Props) {
+export function ClientSubscriptionsTab({ clientId, token, tariffs = [], refreshKey = 0, onChanged }: Props) {
   const [items, setItems] = useState<AdminClientSubscriptionItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +48,7 @@ export function ClientSubscriptionsTab({ clientId, token, onChanged }: Props) {
 
   useEffect(() => {
     reload();
-  }, [reload]);
+  }, [reload, refreshKey]);
 
   useEffect(() => {
     // Грузим сквады один раз для всех подписок (один и тот же набор).
@@ -107,7 +109,7 @@ export function ClientSubscriptionsTab({ clientId, token, onChanged }: Props) {
           >
             <button
               onClick={() => toggle(sub.id)}
-              className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-white/[0.04] transition-colors"
+              className="w-full flex items-center justify-between gap-3 px-3 sm:px-4 py-3 hover:bg-white/[0.04] transition-colors text-left"
             >
               <div className="flex items-center gap-3 min-w-0">
                 {isOpen ? (
@@ -126,8 +128,9 @@ export function ClientSubscriptionsTab({ clientId, token, onChanged }: Props) {
                     {sub.isPrimary ? "Главная" : `#${sub.subscriptionIndex}`}
                   </span>
                   <span className="text-sm font-medium truncate">
-                    {sub.tariffName ?? "— без тарифа —"}
-                  </span>
+                  {sub.tariffName ?? "— без тарифа —"}
+                </span>
+                  {sub.isTrial && <span className="text-[11px] text-violet-400">trial</span>}
                   {sub.giftStatus && (
                     <span className="text-[11px] text-amber-400">🎁 {sub.giftStatus}</span>
                   )}
@@ -156,6 +159,7 @@ export function ClientSubscriptionsTab({ clientId, token, onChanged }: Props) {
                   subscription={sub}
                   token={token}
                   remnaSquads={remnaSquads}
+                  tariffs={tariffs}
                   onChanged={() => {
                     reload();
                     onChanged?.();
