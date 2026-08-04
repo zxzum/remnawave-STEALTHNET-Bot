@@ -32,7 +32,7 @@ interface BotMessageMeta {
   group: string;
   label: string;
   description: string;
-  valueType: "text" | "json" | "markdown" | "boolean" | "number";
+  valueType: "text" | "json" | "markdown" | "boolean" | "number" | "image";
   variables?: string[];
 }
 
@@ -41,6 +41,15 @@ interface BotMessageMeta {
 // убраны: они настраиваются в обычных секциях /admin/settings, а здесь должны быть
 // только тексты экранов бота, которые видит юзер.
 const META: BotMessageMeta[] = [
+  { key: "bot_banner_welcome", group: "Баннеры экранов бота", label: "Приветствие", description: "Баннер первого экрана /start. PNG/JPG/GIF в data URL или публичная ссылка.", valueType: "image" },
+  { key: "bot_banner_setup", group: "Баннеры экранов бота", label: "Пробный доступ и подключение", description: "Экран после создания триала и ожидания первого устройства.", valueType: "image" },
+  { key: "bot_banner_main", group: "Баннеры экранов бота", label: "Главное меню", description: "Основной экран бота после подключения.", valueType: "image" },
+  { key: "bot_banner_subscription", group: "Баннеры экранов бота", label: "Моя подписка", description: "Карточка/список подписок и управление подпиской.", valueType: "image" },
+  { key: "bot_banner_devices", group: "Баннеры экранов бота", label: "Мои устройства", description: "Список HWID-устройств клиента.", valueType: "image" },
+  { key: "bot_banner_tariffs", group: "Баннеры экранов бота", label: "Тарифы", description: "Выбор тарифа и срока подписки.", valueType: "image" },
+  { key: "bot_banner_payment", group: "Баннеры экранов бота", label: "Оплата", description: "Экран выбранного тарифа и перехода к оплате.", valueType: "image" },
+  { key: "bot_banner_referral", group: "Баннеры экранов бота", label: "Рефералы", description: "Реферальная программа и текущая статистика.", valueType: "image" },
+  { key: "bot_banner_about", group: "Баннеры экранов бота", label: "О сервисе", description: "Информация о сервисе и ссылки на документы.", valueType: "image" },
   { key: "bot_info_block", group: "Тексты экранов бота", label: "Инфо-блок (главное меню)", description: "Произвольный текст под главным меню. Markdown поддерживается.", valueType: "markdown" },
   { key: "bot_devices_text", group: "Тексты экранов бота", label: "Экран «📱 Мои устройства»", description: "Шапка экрана списка устройств. Появляется до перечня устройств по подпискам.", valueType: "markdown" },
   { key: "bot_tariffs_text", group: "Тексты экранов бота", label: "Экран «Выбор тарифа»", description: "{{TARIFFS}} = список тарифов", valueType: "markdown", variables: ["{{TARIFFS}}"] },
@@ -101,7 +110,7 @@ botMessagesRouter.get(
 );
 
 const putSchema = z.object({
-  value: z.string().max(50_000),
+  value: z.string().max(8_000_000),
 });
 
 botMessagesRouter.put(

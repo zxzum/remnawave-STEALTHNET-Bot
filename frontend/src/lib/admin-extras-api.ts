@@ -492,7 +492,7 @@ export interface BotMessage {
   group: string;
   label: string;
   description: string;
-  valueType: "text" | "json" | "markdown" | "boolean" | "number";
+  valueType: "text" | "json" | "markdown" | "boolean" | "number" | "image";
   variables?: string[];
   value: string;
 }

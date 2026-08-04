@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { Bot, Loader2, RefreshCw, Save, Check, AlertCircle } from "lucide-react";
+import { Bot, Loader2, RefreshCw, Save, Check, AlertCircle, ImagePlus } from "lucide-react";
 import { useAuth } from "@/contexts/auth";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -51,6 +51,26 @@ export function AdminBotMessagesPage() {
   }
 
   const active = items.find((i) => i.key === activeKey);
+
+  function uploadImage(file: File | undefined) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setErr("Можно загрузить только изображение");
+      return;
+    }
+    if (file.size > 5_000_000) {
+      setErr("Файл слишком большой: максимум 5 МБ");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setVal(typeof reader.result === "string" ? reader.result : "");
+      setSaved(false);
+      setErr(null);
+    };
+    reader.onerror = () => setErr("Не удалось прочитать файл");
+    reader.readAsDataURL(file);
+  }
 
   async function save() {
     if (!state.accessToken || !active) return;
@@ -163,6 +183,16 @@ export function AdminBotMessagesPage() {
               </div>
             ) : active.valueType === "number" ? (
               <Input type="number" value={val} onChange={(e) => { setVal(e.target.value); setSaved(false); }} />
+            ) : active.valueType === "image" ? (
+              <div className="space-y-3">
+                <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-white/15 bg-foreground/[0.03] px-4 py-3 text-sm hover:bg-foreground/[0.06]">
+                  <ImagePlus className="h-4 w-4" />
+                  Загрузить новый баннер
+                  <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" onChange={(e) => uploadImage(e.target.files?.[0])} />
+                </label>
+                <Input value={val} onChange={(e) => { setVal(e.target.value); setSaved(false); }} placeholder="Или вставьте публичную URL-ссылку" />
+                {val && <img src={val} alt="Предпросмотр баннера" className="max-h-[360px] w-full rounded-xl border border-white/10 object-contain" />}
+              </div>
             ) : (
               <textarea
                 value={val}
