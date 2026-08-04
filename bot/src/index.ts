@@ -509,6 +509,11 @@ const lastSquadsForRemove = new Map<number, { clientId: string; items: { uuid: s
 // чтобы backend знал из какой подписки удалять (раньше удалял только root → secondary error).
 const lastDevicesList = new Map<number, { devices: { hwid: string; platform?: string; deviceModel?: string; subscriptionType?: "root" | "secondary"; subscriptionId?: string }[] }>();
 
+type PendingDeviceSetup = { token: string; chatId: number; messageId: number; expiresAt: number };
+const pendingDeviceSetups = new Map<number, PendingDeviceSetup>();
+const lastBotScreens = new Map<number, { chatId: number; messageId: number }>();
+let activeTelegramApi: Api | null = null;
+
 // Poco/Redmi и пр. шлют битые (непарные)
 // UTF-8 суррогаты в platform/deviceModel → Telegram отвергает "inline keyboard button
 // text must be encoded in UTF-8" и экран «Устройства» падает на editMessageText.
@@ -564,36 +569,180 @@ type SetupApp = "incy" | "happ";
 async function firstSubscriptionAccess(token: string): Promise<{
   url: string | null;
   expireAt: Date | null;
+  trafficLimitBytes: number | null;
 }> {
   const all = await api.getAllSubscriptions(token).catch(() => ({ items: [] }));
   const item = all.items.find((candidate) => candidate.remnawaveUuid || getSubscriptionUrl(candidate.subscription));
   const user = item ? getSubUser(item.subscription) : null;
   const rawExpireAt = user?.expireAt ?? user?.expirationDate ?? user?.expire_at;
+  const rawTraffic = user?.trafficLimitBytes ?? user?.traffic_limit_bytes;
+  const trafficLimitBytes = typeof rawTraffic === "string" ? Number(rawTraffic) : typeof rawTraffic === "number" ? rawTraffic : null;
   const expireAt = rawExpireAt == null
     ? null
     : (typeof rawExpireAt === "number" ? new Date(rawExpireAt * 1000) : new Date(String(rawExpireAt)));
   return {
     url: item ? getSubscriptionUrl(item.subscription) : null,
     expireAt: expireAt && !Number.isNaN(expireAt.getTime()) ? expireAt : null,
+    trafficLimitBytes: Number.isFinite(trafficLimitBytes) ? trafficLimitBytes : null,
   };
 }
 
-async function showSetupDevicePicker(ctx: Context): Promise<void> {
-  const image = await api.getOnboardingAsset("select-your-device.png");
-  await ctx.replyWithPhoto(new InputFile(image, "select-your-device.png"), {
-    caption: "Какое у вас устройство? 👣",
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "🍎 iOS (iPhone, iPad, Mac)", callback_data: "setup:device:ios" }],
-        [{ text: "🤖 Android", callback_data: "setup:device:android" }],
-        [{ text: "🪟 Windows", callback_data: "setup:device:windows" }],
-        [{ text: "🐧 Linux", callback_data: "setup:device:linux" }],
-        [{ text: "🔳 QR Code", callback_data: "setup:device:qr" }],
-        [{ text: "🏠 Главное меню", callback_data: "menu:main" }],
-      ],
-    },
+function screenBannerUrl(config: { publicAppUrl?: string | null } | null | undefined, screen: string): string | null {
+  const base = (config?.publicAppUrl ?? "").replace(/\/+$/, "");
+  return base ? `${base}/api/public/bot-asset/screen/${encodeURIComponent(screen)}.png` : null;
+}
+
+const SCREEN_ASSET_NAMES: Record<string, string> = {
+  main: "welcome.png",
+  subscription: "my-subscription.png",
+  devices: "my-devices.png",
+  tariffs: "tariffs.png",
+  payment: "oplata.png",
+  referral: "referals.png",
+  about: "about-us.png",
+  setup: "my-subscription.png",
+};
+
+async function renderCommandScreen(
+  ctx: Context,
+  userId: number,
+  text: string,
+  markup: InlineMarkup,
+  config: { publicAppUrl?: string | null } | null | undefined,
+  screen: string,
+  entities?: CustomEmojiEntity[],
+): Promise<void> {
+  const caption = text.length > TELEGRAM_CAPTION_MAX ? text.slice(0, TELEGRAM_CAPTION_MAX - 3) + "..." : text;
+  const captionEntities = text.length > TELEGRAM_CAPTION_MAX && entities ? entities.filter((e) => e.offset + e.length <= TELEGRAM_CAPTION_MAX - 3) : entities;
+  const banner = screenBannerUrl(config, screen);
+  const previous = lastBotScreens.get(userId);
+  if (previous && activeTelegramApi && banner) {
+    await activeTelegramApi.editMessageMedia(previous.chatId, previous.messageId, {
+      type: "photo", media: banner, caption, caption_entities: captionEntities?.length ? captionEntities : undefined,
+    }, { reply_markup: markup });
+    return;
+  }
+  const assetName = (SCREEN_ASSET_NAMES[screen] ?? "welcome.png") as Parameters<typeof api.getOnboardingAsset>[0];
+  const image = await api.getOnboardingAsset(assetName).catch(() => null);
+  if (image) {
+    const sent = await ctx.replyWithPhoto(new InputFile(image, assetName), {
+      caption, caption_entities: captionEntities?.length ? captionEntities : undefined, reply_markup: markup,
+    });
+    if (sent?.message_id) lastBotScreens.set(userId, { chatId: sent.chat.id, messageId: sent.message_id });
+    return;
+  }
+  const sent = await ctx.reply(text, { entities: entities?.length ? entities : undefined, reply_markup: markup });
+  if (sent?.message_id) lastBotScreens.set(userId, { chatId: sent.chat.id, messageId: sent.message_id });
+}
+
+function deviceSetupText(access: Awaited<ReturnType<typeof firstSubscriptionAccess>>, config: ConfigSnapshot | null): string {
+  const days = access.expireAt && access.expireAt > new Date()
+    ? Math.max(1, Math.ceil((access.expireAt.getTime() - Date.now()) / 86_400_000))
+    : null;
+  const traffic = access.trafficLimitBytes != null && access.trafficLimitBytes > 0
+    ? `${bytesToGb(access.trafficLimitBytes)} ГБ`
+    : "безлимитный";
+  return [
+    "✅ Пробный доступ создан",
+    "",
+    `📅 Срок: ${days ? `${days} ${formatDaysRu(days)}` : "активен"}`,
+    `📊 Трафик для белых списков: ${traffic}`,
+    "🌐 Обход белых списков работает на всех операторах",
+    "",
+    "📱 Осталось подключить устройство — обычно это занимает 1–2 минуты.",
+    "После добавления подписки в приложение бот автоматически покажет успешное подключение.",
+    "",
+    (config?.helpIntroText ?? "").trim() ? "Если появятся вопросы — напишите в поддержку." : "Подключите подписку по кнопке ниже, затем вернитесь в бот.",
+  ].join("\n");
+}
+
+function setupSuccessText(access: Awaited<ReturnType<typeof firstSubscriptionAccess>>): string {
+  const expiry = access.expireAt?.toLocaleString("ru-RU", {
+    day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow",
+  });
+  return [
+    "🎉 Устройство подключено успешно!",
+    "",
+    "Лазейка VPN готова к работе.",
+    expiry ? `Пробный период активен до: ${expiry} МСК` : "Пробный период активен.",
+    "",
+    "Можно пользоваться VPN бесплатно или сразу оплатить подписку, чтобы не прерывать доступ после триала.",
+  ].join("\n");
+}
+
+async function showSetupDevicePicker(ctx: Context, token: string, config: ConfigSnapshot | null): Promise<void> {
+  const access = await firstSubscriptionAccess(token);
+  const text = deviceSetupText(access, config);
+  const markup = {
+    inline_keyboard: [
+      ...(access.url ? [[{ text: "🔗 Подключить устройство", url: access.url }]] : []),
+      [{ text: "🔄 Я подключил — проверить", callback_data: "setup:check" }],
+      [{ text: "🧑‍💼 Поддержка", url: supportBotLink() ?? "https://t.me/" + SUPPORT_BOT_USERNAME }],
+      [{ text: "🏠 Главное меню", callback_data: "menu:main" }],
+    ],
+  };
+  const banner = screenBannerUrl(config, "setup");
+  const cbMsg = ctx.callbackQuery?.message;
+  if (cbMsg) {
+    await editMessageContent(ctx, text, markup, undefined, banner ?? undefined);
+    if (ctx.from?.id) {
+      lastBotScreens.set(ctx.from.id, { chatId: cbMsg.chat.id, messageId: cbMsg.message_id });
+      pendingDeviceSetups.set(ctx.from.id, { token, chatId: cbMsg.chat.id, messageId: cbMsg.message_id, expiresAt: Date.now() + 10 * 60_000 });
+    }
+    return;
+  }
+  const image = await api.getOnboardingAsset("my-subscription.png");
+  const sent = await ctx.replyWithPhoto(new InputFile(image, "my-subscription.png"), { caption: text, reply_markup: markup });
+  if (ctx.from?.id && sent?.message_id) {
+    lastBotScreens.set(ctx.from.id, { chatId: sent.chat.id, messageId: sent.message_id });
+    pendingDeviceSetups.set(ctx.from.id, { token, chatId: sent.chat.id, messageId: sent.message_id, expiresAt: Date.now() + 10 * 60_000 });
+  }
+}
+
+async function hasConnectedDevice(token: string): Promise<boolean> {
+  const devices = await api.getClientDevices(token).catch(() => ({ total: 0, devices: [] }));
+  if (devices.total > 0) return true;
+  const all = await api.getAllSubscriptions(token).catch(() => ({ items: [] }));
+  return all.items.some((item) => {
+    const user = getSubUser(item.subscription);
+    const used = Number(user?.devicesUsed ?? user?.devices_used ?? 0);
+    const traffic = Number(
+      (user?.userTraffic as { usedTrafficBytes?: number } | undefined)?.usedTrafficBytes
+        ?? user?.trafficUsedBytes ?? user?.usedTrafficBytes ?? user?.traffic_used_bytes ?? 0,
+    );
+    const hwids = user?.hwids ?? user?.hwidDevices ?? user?.devices;
+    return used > 0 || traffic > 0 || (Array.isArray(hwids) && hwids.length > 0);
   });
 }
+
+async function pollPendingDeviceSetups(): Promise<void> {
+  if (!activeTelegramApi) return;
+  for (const [userId, pending] of pendingDeviceSetups) {
+    if (pending.expiresAt < Date.now()) {
+      pendingDeviceSetups.delete(userId);
+      continue;
+    }
+    try {
+      if (!await hasConnectedDevice(pending.token)) continue;
+      const access = await firstSubscriptionAccess(pending.token);
+      await api.completeOnboarding(pending.token).catch(() => {});
+      await activeTelegramApi.editMessageCaption(pending.chatId, pending.messageId, {
+        caption: setupSuccessText(access),
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "💳 Оплатить подписку", callback_data: "menu:tariffs" }],
+            [{ text: "🏠 Главное меню", callback_data: "menu:main" }],
+          ],
+        },
+      }).catch(() => {});
+      pendingDeviceSetups.delete(userId);
+    } catch {
+      // Remnawave/API may be temporarily unavailable; the next poll retries.
+    }
+  }
+}
+const devicePollTimer = setInterval(() => { void pollPendingDeviceSetups(); }, 8_000);
+devicePollTimer.unref?.();
 
 const SETUP_DOWNLOADS: Record<SetupPlatform, Record<SetupApp, string>> = {
   ios: {
@@ -1201,8 +1350,10 @@ function formatSubLine(item: {
 }
 
 function buildCompactMainMenuText(serviceName: string, balance: number, currency: string): { text: string; entities: CustomEmojiEntity[] } {
-  const name = serviceName.trim() || "Кабинет";
-  return { text: `👋 Добро пожаловать в ${name}\n\nБаланс: ${formatMoney(balance, currency)}`, entities: [] };
+  void serviceName;
+  void balance;
+  void currency;
+  return { text: "Лазейка VPN\n\nВаш VPN, устройства и бонусы — в одном месте", entities: [] };
 }
 
 function buildMainMenuText(opts: {
@@ -1616,10 +1767,11 @@ async function editMessageContent(ctx: {
   api: Api;
   editMessageCaption: (opts: { caption: string; caption_entities?: CustomEmojiEntity[]; reply_markup?: InlineMarkup }) => Promise<unknown>;
   editMessageText: (text: string, opts?: { entities?: CustomEmojiEntity[]; reply_markup?: InlineMarkup }) => Promise<unknown>;
+  editMessageMedia?: Context["editMessageMedia"];
   deleteMessage: () => Promise<unknown>;
   chat?: { id: number };
   callbackQuery?: { message?: { photo?: unknown[]; animation?: unknown; video?: unknown } };
-}, text: string, reply_markup: InlineMarkup, entities?: CustomEmojiEntity[]): Promise<unknown> {
+}, text: string, reply_markup: InlineMarkup, entities?: CustomEmojiEntity[], bannerUrl?: string): Promise<unknown> {
   const msg = ctx.callbackQuery?.message;
   const hasPhoto = msg && typeof msg === "object" && "photo" in msg && Array.isArray((msg as { photo: unknown[] }).photo) && (msg as { photo: unknown[] }).photo.length > 0;
   const hasAnimation = msg && typeof msg === "object" && "animation" in msg && (msg as { animation: unknown }).animation != null;
@@ -1631,6 +1783,12 @@ async function editMessageContent(ctx: {
   const hasMediaWithCaption = hasPhoto || hasAnimation;
   const caption = text.length > TELEGRAM_CAPTION_MAX ? text.slice(0, TELEGRAM_CAPTION_MAX - 3) + "..." : text;
   const truncatedEntities = text.length > TELEGRAM_CAPTION_MAX && entities ? entities.filter((e) => e.offset + e.length <= TELEGRAM_CAPTION_MAX - 3) : entities;
+  if (bannerUrl && ctx.editMessageMedia) {
+    return ctx.editMessageMedia(
+      { type: "photo", media: bannerUrl, caption, caption_entities: truncatedEntities?.length ? truncatedEntities : undefined },
+      { reply_markup },
+    );
+  }
   if (hasMediaWithCaption) return ctx.editMessageCaption({ caption, caption_entities: truncatedEntities?.length ? truncatedEntities : undefined, reply_markup });
   return ctx.editMessageText(text, { entities: entities?.length ? entities : undefined, reply_markup });
 }
@@ -2068,7 +2226,7 @@ composer.command("start", async (ctx) => {
         );
         return;
       }
-      await showSetupDevicePicker(ctx);
+      await showSetupDevicePicker(ctx, auth.token, config);
       return;
     }
 
@@ -2129,7 +2287,7 @@ composer.command("start", async (ctx) => {
     const caption = text.length > TELEGRAM_CAPTION_MAX ? text.slice(0, TELEGRAM_CAPTION_MAX - 3) + "..." : text;
     const captionEntities = text.length > TELEGRAM_CAPTION_MAX && entities.length ? entities.filter((e) => e.offset + e.length <= TELEGRAM_CAPTION_MAX - 3) : entities;
     const hasVideoInstructions = config?.videoInstructionsEnabled && (config?.videoInstructions?.length ?? 0) > 0;
-    const hasSupportLinks = !!(config?.supportLink || config?.agreementLink || config?.offerLink || config?.instructionsLink || hasVideoInstructions);
+    const hasSupportLinks = !!(supportBotLink() || config?.supportLink || config?.agreementLink || config?.offerLink || config?.instructionsLink || hasVideoInstructions);
     const markup = mainMenu({
       showTrial,
       // кнопка «🔌 Подключиться автоматически» показывается
@@ -2158,7 +2316,7 @@ composer.command("start", async (ctx) => {
     if (process.env.BOT_RICH_MENU === "on") {
       try {
         const richMd = buildMainMenuRichMarkdown({
-          serviceName: name,
+          serviceName: "Лазейка VPN",
           balance: client?.balance ?? 0,
           currency: client?.preferredCurrency ?? config?.defaultCurrency ?? "usd",
           logoUrl: botWelcomeAssetUrl(config),
@@ -2174,11 +2332,17 @@ composer.command("start", async (ctx) => {
     }
     if (!richMenuSent) {
       const welcomeImage = await api.getOnboardingAsset("welcome.png").catch(() => null);
-      if (welcomeImage) {
+      const previous = lastBotScreens.get(from.id);
+      const banner = screenBannerUrl(config, "main");
+      if (previous && activeTelegramApi && banner) {
+        await activeTelegramApi.editMessageMedia(previous.chatId, previous.messageId, { type: "photo", media: banner, caption, caption_entities: captionEntities.length ? captionEntities : undefined }, { reply_markup: markup }).catch(() => {});
+      } else if (welcomeImage) {
         const opts = { caption, caption_entities: captionEntities.length ? captionEntities : undefined, reply_markup: markup };
-        await ctx.replyWithPhoto(new InputFile(welcomeImage, "welcome.png"), opts);
+        const sent = await ctx.replyWithPhoto(new InputFile(welcomeImage, "welcome.png"), opts);
+        if (sent?.message_id) lastBotScreens.set(from.id, { chatId: sent.chat.id, messageId: sent.message_id });
       } else {
-        await ctx.reply(text, { entities: entities.length ? entities : undefined, reply_markup: markup });
+        const sent = await ctx.reply(text, { entities: entities.length ? entities : undefined, reply_markup: markup });
+        if (sent?.message_id) lastBotScreens.set(from.id, { chatId: sent.chat.id, messageId: sent.message_id });
       }
     }
   } catch (e: unknown) {
@@ -2261,10 +2425,15 @@ composer.command("subscriptions", async (ctx) => {
       return { type: it.type, id: it.id, label };
     });
     const { text, entities } = applyMarkdownAndEmoji(bodyLines.join("\n"), cfg?.botEmojis ?? null);
-    await ctx.reply(text, {
-      entities: entities?.length ? entities : undefined,
-      reply_markup: mySubsListButtons(buttonItems, cfg?.botBackLabel ?? null, undefined, undefined),
-    });
+    await renderCommandScreen(
+      ctx,
+      userId,
+      text,
+      mySubsListButtons(buttonItems, cfg?.botBackLabel ?? null, undefined, undefined),
+      cfg,
+      "subscription",
+      entities,
+    );
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Ошибка";
     await ctx.reply(`❌ ${msg}`);
@@ -2344,7 +2513,7 @@ composer.command("referral", async (ctx) => {
     }
     rows.push([{ text: "🏠 Главное меню", callback_data: "menu:main" }]);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await ctx.reply(lines.join("\n"), { reply_markup: { inline_keyboard: rows as any } });
+    await renderCommandScreen(ctx, userId, lines.join("\n"), { inline_keyboard: rows as any }, cfg, "referral");
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Ошибка";
     await ctx.reply(`❌ ${msg}`);
@@ -2386,10 +2555,7 @@ composer.command("support", async (ctx) => {
       subsCount,
       lang: getUserLang(userId),
     });
-    await ctx.reply(text, {
-      entities: entities.length ? entities : undefined,
-      reply_markup: markup,
-    });
+    await renderCommandScreen(ctx, userId, text, markup, cfg, "about", entities);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Ошибка";
     await ctx.reply(`❌ ${msg}`);
@@ -2543,7 +2709,7 @@ async function showPaymentMethodsForTariff(ctx: any, userId: number, tariff: Tar
   const finalText = `${desc && opts.length === 1 ? `${desc}\n\n${pay.text}` : pay.text}${convNote}`;
   const markup = tariffPaymentMethodButtons(tariff.id, methods, config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds, balanceLabel, !!config?.yoomoneyEnabled, !!config?.yookassaEnabled, !!config?.cryptopayEnabled, tariff.currency, !!config?.heleketEnabled, !!config?.lavaEnabled, !!config?.lavatopEnabled, config?.botEmojis ?? null);
   for (let i = extraRows.length - 1; i >= 0; i--) markup.inline_keyboard.unshift(extraRows[i]!);
-  await editMessageContent(ctx, finalText, markup, pay.entities);
+  await editMessageContent(ctx, finalText, markup, pay.entities, screenBannerUrl(config, "payment") ?? undefined);
 }
 
 /** Picker доп. устройств для подарочной подписки. */
@@ -2638,7 +2804,8 @@ composer.on("callback_query:data", async (ctx) => {
     }
     try {
       if (data === "setup:resume") {
-        await showSetupDevicePicker(ctx);
+        const setupConfig = await api.getPublicConfig();
+        await showSetupDevicePicker(ctx, token, setupConfig);
         return;
       }
       if (data === "setup:retry") {
@@ -2646,7 +2813,24 @@ composer.on("callback_query:data", async (ctx) => {
         await activateTrialForNewClient(token, config);
         const access = await firstSubscriptionAccess(token);
         if (!access.url) throw new Error("Пробный доступ пока недоступен");
-        await showSetupDevicePicker(ctx);
+        await showSetupDevicePicker(ctx, token, config);
+        return;
+      }
+      if (data === "setup:check" || data === "setup:done") {
+        if (await hasConnectedDevice(token)) {
+          pendingDeviceSetups.delete(userId);
+          await api.completeOnboarding(token).catch(() => {});
+          const access = await firstSubscriptionAccess(token);
+          await editMessageContent(ctx, setupSuccessText(access), {
+            inline_keyboard: [
+              [{ text: "💳 Оплатить подписку", callback_data: "menu:tariffs" }],
+              [{ text: "🏠 Главное меню", callback_data: "menu:main" }],
+            ],
+          }, undefined, screenBannerUrl(await api.getPublicConfig(), "setup") ?? undefined);
+        } else {
+          await showSetupDevicePicker(ctx, token, await api.getPublicConfig());
+          await ctx.answerCallbackQuery({ text: "Пока не вижу подключённое устройство — попробуйте ещё раз через несколько секунд." }).catch(() => {});
+        }
         return;
       }
       if (data === "setup:device:qr") {
@@ -2677,32 +2861,6 @@ composer.on("callback_query:data", async (ctx) => {
         const [, , platform, app] = data.split(":") as [string, string, SetupPlatform, SetupApp];
         if (!["ios", "android", "windows", "linux"].includes(platform) || !["incy", "happ"].includes(app)) return;
         await showSetupGuide(ctx, token, platform, app);
-        return;
-      }
-      if (data === "setup:done") {
-        await api.completeOnboarding(token);
-        const access = await firstSubscriptionAccess(token);
-        const expiry = access.expireAt?.toLocaleString("ru-RU", {
-          day: "numeric",
-          month: "long",
-          year: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-          timeZone: "Europe/Moscow",
-        });
-        await ctx.reply(
-          "Поздравляем! Подключение успешно завершено — держите Лазейку 👣\n\n" +
-          (expiry ? `Тестовый период активен до: ${expiry} МСК\n\n` : "") +
-          "📌 Вы можете продлить подписку заранее по кнопке «Оплатить».",
-          {
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "💳 Оплатить", callback_data: "menu:tariffs" }],
-                [{ text: "🏠 Главное меню", callback_data: "menu:main" }],
-              ],
-            },
-          },
-        );
         return;
       }
     } catch (e) {
@@ -2781,7 +2939,7 @@ composer.on("callback_query:data", async (ctx) => {
       const appUrl = config?.publicAppUrl?.replace(/\/$/, "") ?? null;
       const { text, entities } = buildCompactMainMenuText(config?.serviceName?.trim() || "Кабинет", me.balance ?? 0, me.preferredCurrency ?? config?.defaultCurrency ?? "usd");
       const hasVideoInstructions = config?.videoInstructionsEnabled && (config?.videoInstructions?.length ?? 0) > 0;
-      const hasSupportLinks = !!(config?.supportLink || config?.agreementLink || config?.offerLink || config?.instructionsLink || hasVideoInstructions);
+      const hasSupportLinks = !!(supportBotLink() || config?.supportLink || config?.agreementLink || config?.offerLink || config?.instructionsLink || hasVideoInstructions);
       const markup = mainMenu({
         showTrial,
         // T-fix (11.05.2026): кнопка vpn доступна если есть ЛЮБАЯ подписка (включая secondary/триал).
@@ -2800,21 +2958,7 @@ composer.on("callback_query:data", async (ctx) => {
       });
       const isBotAdmin = config?.botAdminTelegramIds?.includes(String(userId)) ?? false;
       if (isBotAdmin) markup.inline_keyboard.push([{ text: "⚙️ Панель админа", callback_data: "admin:menu" }]);
-      // Нельзя editMessageContent у photo — отправляем новое сообщение и удаляем старое
-      const cbMsg = ctx.callbackQuery?.message;
-      const media = logoToMediaSource(config?.logoBot);
-      if (media) {
-        const caption = text.length > TELEGRAM_CAPTION_MAX ? text.slice(0, TELEGRAM_CAPTION_MAX - 3) + "..." : text;
-        const captionEntities = text.length > TELEGRAM_CAPTION_MAX && entities.length ? entities.filter((e) => e.offset + e.length <= TELEGRAM_CAPTION_MAX - 3) : entities;
-        const opts = { caption, caption_entities: captionEntities.length ? captionEntities : undefined, reply_markup: markup };
-        if (media.isGif) await ctx.replyWithAnimation(media.source, opts);
-        else await ctx.replyWithPhoto(media.source, opts);
-      } else {
-        await ctx.reply(text, { entities: entities.length ? entities : undefined, reply_markup: markup });
-      }
-      if (cbMsg?.message_id) {
-        await ctx.api.deleteMessage(cbMsg.chat.id, cbMsg.message_id).catch(() => {});
-      }
+      await editMessageContent(ctx, text, markup, entities, screenBannerUrl(config, "main") ?? undefined);
     } catch (e) {
       console.error("[welcome:continue]", e instanceof Error ? e.message : e);
       await ctx.reply("Не удалось открыть меню. Попробуйте /start.");
@@ -3410,7 +3554,7 @@ composer.on("callback_query:data", async (ctx) => {
       const name = config?.serviceName?.trim() || "Кабинет";
       const { text, entities } = buildCompactMainMenuText(name, client?.balance ?? 0, client?.preferredCurrency ?? config?.defaultCurrency ?? "usd");
       const hasVideoInstructionsCb = config?.videoInstructionsEnabled && (config?.videoInstructions?.length ?? 0) > 0;
-      const hasSupportLinks = !!(config?.supportLink || config?.agreementLink || config?.offerLink || config?.instructionsLink || hasVideoInstructionsCb);
+      const hasSupportLinks = !!(supportBotLink() || config?.supportLink || config?.agreementLink || config?.offerLink || config?.instructionsLink || hasVideoInstructionsCb);
       const backMarkup = mainMenu({
         showTrial,
         // T-fix (11.05.2026): кнопка vpn доступна если есть ЛЮБАЯ подписка (включая secondary/триал).
@@ -3431,26 +3575,7 @@ composer.on("callback_query:data", async (ctx) => {
         backMarkup.inline_keyboard.push([{ text: "⚙️ Панель админа", callback_data: "admin:menu" }]);
       }
 
-      // If current message is text-only (no photo/animation) but logo is configured,
-      // delete the text message and re-send the main menu with the logo image.
-      const cbMsg = ctx.callbackQuery?.message;
-      const cbHasPhoto = cbMsg && typeof cbMsg === "object" && "photo" in cbMsg && Array.isArray((cbMsg as { photo: unknown[] }).photo) && (cbMsg as { photo: unknown[] }).photo.length > 0;
-      const cbHasAnimation = cbMsg && typeof cbMsg === "object" && "animation" in cbMsg && (cbMsg as { animation: unknown }).animation != null;
-      const media = logoToMediaSource(config?.logoBot);
-      if (!cbHasPhoto && !cbHasAnimation && media && ctx.chat?.id) {
-        await ctx.deleteMessage().catch(() => {});
-        const caption = text.length > TELEGRAM_CAPTION_MAX ? text.slice(0, TELEGRAM_CAPTION_MAX - 3) + "..." : text;
-        const captionEntities = text.length > TELEGRAM_CAPTION_MAX && entities ? entities.filter((e) => e.offset + e.length <= TELEGRAM_CAPTION_MAX - 3) : entities;
-        const opts = { caption, caption_entities: captionEntities?.length ? captionEntities : undefined, reply_markup: backMarkup };
-        if (media.isGif) {
-          await ctx.api.sendAnimation(ctx.chat.id, media.source, opts);
-        } else {
-          await ctx.api.sendPhoto(ctx.chat.id, media.source, opts);
-        }
-        return;
-      }
-
-      await editMessageContent(ctx, text, backMarkup, entities);
+      await editMessageContent(ctx, text, backMarkup, entities, screenBannerUrl(config, "main") ?? undefined);
       return;
     }
 
@@ -3535,7 +3660,26 @@ composer.on("callback_query:data", async (ctx) => {
         emojiIds: innerEmojiIds,
         lang,
       });
-      await editMessageContent(ctx, text, markup, entities);
+      await editMessageContent(ctx, text, markup, entities, screenBannerUrl(config, "about") ?? undefined);
+      return;
+    }
+
+    if (data === "menu:about") {
+      const aboutText = [
+        "ⓘ Лазейка VPN",
+        "",
+        "Быстрый и безопасный VPN для повседневного интернета.",
+        "Подключение, управление устройствами, тарифы и бонусы — в одном Telegram-боте.",
+        "",
+        "🌐 Работает на всех операторах",
+        "⚡ Стабильная скорость",
+        "🔒 Защита соединения",
+      ].join("\n");
+      const rows: InlineMarkup["inline_keyboard"] = [];
+      if (config?.agreementLink) rows.push([{ text: "📄 Политика конфиденциальности", url: config.agreementLink }]);
+      if (config?.offerLink) rows.push([{ text: "📄 Публичная оферта", url: config.offerLink }]);
+      rows.push([{ text: "🏠 Главное меню", callback_data: "menu:main" }]);
+      await editMessageContent(ctx, aboutText, { inline_keyboard: rows }, undefined, screenBannerUrl(config, "about") ?? undefined);
       return;
     }
 
@@ -3704,7 +3848,7 @@ composer.on("callback_query:data", async (ctx) => {
       addsubPending.delete(userId);
       const { items } = await api.getPublicTariffs();
       if (!items?.length) {
-        await editMessageContent(ctx, _t("tariffs.not_configured", getUserLang(userId)), backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
+        await editMessageContent(ctx, _t("tariffs.not_configured", getUserLang(userId)), backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds), undefined, screenBannerUrl(config, "tariffs") ?? undefined);
         return;
       }
       const tariffsEmojiKey = getMenuEmojiKey(config, "tariffs");
@@ -3735,6 +3879,7 @@ composer.on("callback_query:data", async (ctx) => {
             tariffsEmojiIds,
           ),
           entities,
+          screenBannerUrl(config, "tariffs") ?? undefined,
         );
         return;
       }
@@ -3758,7 +3903,7 @@ composer.on("callback_query:data", async (ctx) => {
       await editMessageContent(ctx, text, tariffPayButtons(markHasOptions(items), config?.botBackLabel ?? null, innerStyles, tariffsEmojiIds, tariffsEmojiUnicode, {
         showExtraDevices: config?.botTariffsShowExtraDevicesButton !== false,
         showBalance: config?.botTariffsShowBalanceButton !== false,
-      }), entities);
+      }), entities, screenBannerUrl(config, "tariffs") ?? undefined);
       return;
     }
 
@@ -3767,7 +3912,7 @@ composer.on("callback_query:data", async (ctx) => {
       const { items } = await api.getPublicTariffs();
       const category = items?.find((c: TariffCategory) => c.id === categoryId);
       if (!category?.tariffs?.length) {
-        await editMessageContent(ctx, "Категория не найдена.", backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
+        await editMessageContent(ctx, "Категория не найдена.", backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds), undefined, screenBannerUrl(config, "tariffs") ?? undefined);
         return;
       }
       const nameOnly = (category.name || "").replace(/^\p{Extended_Pictographic}\uFE0F?\s*/u, "").trim() || category.name || "";
@@ -3789,7 +3934,7 @@ composer.on("callback_query:data", async (ctx) => {
       await editMessageContent(ctx, text, tariffsOfCategoryButtons(markHasOptions([category])[0]!, config?.botBackLabel ?? null, innerStyles, "menu:tariffs", tariffsEmojiIds, tariffsEmojiUnicode, {
         showExtraDevices: config?.botTariffsShowExtraDevicesButton !== false,
         showBalance: config?.botTariffsShowBalanceButton !== false,
-      }), entities);
+      }), entities, screenBannerUrl(config, "tariffs") ?? undefined);
       return;
     }
 
@@ -6183,7 +6328,9 @@ composer.on("callback_query:data", async (ctx) => {
           await editMessageContent(
             ctx,
             _t("devices.no_devices", lang),
-            { inline_keyboard: [[{ text: config?.botBackLabel ?? _t("back_to_menu", lang), callback_data: "menu:main" }]] }
+            { inline_keyboard: [[{ text: config?.botBackLabel ?? _t("back_to_menu", lang), callback_data: "menu:main" }]] },
+            undefined,
+            screenBannerUrl(config, "devices") ?? undefined,
           );
           return;
         }
@@ -6219,12 +6366,12 @@ composer.on("callback_query:data", async (ctx) => {
         // «Как подключить второе устройство» под списком устройств (если задан).
         const secondDeviceNote = (config?.installSecondDeviceText ?? "").trim();
         if (secondDeviceNote) lines.push("", secondDeviceNote);
-        await editMessageContent(ctx, lines.join("\n"), { inline_keyboard: rows });
+        await editMessageContent(ctx, lines.join("\n"), { inline_keyboard: rows }, undefined, screenBannerUrl(config, "devices") ?? undefined);
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : "Ошибка";
         await editMessageContent(ctx, `📱 Устройства\n\n❌ ${msg}`, {
           inline_keyboard: [[{ text: "🏠 Главное меню", callback_data: "menu:main" }]],
-        });
+        }, undefined, screenBannerUrl(config, "devices") ?? undefined);
       }
       return;
     }
@@ -6623,7 +6770,7 @@ composer.on("callback_query:data", async (ctx) => {
       const client = await api.getMe(token);
       if (client?.preferredLang) setUserLang(userId, client.preferredLang);
       if (!client.referralCode) {
-        await editMessageContent(ctx, _t("referral.link_unavailable", lang), backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
+        await editMessageContent(ctx, _t("referral.link_unavailable", lang), backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds), undefined, screenBannerUrl(config, "referral") ?? undefined);
         return;
       }
       // новый текст по эталону клиента + статистика из /referral-stats.
@@ -6704,7 +6851,7 @@ composer.on("callback_query:data", async (ctx) => {
 
       const { text: refText, entities: refEntities } = titleWithEmoji("LINK", lines.join("\n"), config?.botEmojis);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await editMessageContent(ctx, refText, { inline_keyboard: rows as any }, refEntities);
+      await editMessageContent(ctx, refText, { inline_keyboard: rows as any }, refEntities, screenBannerUrl(config, "referral") ?? undefined);
       return;
     }
 
@@ -7018,6 +7165,8 @@ composer.on("callback_query:data", async (ctx) => {
             ctx,
             "📋 Мои подписки\n\nУ вас пока нет активных подписок.",
             backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds),
+            undefined,
+            screenBannerUrl(config, "subscription") ?? undefined,
           );
           return;
         }
@@ -7057,6 +7206,7 @@ composer.on("callback_query:data", async (ctx) => {
           text,
           mySubsListButtons(buttonItems, config?.botBackLabel ?? null, innerStyles, innerEmojiIds),
           entities,
+          screenBannerUrl(config, "subscription") ?? undefined,
         );
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : "Ошибка загрузки";
@@ -7189,6 +7339,8 @@ composer.on("callback_query:data", async (ctx) => {
           // пробрасываем subUrl — кнопка «📲 Инструкции по установке»
           // открывает его напрямую (без промежуточного экрана со ссылкой).
           subDetailButtons(subType, subId, backToSubsListLabel(config?.botEmojis ?? null), innerStyles, innerEmojiIds, item.tariffId, tariffHasLocations, isTrialSub, item.autoRenewEnabled === true, subUrl, item.extraDevices ?? 0, item.trialConvertEnabled),
+          undefined,
+          screenBannerUrl(config, "subscription") ?? undefined,
         );
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : "Ошибка";
@@ -8427,6 +8579,7 @@ const botInstances: Bot[] = [];
     throw new Error("BOT_TOKEN не задан в env");
   }
   const b = await createBotWithProxy(token);
+  activeTelegramApi = b.api;
   b.use(composer);
   b.catch((err) => console.error("[Bot] error:", err));
   botInstances.push(b);

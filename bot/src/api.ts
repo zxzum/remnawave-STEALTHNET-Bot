@@ -37,7 +37,7 @@ async function fetchJson<T>(path: string, opts?: { method?: string; body?: unkno
   return data as T;
 }
 
-export async function getOnboardingAsset(name: "select-your-device.png" | "happ-how-to-update.png" | "incy-how-to-update.png" | "welcome.png"): Promise<Uint8Array> {
+export async function getOnboardingAsset(name: "select-your-device.png" | "happ-how-to-update.png" | "incy-how-to-update.png" | "welcome.png" | "about-us.png" | "my-devices.png" | "my-subscription.png" | "oplata.png" | "referals.png" | "tariffs.png"): Promise<Uint8Array> {
   const res = await fetch(`${API_URL}/api/public/bot-asset/onboarding/${name}`, {
     headers: getHeaders(),
   });

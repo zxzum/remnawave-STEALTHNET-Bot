@@ -12,6 +12,7 @@
 import { Router, type Response } from "express";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { prisma } from "../../db.js";
 import { getSystemConfig } from "./client.service.js";
 
 export const botAssetsRouter = Router();
@@ -110,7 +111,41 @@ const ONBOARDING_ASSETS = new Set([
   "happ-how-to-update.png",
   "incy-how-to-update.png",
   "welcome.png",
+  "about-us.png",
+  "my-devices.png",
+  "my-subscription.png",
+  "oplata.png",
+  "referals.png",
+  "tariffs.png",
 ]);
+
+const SCREEN_BANNERS: Record<string, { setting: string; fallback: string }> = {
+  welcome: { setting: "bot_banner_welcome", fallback: "welcome.png" },
+  setup: { setting: "bot_banner_setup", fallback: "my-subscription.png" },
+  main: { setting: "bot_banner_main", fallback: "welcome.png" },
+  subscription: { setting: "bot_banner_subscription", fallback: "my-subscription.png" },
+  devices: { setting: "bot_banner_devices", fallback: "my-devices.png" },
+  tariffs: { setting: "bot_banner_tariffs", fallback: "tariffs.png" },
+  payment: { setting: "bot_banner_payment", fallback: "oplata.png" },
+  referral: { setting: "bot_banner_referral", fallback: "referals.png" },
+  about: { setting: "bot_banner_about", fallback: "about-us.png" },
+};
+
+botAssetsRouter.get("/bot-asset/screen/:screen.png", async (req, res) => {
+  const screen = SCREEN_BANNERS[req.params.screen];
+  if (!screen) return res.status(404).send("unknown screen");
+  try {
+    const stored = await prisma.systemSetting.findUnique({ where: { key: screen.setting } });
+    const value = stored?.value?.trim();
+    if (value) return sendImageValue(value, res, "public, max-age=300");
+    const body = await readFile(new URL(`../../assets/guides/${screen.fallback}`, import.meta.url));
+    res.set("Content-Type", "image/png");
+    res.set("Cache-Control", "public, max-age=300");
+    return res.send(body);
+  } catch {
+    return res.status(404).send("asset not found");
+  }
+});
 
 botAssetsRouter.get("/bot-asset/onboarding/:name", async (req, res) => {
   const name = req.params.name;

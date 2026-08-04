@@ -5,12 +5,13 @@ import * as keyboard from "./keyboard.js";
 
 const buttons: BotButtonConfig[] = [
   { id: "cabinet", visible: true, label: "🚀 Открыть кабинет", order: 1, style: "primary" },
-  { id: "my_subs", visible: true, label: "📋 Мои подписки", order: 2, style: "primary" },
+  { id: "my_subs", visible: true, label: "🔑 Моя подписка", order: 2, style: "primary" },
   { id: "devices", visible: true, label: "📱 Устройства", order: 3, style: "primary" },
   { id: "trial", visible: true, label: "🎁 Попробовать бесплатно", order: 4, style: "success" },
   { id: "referral", visible: true, label: "💸 Пригласить и заработать", order: 5, style: "success" },
   { id: "bot_menu", visible: true, label: "☰ Меню бота", order: 6, style: "primary" },
   { id: "support", visible: true, label: "🆘 Поддержка", order: 7, style: "primary" },
+  { id: "about", visible: true, label: "ⓘ О сервисе", order: 8.2, style: "" },
   { id: "site", visible: true, label: "🌐 Сайт", order: 8, style: "" },
   { id: "profile", visible: true, label: "🧩 Профиль", order: 9, style: "" },
   { id: "tariffs", visible: true, label: "💳 Купить доступ / Продлить", order: 10, style: "" },
@@ -55,17 +56,19 @@ function callbacks(markup: ReturnType<typeof mainMenu>): (string | null)[][] {
 
 test("главное меню содержит только согласованные смысловые ряды", () => {
   assert.deepEqual(labels(buildMain(true)), [
-    ["🚀 Открыть кабинет"],
+    ["🔑 Моя подписка"],
     ["💸 Пригласить и заработать"],
-    ["☰ Меню бота"],
+    ["🆘 Поддержка"],
+    ["ⓘ О сервисе"],
   ]);
 });
 
 test("использованный или недоступный пробник исчезает, а приглашение друзей остаётся", () => {
   assert.deepEqual(labels(buildMain(false)), [
-    ["🚀 Открыть кабинет"],
+    ["🔑 Моя подписка"],
     ["💸 Пригласить и заработать"],
-    ["☰ Меню бота"],
+    ["🆘 Поддержка"],
+    ["ⓘ О сервисе"],
   ]);
 });
 
@@ -90,7 +93,7 @@ test("каждый раздел сохраняет согласованные д
   assert.equal(typeof factory, "function");
   const options = buildOptions(true);
   assert.deepEqual(labels(factory!("account", options)), [
-    ["🧩 Профиль"], ["📋 Мои подписки"], ["📱 Устройства"], ["🎫 Мои обращения"], ["◀️ Назад"],
+    ["🧩 Профиль"], ["🔑 Моя подписка"], ["📱 Устройства"], ["🎫 Мои обращения"], ["◀️ Назад"],
   ]);
   assert.deepEqual(callbacks(factory!("account", options)), [
     ["menu:profile"], ["menu:my_subs"], ["menu:devices"], [null], ["menu:bot"],

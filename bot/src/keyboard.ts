@@ -116,18 +116,20 @@ const MENU_IDS: Record<string, string> = {
   gift: "menu:gift",
   // Унифицированный список подписок (root + secondary). См. handler menu:my_subs в index.ts.
   my_subs: "menu:my_subs",
+  about: "menu:about",
   // T14 (11.05.2026): бесплатный MTProto-прокси для Telegram. См. handler menu:tg_proxy в index.ts.
   tg_proxy: "menu:tg_proxy",
 };
 
 const DEFAULT_BUTTONS: BotButtonConfig[] = [
   { id: "cabinet", visible: true, label: "🚀 Открыть кабинет", order: 1, style: "primary", onePerRow: true },
-  { id: "my_subs", visible: true, label: "📋 Мои подписки", order: 2, style: "primary" },
+  { id: "my_subs", visible: true, label: "🔑 Моя подписка", order: 2, style: "primary" },
   { id: "devices", visible: true, label: "📱 Устройства", order: 3, style: "primary" },
   { id: "trial", visible: true, label: "🎁 Попробовать бесплатно", order: 4, style: "success" },
   { id: "referral", visible: true, label: "💸 Пригласить и заработать", order: 5, style: "success" },
   { id: "bot_menu", visible: true, label: "☰ Меню бота", order: 6, style: "primary", onePerRow: true },
   { id: "support", visible: true, label: "🆘 Поддержка", order: 7, style: "primary" },
+  { id: "about", visible: true, label: "ⓘ О сервисе", order: 8.2, style: "" },
   { id: "site", visible: true, label: "🌐 Сайт", order: 8, style: "" },
   { id: "tariffs", visible: true, label: "💳 Купить доступ / Продлить", order: 10, style: "" },
   // «Мои подписки» — order 0.05, чтобы стояло сразу после «Тарифы» и перед прокси/singbox.
@@ -202,7 +204,10 @@ function resolveMenuButtons(opts: MenuOptions): BotButtonConfig[] {
   // Auto-add «Мои подписки» если её нет в админ-конфиге (новая кнопка,
   // в существующих инсталляциях её ещё не было — fallback не даёт её потерять).
   if (fromConfig && !list.some((b) => b.id === "my_subs")) {
-    list.push({ id: "my_subs", visible: true, label: "📋 Мои подписки", order: 2, style: "primary" });
+    list.push({ id: "my_subs", visible: true, label: "🔑 Моя подписка", order: 2, style: "primary" });
+  }
+  if (fromConfig && !list.some((b) => b.id === "about")) {
+    list.push({ id: "about", visible: true, label: "ⓘ О сервисе", order: 8.2, style: "" });
   }
   if (fromConfig && !list.some((b) => b.id === "bot_menu")) {
     list.push({ id: "bot_menu", visible: true, label: "☰ Меню бота", order: 6, style: "primary", onePerRow: true });
@@ -270,9 +275,10 @@ export function mainMenu(opts: MenuOptions): InlineMarkup {
   const buttons = resolveMenuButtons(opts);
   const byId = new Map(buttons.map((button) => [button.id, button]));
   const layout = [
-    ["cabinet"],
+    ["my_subs"],
     ["referral"],
-    ["bot_menu"],
+    ["support"],
+    ["about"],
   ];
   const rows = layout
     .map((ids) => ids.map((id) => byId.get(id)).filter((button): button is BotButtonConfig => Boolean(button)))
