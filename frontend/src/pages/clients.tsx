@@ -1326,7 +1326,7 @@ function ClientEditModal({
 
             <TabsContent value="management" keepMounted={mountedTabs.has("management")}>
               <Tabs value={manageView} onValueChange={changeManageView}>
-                <TabsList className="flex w-full justify-start gap-1 overflow-x-auto rounded-xl bg-foreground/[0.03] p-1">
+                <TabsList className="grid w-full grid-cols-2 gap-1 rounded-xl bg-foreground/[0.03] p-1 sm:flex sm:justify-start sm:overflow-x-auto">
                   <TabsTrigger value="profile" className="shrink-0 rounded-lg text-xs"><User className="h-3.5 w-3.5" /> Профиль</TabsTrigger>
                   <TabsTrigger value="devices" className="shrink-0 rounded-lg text-xs"><Smartphone className="h-3.5 w-3.5" /> Устройства {devicesTotal > 0 && `· ${devicesTotal}`}</TabsTrigger>
                   {canManageServices && <TabsTrigger value="services" className="shrink-0 rounded-lg text-xs"><Gift className="h-3.5 w-3.5" /> Услуги</TabsTrigger>}
