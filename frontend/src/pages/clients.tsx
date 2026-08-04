@@ -1015,7 +1015,7 @@ function ClientEditModal({
   }, [loadRemnaUser, loadDevices]);
 
   useEffect(() => {
-    if (tab === "management" && manageView === "profile") loadReferrer();
+    if (tab === "overview" || (tab === "management" && manageView === "profile")) loadReferrer();
   }, [loadReferrer, manageView, tab]);
 
   // Тяжёлая статистика нужна только на вкладке «Трафик».
@@ -1259,12 +1259,43 @@ function ClientEditModal({
                 </section>
               </div>
 
-              <section className="mt-4 grid gap-3 rounded-2xl border border-white/10 bg-background/40 p-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
-                <div><span className="block text-xs text-muted-foreground">Email</span><span className="break-all">{editing.email || "—"}</span></div>
-                <div><span className="block text-xs text-muted-foreground">Telegram</span><span>{editing.telegramUsername ? `@${editing.telegramUsername}` : editing.telegramId || "—"}</span></div>
-                <div><span className="block text-xs text-muted-foreground">Баланс</span><span>{editing.balance} {editing.preferredCurrency?.toUpperCase()}</span></div>
-                <div><span className="block text-xs text-muted-foreground">Рефералы</span><span>{editing._count?.referrals ?? 0}</span></div>
-              </section>
+              <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                <section className="rounded-2xl border border-white/10 bg-background/40 p-4 text-sm">
+                  <h3 className="mb-3 font-semibold">Клиент</h3>
+                  <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+                    <div><span className="block text-xs text-muted-foreground">Email</span><span className="break-all">{editing.email || "—"}</span></div>
+                    <div><span className="block text-xs text-muted-foreground">Telegram</span><span>{editing.telegramUsername ? `@${editing.telegramUsername}` : editing.telegramId || "—"}</span></div>
+                    <div><span className="block text-xs text-muted-foreground">Баланс</span><span>{editing.balance} {editing.preferredCurrency?.toUpperCase()}</span></div>
+                    <div><span className="block text-xs text-muted-foreground">Язык</span><span>{editing.preferredLang?.toUpperCase() || "—"}</span></div>
+                    <div><span className="block text-xs text-muted-foreground">Создан</span><span>{fmtMsk(editing.createdAt)}</span></div>
+                    <div><span className="block text-xs text-muted-foreground">Пробный период</span><span>{editing.trialUsed ? "Использован" : "Доступен"}</span></div>
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-primary/20 bg-primary/[0.05] p-4 text-sm">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="font-semibold">Реферальная программа</h3>
+                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => { changeTab("management"); changeManageView("profile"); }}>
+                      Управлять
+                    </Button>
+                  </div>
+                  <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+                    <div>
+                      <span className="block text-xs text-muted-foreground">Реферальный код</span>
+                      <span className="flex items-center gap-1.5">
+                        {editing.referralCode ? <code>{editing.referralCode}</code> : "—"}
+                        {editing.referralCode && <CopyButton text={editing.referralCode} />}
+                      </span>
+                    </div>
+                    <div><span className="block text-xs text-muted-foreground">Приглашено клиентов</span><span className="font-semibold">{editing._count?.referrals ?? 0}</span></div>
+                    <div><span className="block text-xs text-muted-foreground">Реферальный процент</span><span>{editing.referralPercent == null ? "По умолчанию" : `${editing.referralPercent}%`}</span></div>
+                    <div>
+                      <span className="block text-xs text-muted-foreground">Кто пригласил</span>
+                      <span>{referrerInfo === undefined ? "Загрузка…" : referrerInfo ? (referrerInfo.telegramUsername ? `@${referrerInfo.telegramUsername}` : referrerInfo.email || referrerInfo.telegramId || referrerInfo.id.slice(0, 8)) : "Не привязан"}</span>
+                    </div>
+                  </div>
+                </section>
+              </div>
             </TabsContent>
 
             <TabsContent value="subscriptions" keepMounted={mountedTabs.has("subscriptions")}>
@@ -1309,7 +1340,7 @@ function ClientEditModal({
                     </Button>
                   </div>
 
-                  <details className="mt-3 text-sm">
+                  <details open className="mt-3 text-sm">
                     <summary className="cursor-pointer text-xs text-muted-foreground">Дополнительные параметры</summary>
                     <div className="mt-3 grid gap-3 sm:grid-cols-3">
                       <div className="space-y-1.5"><Label>Трафик, GB</Label><Input type="number" min={0} value={grantTrafficGb} onChange={(event) => setGrantTrafficGb(event.target.value)} placeholder="По тарифу" /></div>
@@ -1336,7 +1367,7 @@ function ClientEditModal({
             {/* ────── Профиль ────── */}
             <TabsContent value="profile" keepMounted={mountedTabs.has("manage:profile")}>
               <div className="space-y-5">
-                <details className="hidden">
+                <details open className="hidden">
                   <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
                     <Gift className="h-4 w-4 text-primary" />
                     {t("admin.clients.grant_tariff_title", "Выдать тариф")}
@@ -1544,7 +1575,7 @@ function ClientEditModal({
                   )}
                 </details>
 
-                <details className="group space-y-3 rounded-2xl border border-white/10 bg-background/50 p-4 text-sm sm:p-5">
+                <details open className="group space-y-3 rounded-2xl border border-white/10 bg-background/50 p-4 text-sm sm:p-5">
                   <summary className="mb-2 flex cursor-pointer list-none items-center text-xs font-medium uppercase tracking-wider text-muted-foreground [&::-webkit-details-marker]:hidden">
                     {t("admin.clients.info")}
                     <span className="ml-auto normal-case tracking-normal group-open:hidden">Показать реквизиты</span>
@@ -1687,7 +1718,7 @@ function ClientEditModal({
                       onChange={(e) => setEditForm((f) => ({ ...f, balance: Number(e.target.value) || 0 }))}
                     />
                   </div>
-                  <details className="rounded-xl border border-white/10 bg-background/40 p-3 sm:col-span-2">
+                  <details open className="rounded-xl border border-white/10 bg-background/40 p-3 sm:col-span-2">
                     <summary className="cursor-pointer text-sm font-medium">Продажи и реферальные настройки</summary>
                     <div className="mt-3 grid gap-4 sm:grid-cols-2">
                       <div className="space-y-2">
@@ -1760,7 +1791,7 @@ function ClientEditModal({
                   </div>
                 </section>
 
-                <details className="rounded-2xl border border-white/10 bg-background/40 p-4">
+                <details open className="rounded-2xl border border-white/10 bg-background/40 p-4">
                   <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
                     <KeyRound className="h-4 w-4" /> {t("admin.clients.cabinet_password")}
                     <span className="ml-auto text-xs font-normal text-muted-foreground">Изменить</span>
@@ -1795,7 +1826,7 @@ function ClientEditModal({
                   </Button>
                 </details>
 
-                <details className="rounded-2xl border border-white/10 bg-background/40 p-4">
+                <details open className="rounded-2xl border border-white/10 bg-background/40 p-4">
                   <summary className="cursor-pointer list-none text-sm font-semibold [&::-webkit-details-marker]:hidden">Ограничения тарифов</summary>
                   <div className="mt-4">
                     <TariffRestrictionsSection clientId={editing.id} editing={editing} token={token} />
