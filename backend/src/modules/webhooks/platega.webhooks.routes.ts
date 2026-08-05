@@ -83,6 +83,7 @@ const PAYMENT_SELECT = {
 
 const SUCCESS_STATUSES = new Set(["CONFIRMED", "PAID", "SUCCESS", "SUCCEEDED", "COMPLETED", "SUCCESSFUL", "APPROVED"]);
 const FAILED_STATUSES = new Set(["CANCELED", "CANCELLED", "FAILED", "DECLINED", "REJECTED", "ERROR", "EXPIRED", "CHARGEBACK", "CHARGEBACKED"]);
+let invalidCredentialsNotifiedAt = 0;
 
 type Meta = Record<string, unknown> & {
   plategaActivationAppliedAt?: string;
@@ -331,7 +332,8 @@ plategaWebhooksRouter.post("/platega", async (req, res) => {
     }
     if (!verifyPlategaCallbackCredentials(req.headers, credentials)) {
       ack(401, "rejected_signature", "Invalid X-MerchantId/X-Secret");
-      if (req.headers["x-merchantid"] === credentials.merchantId) {
+      if (req.headers["x-merchantid"] === credentials.merchantId && Date.now() - invalidCredentialsNotifiedAt > 5 * 60_000) {
+        invalidCredentialsNotifiedAt = Date.now();
         await notifyPlategaPaymentEvent({ kind: "callback_failed", details: "Platega прислал неверный X-Secret" }).catch(() => {});
       }
       return res.status(401).json({ message: "Invalid callback credentials" });
