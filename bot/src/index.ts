@@ -603,6 +603,13 @@ const SCREEN_ASSET_NAMES: Record<string, string> = {
   setup: "my-subscription.png",
 };
 
+const WELCOME_TRIAL_DAYS = 2;
+const DEFAULT_BOT_WELCOME_TEXT = [
+  "Лазейка ВПН — быстрый и безопасный VPN в Telegram.",
+  "",
+  "Подключение за 1 минуту, стабильная скорость и поддержка 24/7.",
+].join("\n");
+
 async function renderCommandScreen(
   ctx: Context,
   userId: number,
@@ -701,18 +708,16 @@ async function showSetupDevicePicker(ctx: Context, token: string, config: Config
 
 async function showFirstWelcome(ctx: Context, userId: number, config: ConfigSnapshot | null): Promise<void> {
   const configuredText = (config?.botWelcomeText ?? "").trim();
-  const legacyGenericWelcome = /^что умеет этот бот\b/i.test(configuredText);
-  const text = !configuredText || legacyGenericWelcome
-    ? "Лазейка VPN\n\nВаш VPN, устройства и бонусы — в одном месте"
-    : configuredText;
-  const trialDays = Number(config?.trialDays ?? 0);
-  const trialLabel = trialDays > 0
-    ? `🎁 Попробовать ${trialDays} ${formatDaysRu(trialDays)} бесплатно`
-    : "🎁 Попробовать бесплатно";
-  const markup = {
+  const legacyGenericWelcome = /^(?:что умеет этот бот\b|лазейка vpn\s*\n\s*\n\s*ваш vpn, устройства и бонусы)/i.test(configuredText);
+  const text = !configuredText || legacyGenericWelcome ? DEFAULT_BOT_WELCOME_TEXT : configuredText;
+  const appUrl = config?.publicAppUrl?.replace(/\/+$/, "") ?? "";
+  const loginButton = appUrl
+    ? { text: "🔐 Войти в кабинет", web_app: { url: `${appUrl}/cabinet` }, style: "primary" as const }
+    : { text: "🔐 Войти в кабинет", callback_data: "menu:main", style: "primary" as const };
+  const markup: InlineMarkup = {
     inline_keyboard: [
-      [{ text: trialLabel, callback_data: "welcome:try" }],
-      [{ text: "🔐 Войти в кабинет", callback_data: "menu:main" }],
+      [{ text: `🎁 Попробовать ${WELCOME_TRIAL_DAYS} ${formatDaysRu(WELCOME_TRIAL_DAYS)} бесплатно`, callback_data: "welcome:try", style: "success" }],
+      [loginButton],
     ],
   };
   const banner = screenBannerUrl(config, "welcome");
@@ -1392,7 +1397,7 @@ function buildCompactMainMenuText(serviceName: string, balance: number, currency
   void serviceName;
   void balance;
   void currency;
-  return { text: "Лазейка VPN\n\nВаш VPN, устройства и бонусы — в одном месте", entities: [] };
+  return { text: DEFAULT_BOT_WELCOME_TEXT, entities: [] };
 }
 
 function buildMainMenuText(opts: {
@@ -1585,37 +1590,6 @@ function buildMainMenuText(opts: {
 }
 
 const TELEGRAM_CAPTION_MAX = 1024;
-
-/** Логотип из настроек: data URL или URL → источник для sendPhoto/sendAnimation и признак GIF */
-function logoToMediaSource(logo: string | null | undefined): { source: InputFile | string; isGif: boolean } | null {
-  if (!logo || !logo.trim()) return null;
-  const s = logo.trim();
-  if (s.startsWith("http://") || s.startsWith("https://")) {
-    const isGif = /\.gif(\?|$)/i.test(s);
-    return { source: s, isGif };
-  }
-  const base64Match = /^data:image\/([a-z]+);base64,(.+)$/i.exec(s);
-  if (base64Match) {
-    try {
-      const subtype = (base64Match[1] ?? "").toLowerCase();
-      const buf = Buffer.from(base64Match[2]!, "base64");
-      if (buf.length > 0) {
-        const isGif = subtype === "gif";
-        const name = isGif ? "logo.gif" : "logo.png";
-        return { source: new InputFile(buf, name), isGif };
-      }
-    } catch {
-      return null;
-    }
-  }
-  try {
-    const buf = Buffer.from(s, "base64");
-    if (buf.length > 0) return { source: new InputFile(buf, "logo.png"), isGif: false };
-  } catch {
-    // ignore
-  }
-  return null;
-}
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Rich Messages (Telegram Bot API 10.1) — helpers
@@ -2273,37 +2247,15 @@ composer.command("start", async (ctx) => {
     }
 
     // ─── Приветственное сообщение (если включено в админке) ───
-    // Показываем картинку + текст с кнопкой «Войти», которая ведёт в главное меню.
+    // Используем тот же welcome-экран, что и для нового клиента.
     // Если showOnce=true — только при первом /start (когда client.onboardingCompleted=false).
     const welcomeEnabled = Boolean((config as { botWelcomeEnabled?: boolean })?.botWelcomeEnabled);
     if (welcomeEnabled) {
       const showOnce = Boolean((config as { botWelcomeShowOnce?: boolean })?.botWelcomeShowOnce);
       const alreadySeen = showOnce && client?.onboardingCompleted === true;
       if (!alreadySeen) {
-        const welcomeText = ((config as { botWelcomeText?: string | null })?.botWelcomeText ?? "").trim();
-        const welcomeImage = ((config as { botWelcomeImage?: string | null })?.botWelcomeImage ?? "").trim();
-        if (welcomeText || welcomeImage) {
-          const continueMarkup = { inline_keyboard: [[{ text: "✨ Войти в кабинет", callback_data: "welcome:continue" }]] };
-          try {
-            const media = welcomeImage ? logoToMediaSource(welcomeImage) : null;
-            const captionMax = TELEGRAM_CAPTION_MAX;
-            const safeText = welcomeText.length > captionMax ? welcomeText.slice(0, captionMax - 3) + "..." : welcomeText;
-            if (media) {
-              if (media.isGif) {
-                await ctx.replyWithAnimation(media.source, { caption: safeText || undefined, reply_markup: continueMarkup });
-              } else {
-                await ctx.replyWithPhoto(media.source, { caption: safeText || undefined, reply_markup: continueMarkup });
-              }
-            } else {
-              await ctx.reply(welcomeText, { reply_markup: continueMarkup });
-            }
-            // Если showOnce — отметим что приветствие показано (сохранится после первого «Войти»)
-            return;
-          } catch (e) {
-            console.error("[/start welcome] failed:", e instanceof Error ? e.message : e);
-            // продолжаем как обычно — fallback на главное меню
-          }
-        }
+        await showFirstWelcome(ctx, from.id, config);
+        return;
       }
     }
 
@@ -2373,18 +2325,23 @@ composer.command("start", async (ctx) => {
       }
     }
     if (!richMenuSent) {
-      const welcomeImage = await api.getOnboardingAsset("welcome.png").catch(() => null);
       const previous = lastBotScreens.get(from.id);
       const banner = screenBannerUrl(config, "welcome");
       if (previous && activeTelegramApi && banner) {
         await activeTelegramApi.editMessageMedia(previous.chatId, previous.messageId, { type: "photo", media: banner, caption, caption_entities: captionEntities.length ? captionEntities : undefined }, { reply_markup: markup }).catch(() => {});
-      } else if (welcomeImage) {
-        const opts = { caption, caption_entities: captionEntities.length ? captionEntities : undefined, reply_markup: markup };
-        const sent = await ctx.replyWithPhoto(new InputFile(welcomeImage, "welcome.png"), opts);
+      } else if (banner) {
+        const sent = await ctx.replyWithPhoto(banner, { caption, caption_entities: captionEntities.length ? captionEntities : undefined, reply_markup: markup });
         if (sent?.message_id) lastBotScreens.set(from.id, { chatId: sent.chat.id, messageId: sent.message_id });
       } else {
-        const sent = await ctx.reply(text, { entities: entities.length ? entities : undefined, reply_markup: markup });
-        if (sent?.message_id) lastBotScreens.set(from.id, { chatId: sent.chat.id, messageId: sent.message_id });
+        const welcomeImage = await api.getOnboardingAsset("welcome.png").catch(() => null);
+        if (welcomeImage) {
+          const opts = { caption, caption_entities: captionEntities.length ? captionEntities : undefined, reply_markup: markup };
+          const sent = await ctx.replyWithPhoto(new InputFile(welcomeImage, "welcome.png"), opts);
+          if (sent?.message_id) lastBotScreens.set(from.id, { chatId: sent.chat.id, messageId: sent.message_id });
+        } else {
+          const sent = await ctx.reply(text, { entities: entities.length ? entities : undefined, reply_markup: markup });
+          if (sent?.message_id) lastBotScreens.set(from.id, { chatId: sent.chat.id, messageId: sent.message_id });
+        }
       }
     }
   } catch (e: unknown) {

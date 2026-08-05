@@ -129,7 +129,7 @@ const DEFAULT_BUTTONS: BotButtonConfig[] = [
   { id: "referral", visible: true, label: "💸 Пригласить и заработать", order: 5, style: "success" },
   { id: "bot_menu", visible: true, label: "☰ Меню бота", order: 6, style: "primary", onePerRow: true },
   { id: "support", visible: true, label: "🆘 Поддержка", order: 7, style: "primary" },
-  { id: "about", visible: true, label: "ⓘ О сервисе", order: 8.2, style: "" },
+  { id: "about", visible: true, label: "ⓘ О сервисе", order: 8.2, style: "primary" },
   { id: "site", visible: true, label: "🌐 Сайт", order: 8, style: "" },
   { id: "tariffs", visible: true, label: "💳 Купить доступ / Продлить", order: 10, style: "" },
   // «Мои подписки» — order 0.05, чтобы стояло сразу после «Тарифы» и перед прокси/singbox.
@@ -207,7 +207,7 @@ function resolveMenuButtons(opts: MenuOptions): BotButtonConfig[] {
     list.push({ id: "my_subs", visible: true, label: "🔑 Моя подписка", order: 2, style: "primary" });
   }
   if (fromConfig && !list.some((b) => b.id === "about")) {
-    list.push({ id: "about", visible: true, label: "ⓘ О сервисе", order: 8.2, style: "" });
+    list.push({ id: "about", visible: true, label: "ⓘ О сервисе", order: 8.2, style: "primary" });
   }
   if (fromConfig && !list.some((b) => b.id === "bot_menu")) {
     list.push({ id: "bot_menu", visible: true, label: "☰ Меню бота", order: 6, style: "primary", onePerRow: true });
@@ -282,7 +282,10 @@ export function mainMenu(opts: MenuOptions): InlineMarkup {
   ];
   const rows = layout
     .map((ids) => ids.map((id) => byId.get(id)).filter((button): button is BotButtonConfig => Boolean(button)))
-    .map((row) => row.map((button) => menuButtonNode(button, opts)).filter((node): node is InlineButton | WebAppButton | UrlButton => Boolean(node)))
+    .map((row) => row.map((button) => menuButtonNode({
+      ...button,
+      style: button.style || (button.id === "referral" ? "success" : "primary"),
+    }, opts)).filter((node): node is InlineButton | WebAppButton | UrlButton => Boolean(node)))
     .filter((row) => row.length > 0);
   return { inline_keyboard: rows };
 }
