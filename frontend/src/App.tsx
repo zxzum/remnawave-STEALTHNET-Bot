@@ -40,12 +40,14 @@ function shouldRetryLazyRoute() {
 function lazy<T extends React.ComponentType<any>>(loader: () => Promise<{ default: T }>) {
   return reactLazy(async () => {
     try {
-      return await loader();
+      return await Promise.race([
+        loader(),
+        new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("Загрузка раздела превысила 15 секунд")), 15_000)),
+      ]);
     } catch (error) {
       // ponytail: one reload per minute prevents an infinite loop on a persistently broken chunk.
       if (shouldRetryLazyRoute()) {
         window.location.reload();
-        await new Promise<never>(() => {});
       }
       throw error;
     }
