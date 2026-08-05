@@ -72,6 +72,13 @@ test("использованный или недоступный пробник 
   ]);
 });
 
+test("главное меню использует цветовую иерархию кнопок", () => {
+  assert.deepEqual(
+    buildMain(true).inline_keyboard.map((row) => row.map((button) => ("style" in button ? button.style : undefined))),
+    [["primary"], ["success"], ["primary"], ["primary"]],
+  );
+});
+
 test("меню бота показывает четыре раздела и возврат на главную", () => {
   const factory = (keyboard as unknown as { botSectionsMenu?: MenuFactory }).botSectionsMenu;
   assert.equal(typeof factory, "function");
