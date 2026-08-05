@@ -2024,7 +2024,7 @@ export function SettingsPage() {
                           <div className="h-8 w-8 rounded-xl bg-emerald-500/20 flex items-center justify-center">✨</div>
                           <div>
                             <h3 className="text-base font-semibold">Приветственное сообщение</h3>
-                            <p className="text-xs text-muted-foreground">Показывается клиенту при первом /start. Картинка-баннер + текст + кнопка «Войти».</p>
+                            <p className="text-xs text-muted-foreground">Показывается клиенту при первом /start. Картинка-баннер + текст + кнопка пробного доступа.</p>
                           </div>
                         </div>
                         <label className="inline-flex items-center gap-2 cursor-pointer">
@@ -2042,7 +2042,7 @@ export function SettingsPage() {
                             className="w-full min-h-[160px] rounded-md border border-input bg-background px-3 py-2 text-sm"
                             value={settings.botWelcomeText ?? ""}
                             onChange={(e) => setSettings((s) => (s ? { ...s, botWelcomeText: e.target.value || null } : s))}
-                            placeholder={"Добро пожаловать в VPN!\n\n🚀 Высокая скорость\n🚫 Удаляем рекламу\n♾ Огромный запас трафика\n👥 Платим 30% с платежей друзей"}
+                            placeholder={"👋 Добро пожаловать в Лазейка ВПН!\n\nБыстрый и безопасный VPN прямо в Telegram.\nПодключение за 1 минуту, стабильная скорость и поддержка 24/7.\n\nПопробуйте бесплатно — без карты и обязательств."}
                             maxLength={4000}
                           />
                           <p className="text-[10px] text-muted-foreground">До 4000 символов. Эмодзи поддерживаются. Если задана картинка — текст идёт как caption (макс. 1024 символа в Telegram).</p>
@@ -2088,7 +2088,7 @@ export function SettingsPage() {
                             checked={settings.botWelcomeShowOnce ?? true}
                             onCheckedChange={(checked: boolean) => setSettings((s) => (s ? { ...s, botWelcomeShowOnce: checked === true } : s))}
                           />
-                          <span>Показывать только при первом /start (пока клиент не нажал «Войти в кабинет»)</span>
+                          <span>Показывать только при первом /start (до завершения первого подключения)</span>
                         </label>
                       </div>
                     </div>
