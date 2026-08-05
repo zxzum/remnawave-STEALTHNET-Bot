@@ -58,6 +58,7 @@ import { requireAuth } from "./modules/auth/middleware.js";
 import { renderSpaIndex } from "./modules/branding/spa-html.js";
 
 const app = express();
+const dev = process.env.NODE_ENV === "development";
 
 // За nginx: иначе express-rate-limit падает из-за X-Forwarded-For
 app.set("trust proxy", 1);
@@ -133,18 +134,20 @@ app.use(cors({
 app.use("/api/webhooks/cryptopay", express.raw({ type: "application/json" }), cryptopayWebhooksRouter);
 app.use("/api/webhooks/heleket", express.raw({ type: "application/json" }), heleketWebhooksRouter);
 app.use("/api/webhooks/lava", express.raw({ type: "application/json" }), lavaWebhooksRouter);
-// Platega — HMAC проверяет raw body. Apply path-specific raw middleware ДО express.json,
-// чтобы плательщик мог проверить подпись над оригинальными байтами. Сам router смонтирован
-// ниже на /api/webhooks (где у него уже есть `.post("/platega", ...)`).
-app.use("/api/webhooks/platega", express.raw({ type: "application/json" }));
+// Platega: высокий отдельный лимит от мусора до записи в webhook inbox.
+const plategaWebhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: dev ? 2000 : 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use("/api/webhooks/platega", plategaWebhookLimiter, express.raw({ type: "application/json" }));
 
 // Лимит 5MB для настроек с логотипом и favicon (data URL)
 app.use(express.json({ limit: "200mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
 // ——— Защита от накрутки аккаунтов и перебора ———
-const dev = process.env.NODE_ENV === "development";
-
 // Админка: логин и 2FA — жёсткий лимит по IP.
 // 20 попыток / 15 мин — достаточно для опечаток и менеджеров паролей,
 // но ломает любой brute-force. skipSuccessfulRequests: верный пароль
@@ -263,7 +266,7 @@ const limiter = rateLimit({
   message: { message: "Too many requests" },
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => isInternalIp(req.ip),
+  skip: (req) => isInternalIp(req.ip) || req.path === "/webhooks/platega",
 });
 app.use("/api/", limiter);
 

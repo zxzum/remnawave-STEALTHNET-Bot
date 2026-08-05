@@ -3646,6 +3646,7 @@ clientRouter.post("/payments/platega", async (req, res) => {
   let finalAmount: number;
   let currencyToUse: string;
   let metadataExtra: Record<string, unknown> | null = null;
+  let extraOptionSubscriptionId: string | null = null;
 
   if (customBuildBody) {
     const configForCb = await getSystemConfig();
@@ -3725,6 +3726,18 @@ clientRouter.post("/payments/platega", async (req, res) => {
     if (parsed.data.extraOption?.targetSubscriptionId) {
       metadataExtra = { ...metadataExtra, targetSubscriptionId: parsed.data.extraOption.targetSubscriptionId };
     }
+    const requestedSubscriptionId = parsed.data.extraOption?.targetSubscriptionId;
+    const targetSubscription = await prisma.subscription.findFirst({
+      where: {
+        ...(requestedSubscriptionId ? { id: requestedSubscriptionId } : {}),
+        deletionRequestedAt: null,
+        OR: [{ ownerId: clientId }, { giftedToClientId: clientId }],
+      },
+      orderBy: { subscriptionIndex: "asc" },
+      select: { id: true },
+    });
+    if (!targetSubscription) return res.status(400).json({ message: "Подписка для опции не найдена" });
+    extraOptionSubscriptionId = targetSubscription.id;
   } else {
     // Если передан tariffId / proxyTariffId / singboxTariffId — цену+валюту берём
     // из тарифа в БД (приоритет: tariffPriceOption → tariff). Если ни одного
@@ -3903,6 +3916,9 @@ clientRouter.post("/payments/platega", async (req, res) => {
       deviceCount: parsed.data.deviceCount ?? null,
       proxyTariffId: proxyTariffIdToStore,
       singboxTariffId: singboxTariffIdToStore,
+      subscriptionId: extraOptionSubscriptionId,
+      extraOptionState: extraOptionSubscriptionId ? "NEEDS_PLAN" : null,
+      extraOptionNextAttemptAt: extraOptionSubscriptionId ? new Date() : null,
       metadata: paymentMeta ? JSON.stringify(paymentMeta) : null,
     }),
   });
