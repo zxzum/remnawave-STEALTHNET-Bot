@@ -28,18 +28,14 @@
   <body>
     <div id="root"></div>
     <script>
-      // Если старый Service Worker перехватил запрос к /api/ и вернул SPA —
-      // удаляем SW и перезагружаем, чтобы запрос ушёл на бэкенд.
-      if (location.pathname.startsWith('/api/')) {
-        if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.getRegistrations().then(function(regs) {
-            var p = [];
-            regs.forEach(function(r) { p.push(r.unregister()); });
-            Promise.all(p).then(function() { location.reload(); });
-          });
-        } else {
-          location.reload();
-        }
+      // Старый Service Worker может отдать HTML предыдущего релиза со ссылками
+      // на уже удалённые JS-файлы, поэтому удаляем его до запуска приложения.
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function(regs) {
+          if (!regs.length) return;
+          Promise.all(regs.map(function(r) { return r.unregister(); }))
+            .then(function() { location.reload(); });
+        });
       }
     </script>
     <script src="/telegram-web-app.js"></script>
