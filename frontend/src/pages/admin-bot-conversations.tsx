@@ -5,10 +5,10 @@
  * взаимодействий (регистрация, оплаты, рассылки, тикеты, gift, admin actions).
  */
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   MessageSquare, Loader2, Search, RefreshCw, User, Send, CreditCard,
-  ShieldCheck, Ticket, Gift, AlertCircle, UserPlus, Mail, MessagesSquare,
+  Ticket, AlertCircle, Mail,
 } from "lucide-react";
 import { useAuth } from "@/contexts/auth";
 import { Card } from "@/components/ui/card";
@@ -16,19 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { botConversationsApi, type BotConversationListItem, type TimelineEvent } from "@/lib/admin-extras-api";
-import { fmtMsk } from "@/lib/datetime";
-
-const KIND_META: Record<TimelineEvent["kind"], { color: string; Icon: typeof User }> = {
-  registered:        { color: "text-emerald-500", Icon: UserPlus },
-  payment_paid:      { color: "text-emerald-500", Icon: CreditCard },
-  payment_failed:    { color: "text-rose-500", Icon: AlertCircle },
-  payment_refunded:  { color: "text-violet-500", Icon: CreditCard },
-  broadcast:         { color: "text-sky-500", Icon: Send },
-  ticket_opened:     { color: "text-amber-500", Icon: Ticket },
-  ticket_message:    { color: "text-amber-500", Icon: MessagesSquare },
-  gift:              { color: "text-pink-500", Icon: Gift },
-  admin_action:      { color: "text-foreground", Icon: ShieldCheck },
-};
+import { ClientTimeline } from "@/components/admin/client-timeline";
 
 export function AdminBotConversationsPage() {
   const { state } = useAuth();
@@ -40,18 +28,21 @@ export function AdminBotConversationsPage() {
   const [detail, setDetail] = useState<{ client: Record<string, unknown>; events: TimelineEvent[]; stats: Record<string, number> } | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const listRequest = useRef(0);
+  const detailRequest = useRef(0);
 
   const load = useCallback(async () => {
     if (!state.accessToken) return;
+    const requestId = ++listRequest.current;
     setLoading(true);
     setErr(null);
     try {
       const r = await botConversationsApi.list(state.accessToken, { q: search, limit: 100 });
-      setItems(Array.isArray(r?.items) ? r.items : []);
+      if (requestId === listRequest.current) setItems(Array.isArray(r?.items) ? r.items : []);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "load error");
+      if (requestId === listRequest.current) setErr(e instanceof Error ? e.message : "load error");
     } finally {
-      setLoading(false);
+      if (requestId === listRequest.current) setLoading(false);
     }
   }, [state.accessToken, search]);
 
@@ -59,16 +50,17 @@ export function AdminBotConversationsPage() {
 
   async function selectClient(id: string) {
     if (!state.accessToken) return;
+    const requestId = ++detailRequest.current;
     setActiveId(id);
     setDetail(null);
     setDetailLoading(true);
     try {
       const r = await botConversationsApi.detail(state.accessToken, id);
-      setDetail(r);
+      if (requestId === detailRequest.current) setDetail(r);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "detail error");
+      if (requestId === detailRequest.current) setErr(e instanceof Error ? e.message : "detail error");
     } finally {
-      setDetailLoading(false);
+      if (requestId === detailRequest.current) setDetailLoading(false);
     }
   }
 
@@ -167,42 +159,7 @@ export function AdminBotConversationsPage() {
           </Card>
         ) : detail ? (
           <div className="space-y-3">
-            {/* Client summary */}
-            <Card className="bg-background/60 backdrop-blur-3xl border-white/10 rounded-2xl p-4">
-              <div className="grid sm:grid-cols-5 gap-3 text-xs">
-                {Object.entries(detail.stats).map(([k, v]) => (
-                  <div key={k} className="rounded-lg bg-foreground/[0.03] dark:bg-white/[0.02] border border-white/10 p-2 text-center">
-                    <div className="text-lg font-bold tabular-nums">{v}</div>
-                    <div className="text-[10px] uppercase tracking-widest text-muted-foreground mt-0.5">{k.replace(/([A-Z])/g, " $1").toLowerCase().trim()}</div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-
-            {/* Timeline */}
-            <Card className="bg-background/60 backdrop-blur-3xl border-white/10 rounded-2xl p-4">
-              <h3 className="text-sm font-semibold mb-3">Timeline ({detail.events.length})</h3>
-              {detail.events.length === 0 ? (
-                <p className="text-xs text-muted-foreground italic text-center py-4">Событий нет</p>
-              ) : (
-                <ol className="relative border-l-2 border-white/10 ml-3 space-y-3">
-                  {detail.events.map((e, i) => {
-                    const meta = KIND_META[e.kind];
-                    const Icon = meta.Icon;
-                    return (
-                      <li key={i} className="ml-4 pl-3">
-                        <div className={cn("absolute -left-[11px] mt-0.5 h-5 w-5 rounded-full bg-background border-2 border-white/10 flex items-center justify-center", meta.color)}>
-                          <Icon className="h-3 w-3" />
-                        </div>
-                        <div className="text-[10px] text-muted-foreground tabular-nums font-mono">{fmtMsk(e.ts)}</div>
-                        <div className="text-sm font-medium text-foreground">{e.title}</div>
-                        {e.detail && <div className="text-xs text-muted-foreground mt-0.5 break-words">{e.detail}</div>}
-                      </li>
-                    );
-                  })}
-                </ol>
-              )}
-            </Card>
+            <ClientTimeline events={detail.events} stats={detail.stats} />
           </div>
         ) : null}
       </div>
