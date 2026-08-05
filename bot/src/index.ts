@@ -605,9 +605,12 @@ const SCREEN_ASSET_NAMES: Record<string, string> = {
 
 const WELCOME_TRIAL_DAYS = 2;
 const DEFAULT_BOT_WELCOME_TEXT = [
-  "Лазейка ВПН — быстрый и безопасный VPN в Telegram.",
+  "👋 Добро пожаловать в Лазейка ВПН!",
   "",
+  "Быстрый и безопасный VPN прямо в Telegram.",
   "Подключение за 1 минуту, стабильная скорость и поддержка 24/7.",
+  "",
+  "Попробуйте бесплатно — без карты и обязательств.",
 ].join("\n");
 
 async function renderCommandScreen(
@@ -708,16 +711,11 @@ async function showSetupDevicePicker(ctx: Context, token: string, config: Config
 
 async function showFirstWelcome(ctx: Context, userId: number, config: ConfigSnapshot | null): Promise<void> {
   const configuredText = (config?.botWelcomeText ?? "").trim();
-  const legacyGenericWelcome = /^(?:что умеет этот бот\b|лазейка vpn\s*\n\s*\n\s*ваш vpn, устройства и бонусы)/i.test(configuredText);
+  const legacyGenericWelcome = /^(?:что (?:умеет|делает) этот бот\b|лазейка vpn\s*\n\s*\n\s*ваш vpn, устройства и бонусы)/i.test(configuredText);
   const text = !configuredText || legacyGenericWelcome ? DEFAULT_BOT_WELCOME_TEXT : configuredText;
-  const appUrl = config?.publicAppUrl?.replace(/\/+$/, "") ?? "";
-  const loginButton = appUrl
-    ? { text: "🔐 Войти в кабинет", web_app: { url: `${appUrl}/cabinet` }, style: "primary" as const }
-    : { text: "🔐 Войти в кабинет", callback_data: "menu:main", style: "primary" as const };
   const markup: InlineMarkup = {
     inline_keyboard: [
       [{ text: `🎁 Попробовать ${WELCOME_TRIAL_DAYS} ${formatDaysRu(WELCOME_TRIAL_DAYS)} бесплатно`, callback_data: "welcome:try", style: "success" }],
-      [loginButton],
     ],
   };
   const banner = screenBannerUrl(config, "welcome");
