@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useAuth } from "@/contexts/auth";
 import {
   api,
@@ -7,7 +7,6 @@ import {
   type UpdateClientRemnaPayload,
   type RemnaUserFull,
   type RemnaUserUsageResponse,
-  type AdminClientSubscriptionItem,
   type TariffCategoryWithTariffs,
   type TariffRecord,
 } from "@/lib/api";
@@ -26,13 +25,14 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Pencil, Trash2, Ban, ShieldCheck, Wifi, Ticket, KeyRound, Search,
   Copy, Check, Smartphone, Activity, User, Users, HardDrive, Link,
-  RefreshCw, Loader2, Package, Gift, Coins, MailX, MailCheck, RotateCw, Plus, Zap, MessageCircle,
+  RefreshCw, Loader2, Package, Gift, Coins, MailX, MailCheck, RotateCw, Plus, Zap, MessageCircle, History,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
-import { clientsBulkApi, type BulkClientAction } from "@/lib/admin-extras-api";
+import { botConversationsApi, clientsBulkApi, type BulkClientAction, type TimelineEvent } from "@/lib/admin-extras-api";
 import { ClientSubscriptionsTab } from "@/components/admin/client-subscriptions-tab";
+import { ClientTimeline } from "@/components/admin/client-timeline";
 import { fmtMsk, fmtMskDate } from "@/lib/datetime";
 import { usePageVisibility } from "@/hooks/use-page-visibility";
 
@@ -75,6 +75,27 @@ function getOnlineStatus(onlineAt: string | null): { isOnline: boolean; label: s
   if (diff < 24 * 60 * 60 * 1000) return { isOnline: false, label: `${Math.floor(diff / 3600000)} ч назад` };
   return { isOnline: false, label: `${Math.floor(diff / 86400000)} дн назад` };
 }
+
+function initialClientPageSize(): number {
+  const value = Number(new URLSearchParams(window.location.search).get("pageSize"));
+  return value === 50 || value === 100 ? value : 20;
+}
+
+function clientEditForm(client: ClientRecord): UpdateClientPayload & Partial<UpdateClientRemnaPayload> {
+  return {
+    email: client.email ?? undefined,
+    preferredLang: client.preferredLang,
+    preferredCurrency: client.preferredCurrency,
+    balance: client.balance,
+    isBlocked: client.isBlocked,
+    blockReason: client.blockReason ?? undefined,
+    referralPercent: client.referralPercent ?? undefined,
+    personalDiscountPercent: client.personalDiscountPercent ?? undefined,
+    personalDiscountIsOneTime: client.personalDiscountIsOneTime ?? false,
+    trialUsed: client.trialUsed,
+  };
+}
+
 export function ClientsPage() {
   const pageVisible = usePageVisibility();
   const { t } = useTranslation();
@@ -82,6 +103,7 @@ export function ClientsPage() {
   const [data, setData] = useState<{ items: ClientRecord[]; total: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(initialClientPageSize);
   const [editing, setEditing] = useState<ClientRecord | null>(null);
   const [editForm, setEditForm] = useState<UpdateClientPayload & Partial<UpdateClientRemnaPayload>>({});
   const [settings, setSettings] = useState<{ activeLanguages: string[]; activeCurrencies: string[] } | null>(null);
@@ -94,6 +116,10 @@ export function ClientsPage() {
   const [searchApplied, setSearchApplied] = useState("");
   const [filterBlocked, setFilterBlocked] = useState<"all" | "blocked" | "active">("all");
   const [filterSubscription, setFilterSubscription] = useState<"all" | "any" | "active">("all");
+  const [filterTariffId, setFilterTariffId] = useState("");
+  const [filterSubscriptionType, setFilterSubscriptionType] = useState<"all" | "trial" | "regular" | "gifted" | "received">("all");
+  const [tariffCategories, setTariffCategories] = useState<TariffCategoryWithTariffs[]>([]);
+  const filterTariffs = tariffCategories.flatMap((category) => (category.tariffs ?? []).map((tariff) => ({ id: tariff.id, name: tariff.name })));
 
   // ─── Bulk-actions state ───────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -105,7 +131,13 @@ export function ClientsPage() {
   const [bulkAmount, setBulkAmount] = useState("");
   const [bulkReason, setBulkReason] = useState("");
 
-  const [onlineStatuses, setOnlineStatuses] = useState<Record<string, { onlineAt: string | null }>>({});
+  const [onlineStatuses, setOnlineStatuses] = useState<Record<string, {
+    onlineAt: string | null;
+    lastConnectedNodeUuid: string | null;
+    lastConnectedNode: string | null;
+    lastConnectedAt: string | null;
+  }>>({});
+  const loadRequest = useRef(0);
 
   const token = state.accessToken!;
 
@@ -113,19 +145,47 @@ export function ClientsPage() {
     api.getSettings(token).then((s) => setSettings({ activeLanguages: s.activeLanguages, activeCurrencies: s.activeCurrencies })).catch(() => {});
   }, [token]);
 
-  const loadClients = () => {
-    setLoading(true);
+  useEffect(() => {
+    api.getTariffCategories(token)
+      .then((response) => setTariffCategories(response.items ?? []))
+      .catch(() => setTariffCategories([]));
+  }, [token]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSearchApplied(search);
+      setPage(1);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    query.set("pageSize", String(pageSize));
+    window.history.replaceState(null, "", `${window.location.pathname}?${query.toString()}`);
+  }, [pageSize]);
+
+  const loadClients = useCallback(async (silent = false) => {
+    const requestId = ++loadRequest.current;
+    if (!silent) setLoading(true);
     const isBlocked =
       filterBlocked === "blocked" ? true : filterBlocked === "active" ? false : undefined;
-    api.getClients(token, page, 20, {
-      search: searchApplied || undefined,
-      isBlocked,
-      subscription: filterSubscription,
-    }).then((r) => {
+    try {
+      const r = await api.getClients(token, page, pageSize, {
+        search: searchApplied || undefined,
+        isBlocked,
+        subscription: filterSubscription,
+        tariffId: filterTariffId || undefined,
+        subscriptionType: filterSubscriptionType,
+      });
+      if (requestId !== loadRequest.current) return;
       setData({ items: r.items, total: r.total });
-      setLoading(false);
-    }).catch(() => setLoading(false));
-  };
+    } catch {
+      // Existing rows stay visible during a transient refresh failure.
+    } finally {
+      if (requestId === loadRequest.current) setLoading(false);
+    }
+  }, [filterBlocked, filterSubscription, filterSubscriptionType, filterTariffId, page, pageSize, searchApplied, token]);
 
   // ─── Bulk-actions helpers ─────────────────────────────────────────────
   const allRowIds = (data?.items ?? []).map((c) => c.id);
@@ -205,8 +265,8 @@ export function ClientsPage() {
   }
 
   useEffect(() => {
-    loadClients();
-  }, [token, page, searchApplied, filterBlocked, filterSubscription]);
+    void loadClients();
+  }, [loadClients]);
 
   useEffect(() => {
     const uuids = Array.from(new Set(data?.items
@@ -215,8 +275,12 @@ export function ClientsPage() {
     if (!pageVisible || uuids.length === 0) return;
     
     const poll = () => {
-      api.getClientsOnlineStatuses(token, uuids)
-        .then(setOnlineStatuses)
+      // Backend keeps each Remnawave request bounded to 100 UUIDs; secondary
+      // subscriptions may make one page contain more UUIDs than clients.
+      const batches: string[][] = [];
+      for (let index = 0; index < uuids.length; index += 100) batches.push(uuids.slice(index, index + 100));
+      Promise.all(batches.map((batch) => api.getClientsOnlineStatuses(token, batch)))
+        .then((parts) => setOnlineStatuses(Object.assign({}, ...parts)))
         .catch(() => {});
     };
     poll();
@@ -224,27 +288,20 @@ export function ClientsPage() {
     return () => clearInterval(interval);
   }, [token, data?.items, pageVisible]);
 
-  const applySearch = () => {
-    setSearchApplied(search);
-    setPage(1);
-  };
-
   function openEdit(c: ClientRecord) {
     setEditing(c);
-    setEditForm({
-      email: c.email ?? undefined,
-      preferredLang: c.preferredLang,
-      preferredCurrency: c.preferredCurrency,
-      balance: c.balance,
-      isBlocked: c.isBlocked,
-      blockReason: c.blockReason ?? undefined,
-      referralPercent: c.referralPercent ?? undefined,
-      personalDiscountPercent: c.personalDiscountPercent ?? undefined,
-      personalDiscountIsOneTime: c.personalDiscountIsOneTime ?? false,
-      trialUsed: c.trialUsed,
-    });
+    setEditForm(clientEditForm(c));
     setActionMessage(null);
   }
+
+  const editingId = editing?.id;
+  const refreshEditingClient = useCallback(async () => {
+    if (!editingId) return;
+    const updated = await api.getClientDetail(token, editingId);
+    setEditing(updated);
+    setEditForm(clientEditForm(updated));
+    await loadClients(true);
+  }, [editingId, loadClients, token]);
 
   async function saveClient() {
     if (!editing) return;
@@ -264,22 +321,9 @@ export function ClientsPage() {
         trialUsed: editForm.trialUsed,
       });
       setEditing(updated);
-      // Пересоздаём форму из обновлённых данных, иначе input'ы (привязанные к editForm)
-      // показали бы пустые значения после save, и нужно было бы переоткрыть карточку.
-      setEditForm({
-        email: updated.email ?? undefined,
-        preferredLang: updated.preferredLang,
-        preferredCurrency: updated.preferredCurrency,
-        balance: updated.balance,
-        isBlocked: updated.isBlocked,
-        blockReason: updated.blockReason ?? undefined,
-        referralPercent: updated.referralPercent ?? undefined,
-        personalDiscountPercent: updated.personalDiscountPercent ?? undefined,
-        personalDiscountIsOneTime: updated.personalDiscountIsOneTime ?? false,
-        trialUsed: updated.trialUsed,
-      });
+      setEditForm(clientEditForm(updated));
       setActionMessage(t("admin.clients.saved"));
-      loadClients();
+      await loadClients(true);
     } catch (e) {
       setActionMessage(e instanceof Error ? e.message : t("admin.clients.error"));
     } finally {
@@ -321,7 +365,7 @@ export function ClientsPage() {
     }
   }
 
-  const totalPages = data ? Math.ceil(data.total / 20) : 0;
+  const totalPages = data ? Math.ceil(data.total / pageSize) : 0;
   return (
     <div className="space-y-6 relative min-h-screen">
       {/* Ambient Glows */}
@@ -368,7 +412,7 @@ export function ClientsPage() {
             </div>
           </div>
         </div>
-        <Button variant="ghost" size="icon" onClick={loadClients} disabled={loading} className="relative h-9 w-9 rounded-full hover:bg-foreground/[0.06] dark:hover:bg-white/10">
+        <Button variant="ghost" size="icon" onClick={() => void loadClients()} disabled={loading} className="relative h-9 w-9 rounded-full hover:bg-foreground/[0.06] dark:hover:bg-white/10">
           <RefreshCw className={cn("h-4 w-4 text-muted-foreground transition-all", loading && "animate-[spin_1.5s_linear_infinite] text-primary")} />
         </Button>
       </motion.div>
@@ -382,16 +426,18 @@ export function ClientsPage() {
               placeholder={t("admin.clients.search_placeholder")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && applySearch()}
-              className="pl-9 pr-20 bg-foreground/[0.03] dark:bg-white/[0.02] border-white/10 focus-visible:ring-primary/50 rounded-xl"
+              className="pl-9 pr-10 bg-foreground/[0.03] dark:bg-white/[0.02] border-white/10 focus-visible:ring-primary/50 rounded-xl"
             />
-            <Button
-              variant="secondary" size="sm"
-              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 px-3 text-xs bg-primary/15 hover:bg-primary/25 text-primary border border-primary/20 rounded-lg"
-              onClick={applySearch}
-            >
-              {t("admin.clients.find")}
-            </Button>
+            {search && (
+              <button
+                type="button"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground hover:text-foreground"
+                onClick={() => setSearch("")}
+                aria-label="Очистить поиск"
+              >
+                ×
+              </button>
+            )}
           </div>
           <div className="flex items-center gap-1 bg-foreground/[0.03] dark:bg-white/[0.02] p-1 rounded-xl border border-white/5">
             {(["all", "active", "blocked"] as const).map((f) => (
@@ -421,6 +467,44 @@ export function ClientsPage() {
             <option value="all">Все подписки</option>
             <option value="any">Есть подписка</option>
             <option value="active">Активная подписка</option>
+          </select>
+          <select
+            value={filterSubscriptionType}
+            onChange={(event) => {
+              setFilterSubscriptionType(event.target.value as typeof filterSubscriptionType);
+              setPage(1);
+            }}
+            className="h-9 rounded-xl border border-white/10 bg-background/60 px-3 text-xs font-medium text-foreground"
+            aria-label="Тип подписки"
+          >
+            <option value="all">Любой тип</option>
+            <option value="trial">Только trial</option>
+            <option value="regular">Обычные</option>
+            <option value="gifted">Куплены в подарок</option>
+            <option value="received">Получены в подарок</option>
+          </select>
+          <select
+            value={filterTariffId}
+            onChange={(event) => {
+              setFilterTariffId(event.target.value);
+              setPage(1);
+            }}
+            className="h-9 max-w-[220px] rounded-xl border border-white/10 bg-background/60 px-3 text-xs font-medium text-foreground"
+            aria-label="Фильтр по тарифу"
+          >
+            <option value="">Любой тариф</option>
+            {filterTariffs.map((tariff) => <option key={tariff.id} value={tariff.id}>{tariff.name}</option>)}
+          </select>
+          <select
+            value={pageSize}
+            onChange={(event) => {
+              setPageSize(Number(event.target.value));
+              setPage(1);
+            }}
+            className="h-9 rounded-xl border border-white/10 bg-background/60 px-3 text-xs font-medium text-foreground"
+            aria-label="Количество клиентов на странице"
+          >
+            {[20, 50, 100].map((size) => <option key={size} value={size}>{size} / стр.</option>)}
           </select>
         </div>
       </Card>
@@ -602,10 +686,18 @@ export function ClientsPage() {
               </thead>
               <tbody className="divide-y divide-white/5">
                 {data.items.map((c, idx) => {
-                  const onlineAt = (c.remnawaveUuids ?? (c.remnawaveUuid ? [c.remnawaveUuid] : []))
-                    .map((uuid) => onlineStatuses[uuid]?.onlineAt)
-                    .filter((value): value is string => Boolean(value))
-                    .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? c.onlineAt ?? null;
+                  const states = (c.remnawaveUuids ?? (c.remnawaveUuid ? [c.remnawaveUuid] : []))
+                    .map((uuid) => onlineStatuses[uuid])
+                    .filter((value): value is NonNullable<typeof value> => Boolean(value));
+                  const onlineAt = states.reduce<string | null>((latest, state) => {
+                    if (!state.onlineAt) return latest;
+                    return !latest || Date.parse(state.onlineAt) > Date.parse(latest) ? state.onlineAt : latest;
+                  }, c.onlineAt ?? null);
+                  const latestState = [...states].filter((state) => state.lastConnectedNode || state.lastConnectedNodeUuid).sort((a, b) =>
+                    Date.parse(b.lastConnectedAt ?? b.onlineAt ?? "") - Date.parse(a.lastConnectedAt ?? a.onlineAt ?? "")
+                  )[0];
+                  const lastConnectedNode = latestState?.lastConnectedNode ?? c.lastConnectedNode ?? c.activeNode ?? null;
+                  const lastConnectedAt = latestState?.lastConnectedAt ?? c.lastConnectedAt ?? null;
                   const status = getOnlineStatus(onlineAt);
                   
                   return (
@@ -687,12 +779,17 @@ export function ClientsPage() {
                               <Ban className="h-3 w-3 mr-1" /> {t("admin.clients.block")}
                             </span>
                           )}
-                          {c.activeNode && (
+                          {lastConnectedNode && (
                             <span className="inline-flex items-center rounded-full bg-emerald-500/15 text-emerald-400 px-2.5 py-0.5 text-[11px] font-medium border border-emerald-500/20 backdrop-blur-md max-w-fit shadow-sm">
-                              <Activity className="h-3 w-3 mr-1" /> {c.activeNode}
+                              <Activity className="h-3 w-3 mr-1" /> {lastConnectedNode}
                             </span>
                           )}
-                          {!c.isBlocked && !c.activeNode && (
+                          {(lastConnectedAt || c.lastConnectedNodeUuid) && (
+                            <span className="text-[10px] text-muted-foreground">
+                              {lastConnectedAt ? `подключался ${fmtMsk(lastConnectedAt)}` : `UUID: ${c.lastConnectedNodeUuid?.slice(0, 8)}…`}
+                            </span>
+                          )}
+                          {!c.isBlocked && !lastConnectedNode && (
                             <span className="text-muted-foreground text-xs">—</span>
                           )}
                         </div>
@@ -771,6 +868,8 @@ export function ClientsPage() {
           passwordMessage={passwordMessage}
           savingPassword={savingPassword}
           token={token}
+          onClientChanged={refreshEditingClient}
+          tariffCategories={tariffCategories}
         />
       )}
     </div>
@@ -793,6 +892,8 @@ function ClientEditModal({
   token,
   activeLanguages,
   activeCurrencies,
+  onClientChanged,
+  tariffCategories,
 }: {
   client: ClientRecord;
   editForm: UpdateClientPayload & Partial<UpdateClientRemnaPayload>;
@@ -809,12 +910,18 @@ function ClientEditModal({
   passwordMessage: string | null;
   savingPassword: boolean;
   token: string;
+  onClientChanged: () => Promise<void>;
+  tariffCategories: TariffCategoryWithTariffs[];
 }) {
   const { t } = useTranslation();
   const { state } = useAuth();
   // T-admin-services (портировано из WolfVPN): доступ к вкладке «Услуги» — ADMIN или action manage_services.
   const canManageServices = state.admin?.role === "ADMIN" || (Array.isArray(state.admin?.allowedSections) && state.admin.allowedSections.includes("action:manage_services"));
-  const [tab, setTab] = useState("profile");
+  const [tab, setTab] = useState("overview");
+  const [monitorView, setMonitorView] = useState("activity");
+  const [manageView, setManageView] = useState("profile");
+  const [mountedTabs, setMountedTabs] = useState(() => new Set(["overview", "monitor:activity", "manage:profile"]));
+  const [refreshKey, setRefreshKey] = useState(0);
   const [remnaUser, setRemnaUser] = useState<RemnaUserFull | null>(null);
   const [, setRemnaLoading] = useState(false);
   // devices-список теперь во вложенном <ClientAllDevicesTab>.
@@ -827,17 +934,6 @@ function ClientEditModal({
   const [referrerSaving, setReferrerSaving] = useState(false);
   const [referrerMessage, setReferrerMessage] = useState<string | null>(null);
   const [usageData, setUsageData] = useState<RemnaUserUsageResponse["response"] | null>(null);
-  // раньше тут грузили через getSecondarySubscriptions(search=clientId).
-  // Этот endpoint был для глобальной страницы /admin/secondary-subscriptions и работал
-  // через text-search по нескольким полям — для мигрированных клиентов случались
-  // false-negatives (показывало «У клиента ещё нет подписок» когда subs в DB были).
-  // Теперь используем дедикатед /admin/clients/:id/subscriptions — точный фильтр по
-  // ownerId + giftedToClientId, возвращает ВСЕ subs клиента (включая root index=0).
-  const [secondarySubs, setSecondarySubs] = useState<AdminClientSubscriptionItem[]>([]);
-  const [secondarySubsLoading, setSecondarySubsLoading] = useState(false);
-  const primarySubscriptionUrl = secondarySubs.find((subscription) => subscription.isPrimary)?.subscriptionUrl ?? null;
-
-  const [tariffCategories, setTariffCategories] = useState<TariffCategoryWithTariffs[]>([]);
   const [selectedGrantTariffId, setSelectedGrantTariffId] = useState<string>("");
   // Выбранная опция длительности из priceOptions выбранного тарифа
   const [selectedGrantOptionId, setSelectedGrantOptionId] = useState<string>("");
@@ -874,14 +970,6 @@ function ClientEditModal({
     }).catch(() => {});
   }, [token, editing.id, editing.remnawaveUuid]);
 
-  const loadSecondarySubs = useCallback(() => {
-    setSecondarySubsLoading(true);
-    api.getClientSubscriptionsList(token, editing.id)
-      .then((r) => setSecondarySubs(r.items ?? []))
-      .catch(() => setSecondarySubs([]))
-      .finally(() => setSecondarySubsLoading(false));
-  }, [token, editing.id]);
-
   // догружаем реферера (список клиентов его не отдаёт).
   const loadReferrer = useCallback(() => {
     api.getClientDetail(token, editing.id)
@@ -898,6 +986,7 @@ function ClientEditModal({
       loadReferrer();
       setReferrerInput("");
       setReferrerMessage(res.referrerId ? "✅ Реферер привязан" : "Реферер убран");
+      void onClientChanged().catch(() => {});
     } catch (e) {
       setReferrerMessage(e instanceof Error ? e.message : "Ошибка привязки");
     } finally {
@@ -912,6 +1001,7 @@ function ClientEditModal({
       await api.setReferralReferrer(token, editing.id, null);
       setReferrerInfo(null);
       setReferrerMessage("Реферер убран");
+      void onClientChanged().catch(() => {});
     } catch (e) {
       setReferrerMessage(e instanceof Error ? e.message : "Ошибка");
     } finally {
@@ -922,18 +1012,41 @@ function ClientEditModal({
   useEffect(() => {
     loadRemnaUser();
     loadDevices();
-    loadUsage();
-    loadSecondarySubs();
-    loadReferrer();
-  }, [loadRemnaUser, loadDevices, loadUsage, loadSecondarySubs, loadReferrer]);
+  }, [loadRemnaUser, loadDevices]);
 
   useEffect(() => {
-    let cancelled = false;
-    api.getTariffCategories(token)
-      .then((r) => { if (!cancelled) setTariffCategories(r.items ?? []); })
-      .catch(() => { /* ignore */ });
-    return () => { cancelled = true; };
-  }, [token]);
+    if (tab === "overview" || (tab === "management" && manageView === "profile")) loadReferrer();
+  }, [loadReferrer, manageView, tab]);
+
+  // Тяжёлая статистика нужна только на вкладке «Трафик».
+  useEffect(() => {
+    if (tab === "monitoring" && monitorView === "traffic") loadUsage();
+  }, [tab, monitorView, loadUsage]);
+
+  const refreshClientData = useCallback(() => {
+    setRefreshKey((value) => value + 1);
+    loadRemnaUser();
+    loadDevices();
+    if (tab === "monitoring" && monitorView === "traffic") loadUsage();
+    void onClientChanged().catch(() => {});
+  }, [loadDevices, loadRemnaUser, loadUsage, monitorView, onClientChanged, tab]);
+
+  const changeTab = useCallback((value: string) => {
+    setTab(value);
+    setMountedTabs((current) => current.has(value) ? current : new Set(current).add(value));
+  }, []);
+
+  const changeMonitorView = useCallback((value: string) => {
+    setMonitorView(value);
+    const key = `monitor:${value}`;
+    setMountedTabs((current) => current.has(key) ? current : new Set(current).add(key));
+  }, []);
+
+  const changeManageView = useCallback((value: string) => {
+    setManageView(value);
+    const key = `manage:${value}`;
+    setMountedTabs((current) => current.has(key) ? current : new Set(current).add(key));
+  }, []);
 
   const flatTariffs: TariffRecord[] = tariffCategories.flatMap((c) => c.tariffs ?? []);
 
@@ -980,10 +1093,7 @@ function ClientEditModal({
         setGrantNote("");
         setGrantTrafficGb("");
         setGrantCustomDays("");
-        loadRemnaUser();
-        loadDevices();
-        loadUsage();
-        loadSecondarySubs();
+        refreshClientData();
       } else {
         setGrantMessage({ type: "err", text: res.message ?? t("admin.clients.grant_tariff_error", "Не удалось выдать тариф") });
       }
@@ -1011,14 +1121,14 @@ function ClientEditModal({
 
   return (
     <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto p-0 gap-0 bg-background/80 backdrop-blur-3xl border-white/10 shadow-2xl sm:rounded-[2rem] [&>button]:z-50">
-        <div className="absolute top-0 right-0 w-[500px] h-[300px] bg-primary/10 blur-[100px] pointer-events-none rounded-full" />
-        <div className="absolute bottom-0 left-0 w-[400px] h-[300px] bg-purple-500/10 blur-[100px] pointer-events-none rounded-full" />
-        <div className="p-6 border-b border-white/10 relative z-10 bg-white/5">
+      <DialogContent className="left-0 top-0 flex h-[100dvh] w-screen max-w-none translate-x-0 translate-y-0 grid-cols-[minmax(0,1fr)] flex-col gap-0 overflow-hidden rounded-none border-white/10 bg-background/95 p-0 shadow-2xl backdrop-blur-3xl sm:left-[50%] sm:top-[50%] sm:h-[min(860px,calc(100dvh-3rem))] sm:w-[calc(100vw-3rem)] sm:max-w-[1120px] sm:translate-x-[-50%] sm:translate-y-[-50%] sm:rounded-[1.5rem] [&>button]:z-50">
+        <div className="absolute right-0 top-0 h-[300px] w-[500px] max-w-full rounded-full bg-primary/10 blur-[100px] pointer-events-none" />
+        <div className="absolute bottom-0 left-0 h-[300px] w-[400px] max-w-full rounded-full bg-purple-500/10 blur-[100px] pointer-events-none" />
+        <div className="relative z-10 shrink-0 border-b border-white/10 bg-white/5 p-3 pr-12 sm:p-6 sm:pr-14">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-primary/20 to-purple-500/20 border border-white/10 flex items-center justify-center shadow-inner shrink-0">
-                <User className="h-6 w-6 text-primary" />
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-gradient-to-br from-primary/20 to-purple-500/20 shadow-inner sm:h-12 sm:w-12 sm:rounded-2xl">
+                <User className="h-5 w-5 text-primary sm:h-6 sm:w-6" />
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1055,9 +1165,11 @@ function ClientEditModal({
           </DialogHeader>
         </div>
 
-        {editing.remnawaveUuid && remnaUser && (
-          <div className="px-6 pt-4 relative z-10">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
+
+        {tab === "__legacy" && editing.remnawaveUuid && remnaUser && (
+          <div className="px-3 sm:px-6 pt-4 relative z-10">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
               <div className="rounded-[1.5rem] bg-gradient-to-br from-foreground/[0.03] to-foreground/[0.05] dark:from-white/5 dark:to-white/10 border border-white/10 p-5 space-y-1.5 hover:from-foreground/[0.05] hover:to-foreground/[0.07] dark:hover:from-white/[0.08] dark:hover:to-white/[0.12] transition-colors">
                 <div className="text-[11px] text-muted-foreground uppercase tracking-wider">{t("admin.clients.traffic")}</div>
                 <div className="text-lg font-bold">{formatTrafficBytes(trafficUsed)}</div>
@@ -1103,47 +1215,164 @@ function ClientEditModal({
           </div>
         )}
 
-        <div className="px-6 pt-4 pb-6 relative z-10">
-          <Tabs value={tab} onValueChange={setTab}>
-            <TabsList className="w-full flex flex-wrap bg-foreground/[0.04] dark:bg-white/[0.04] border border-white/5 rounded-xl p-1">
-              <TabsTrigger value="profile" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                <User className="h-3.5 w-3.5" /> {t("admin.clients.info")}
+        <div className="relative z-10 min-w-0 px-3 pb-6 pt-4 sm:px-6">
+          <Tabs value={tab} onValueChange={changeTab}>
+            <TabsList className="sticky top-0 z-20 grid w-full grid-cols-4 rounded-xl border border-white/5 bg-background/95 p-1 shadow-sm backdrop-blur-xl">
+              <TabsTrigger value="overview" className="h-auto flex-col gap-1 rounded-lg px-1 py-2 text-[10px] data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md sm:flex-row sm:px-2 sm:text-xs">
+                <User className="h-3.5 w-3.5" /> <span>Обзор</span>
               </TabsTrigger>
-              {/* после унификации Client.remnawaveUuid может быть null,
-                  но у клиента есть Subscription[0].remnawaveUuid. Показываем вкладки если ЕСТЬ
-                  хоть одна подписка с remnawaveUuid (включая primary). */}
-              {/* вкладка «Подписки» заменила «Remna».
-                  Данные Remna / Лимиты / Сквады / Быстрые действия теперь per-subscription.
-                  Вкладка «Действия» оставлена для МАССОВЫХ операций (применяются ко ВСЕМ подпискам). */}
-              {/* показываем вкладки и если у клиента есть подписки БЕЗ
-                  remna (например, migrate_inactive не создаёт Remna user — он добавляется при
-                  первой покупке). Иначе кнопка «Открыть детально» в инлайн-блоке switch'ала
-                  на несуществующий tab. */}
-              <TabsTrigger value="subscriptions" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                <Package className="h-3.5 w-3.5" /> Подписки
+              <TabsTrigger value="subscriptions" className="h-auto flex-col gap-1 rounded-lg px-1 py-2 text-[10px] data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md sm:flex-row sm:px-2 sm:text-xs">
+                <Package className="h-3.5 w-3.5" /> <span>Подписки</span>
               </TabsTrigger>
-              <TabsTrigger value="devices" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                <Smartphone className="h-3.5 w-3.5" /> {t("admin.clients.devices")}
-                {devicesTotal > 0 && <span className="ml-1 rounded-full bg-primary/10 px-1.5 text-[10px] font-bold text-primary">{devicesTotal}</span>}
+              <TabsTrigger value="monitoring" className="h-auto flex-col gap-1 rounded-lg px-1 py-2 text-[10px] data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md sm:flex-row sm:px-2 sm:text-xs">
+                <Activity className="h-3.5 w-3.5" /> <span className="sm:hidden">Активность</span><span className="hidden sm:inline">Мониторинг</span>
               </TabsTrigger>
-              <TabsTrigger value="actions" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                <Activity className="h-3.5 w-3.5" /> {t("admin.clients.actions")}
+              <TabsTrigger value="management" className="h-auto flex-col gap-1 rounded-lg px-1 py-2 text-[10px] data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md sm:flex-row sm:px-2 sm:text-xs">
+                <KeyRound className="h-3.5 w-3.5" /> <span className="sm:hidden">Ещё</span><span className="hidden sm:inline">Управление</span>
               </TabsTrigger>
-              {canManageServices && (
-                <TabsTrigger value="services" className="gap-1.5 text-xs rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all">
-                  <Gift className="h-3.5 w-3.5" /> Услуги
-                </TabsTrigger>
-              )}
             </TabsList>
 
+            <TabsContent value="overview" keepMounted={mountedTabs.has("overview")}>
+              {editing.remnawaveUuid && remnaUser && (
+                <section className="mb-4 grid grid-cols-2 divide-x divide-y divide-white/10 overflow-hidden rounded-2xl border border-white/10 bg-foreground/[0.03] lg:grid-cols-4 lg:divide-y-0">
+                  <div className="p-3 sm:p-4"><span className="block text-[10px] uppercase text-muted-foreground">Статус</span><span className="mt-1 flex items-center gap-1.5 text-sm font-semibold"><span className={cn("h-2 w-2 rounded-full", isOnline ? "bg-emerald-500" : "bg-muted-foreground")} />{isOnline ? "Онлайн" : "Оффлайн"}</span></div>
+                  <div className="p-3 sm:p-4"><span className="block text-[10px] uppercase text-muted-foreground">Трафик</span><span className="mt-1 block text-sm font-semibold">{formatTrafficBytes(trafficUsed)}</span><span className="text-[10px] text-muted-foreground">{trafficLimit > 0 ? `из ${formatTrafficBytes(trafficLimit)}` : "Безлимит"}</span></div>
+                  <div className="p-3 sm:p-4"><span className="block text-[10px] uppercase text-muted-foreground">Устройства</span><span className="mt-1 block text-sm font-semibold">{devicesTotal} / {remnaUser.hwidDeviceLimit ?? "—"}</span></div>
+                  <div className="p-3 sm:p-4"><span className="block text-[10px] uppercase text-muted-foreground">Последний вход</span><span className="mt-1 block text-xs font-medium">{onlineAt ? fmtMsk(onlineAt) : "Нет данных"}</span></div>
+                </section>
+              )}
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+                <ClientSubsOverviewBlock clientId={editing.id} token={token} refreshKey={refreshKey} onChanged={refreshClientData} />
+                <section className="rounded-2xl border border-white/10 bg-foreground/[0.03] p-4">
+                  <h3 className="text-sm font-semibold">Что нужно сделать?</h3>
+                  <div className="mt-3 grid gap-2">
+                    <Button className="justify-start gap-2 rounded-xl" onClick={() => changeTab("subscriptions")}>
+                      <Package className="h-4 w-4" /> Управлять подпиской
+                    </Button>
+                    <Button variant="outline" className="justify-start gap-2 rounded-xl" onClick={() => changeTab("monitoring")}>
+                      <Activity className="h-4 w-4" /> Посмотреть активность
+                    </Button>
+                    <Button variant="outline" className="justify-start gap-2 rounded-xl" onClick={() => changeTab("management")}>
+                      <KeyRound className="h-4 w-4" /> Изменить клиента
+                    </Button>
+                  </div>
+                </section>
+              </div>
+
+              <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                <section className="rounded-2xl border border-white/10 bg-background/40 p-4 text-sm">
+                  <h3 className="mb-3 font-semibold">Клиент</h3>
+                  <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+                    <div><span className="block text-xs text-muted-foreground">Email</span><span className="break-all">{editing.email || "—"}</span></div>
+                    <div><span className="block text-xs text-muted-foreground">Telegram</span><span>{editing.telegramUsername ? `@${editing.telegramUsername}` : editing.telegramId || "—"}</span></div>
+                    <div><span className="block text-xs text-muted-foreground">Баланс</span><span>{editing.balance} {editing.preferredCurrency?.toUpperCase()}</span></div>
+                    <div><span className="block text-xs text-muted-foreground">Язык</span><span>{editing.preferredLang?.toUpperCase() || "—"}</span></div>
+                    <div><span className="block text-xs text-muted-foreground">Создан</span><span>{fmtMsk(editing.createdAt)}</span></div>
+                    <div><span className="block text-xs text-muted-foreground">Пробный период</span><span>{editing.trialUsed ? "Использован" : "Доступен"}</span></div>
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-primary/20 bg-primary/[0.05] p-4 text-sm">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="font-semibold">Реферальная программа</h3>
+                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => { changeTab("management"); changeManageView("profile"); }}>
+                      Управлять
+                    </Button>
+                  </div>
+                  <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+                    <div>
+                      <span className="block text-xs text-muted-foreground">Реферальный код</span>
+                      <span className="flex items-center gap-1.5">
+                        {editing.referralCode ? <code>{editing.referralCode}</code> : "—"}
+                        {editing.referralCode && <CopyButton text={editing.referralCode} />}
+                      </span>
+                    </div>
+                    <div><span className="block text-xs text-muted-foreground">Приглашено клиентов</span><span className="font-semibold">{editing._count?.referrals ?? 0}</span></div>
+                    <div><span className="block text-xs text-muted-foreground">Реферальный процент</span><span>{editing.referralPercent == null ? "По умолчанию" : `${editing.referralPercent}%`}</span></div>
+                    <div>
+                      <span className="block text-xs text-muted-foreground">Кто пригласил</span>
+                      <span>{referrerInfo === undefined ? "Загрузка…" : referrerInfo ? (referrerInfo.telegramUsername ? `@${referrerInfo.telegramUsername}` : referrerInfo.email || referrerInfo.telegramId || referrerInfo.id.slice(0, 8)) : "Не привязан"}</span>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="subscriptions" keepMounted={mountedTabs.has("subscriptions")}>
+              <div className="space-y-4">
+                <section className="rounded-2xl border border-primary/20 bg-primary/[0.06] p-4 sm:p-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <Label>Выдать или заменить тариф</Label>
+                      <select
+                        className="h-10 w-full rounded-xl border border-input bg-background/80 px-3 text-sm"
+                        value={selectedGrantTariffId}
+                        onChange={(event) => {
+                          setSelectedGrantTariffId(event.target.value);
+                          setSelectedGrantOptionId("");
+                        }}
+                        disabled={grantLoading}
+                      >
+                        <option value="">Выберите тариф</option>
+                        {tariffCategories.map((category) => (
+                          <optgroup key={category.id} label={category.name}>
+                            {(category.tariffs ?? []).map((tariff) => <option key={tariff.id} value={tariff.id}>{tariff.name}</option>)}
+                          </optgroup>
+                        ))}
+                      </select>
+                    </div>
+                    {selectedGrantTariffId && (() => {
+                      const options = flatTariffs.find((item) => item.id === selectedGrantTariffId)?.priceOptions ?? [];
+                      if (options.length < 2) return null;
+                      return (
+                        <div className="min-w-0 flex-1 space-y-1.5">
+                          <Label>Период</Label>
+                          <select className="h-10 w-full rounded-xl border border-input bg-background/80 px-3 text-sm" value={selectedGrantOptionId} onChange={(event) => setSelectedGrantOptionId(event.target.value)}>
+                            <option value="">По умолчанию</option>
+                            {[...options].sort((a, b) => a.durationDays - b.durationDays).map((option) => <option key={option.id} value={option.id}>{option.durationDays} дн. · {option.price}</option>)}
+                          </select>
+                        </div>
+                      );
+                    })()}
+                    <Button className="h-10 shrink-0 gap-2 rounded-xl" onClick={handleGrantTariff} disabled={!selectedGrantTariffId || grantLoading}>
+                      {grantLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Gift className="h-4 w-4" />}
+                      Выдать тариф
+                    </Button>
+                  </div>
+
+                  <details open className="mt-3 text-sm">
+                    <summary className="cursor-pointer text-xs text-muted-foreground">Дополнительные параметры</summary>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                      <div className="space-y-1.5"><Label>Трафик, GB</Label><Input type="number" min={0} value={grantTrafficGb} onChange={(event) => setGrantTrafficGb(event.target.value)} placeholder="По тарифу" /></div>
+                      <div className="space-y-1.5"><Label>Срок, дней</Label><Input type="number" min={1} max={3650} value={grantCustomDays} onChange={(event) => setGrantCustomDays(event.target.value)} placeholder="По тарифу" /></div>
+                      <div className="space-y-1.5"><Label>Комментарий</Label><Input value={grantNote} onChange={(event) => setGrantNote(event.target.value)} placeholder="Необязательно" maxLength={500} /></div>
+                    </div>
+                  </details>
+                  {grantMessage && <p className={cn("mt-3 text-xs", grantMessage.type === "ok" ? "text-emerald-500" : "text-destructive")}>{grantMessage.text}</p>}
+                </section>
+
+                <ClientSubscriptionsTab clientId={editing.id} token={token} tariffs={flatTariffs} refreshKey={refreshKey} onChanged={refreshClientData} />
+              </div>
+            </TabsContent>
+
+            <TabsContent value="management" keepMounted={mountedTabs.has("management")}>
+              <Tabs value={manageView} onValueChange={changeManageView}>
+                <TabsList className="grid w-full grid-cols-2 gap-1 rounded-xl bg-foreground/[0.03] p-1 sm:flex sm:justify-start sm:overflow-x-auto">
+                  <TabsTrigger value="profile" className="shrink-0 rounded-lg text-xs"><User className="h-3.5 w-3.5" /> Профиль</TabsTrigger>
+                  <TabsTrigger value="devices" className="shrink-0 rounded-lg text-xs"><Smartphone className="h-3.5 w-3.5" /> Устройства {devicesTotal > 0 && `· ${devicesTotal}`}</TabsTrigger>
+                  {canManageServices && <TabsTrigger value="services" className="shrink-0 rounded-lg text-xs"><Gift className="h-3.5 w-3.5" /> Услуги</TabsTrigger>}
+                  <TabsTrigger value="actions" className="shrink-0 rounded-lg text-xs"><Zap className="h-3.5 w-3.5" /> Системные действия</TabsTrigger>
+                </TabsList>
+
             {/* ────── Профиль ────── */}
-            <TabsContent value="profile">
+            <TabsContent value="profile" keepMounted={mountedTabs.has("manage:profile")}>
               <div className="space-y-5">
-                <div className="rounded-[1.5rem] bg-gradient-to-br from-primary/10 to-purple-500/10 border border-primary/20 p-5 space-y-3 text-sm">
-                  <div className="flex items-center gap-2 font-semibold text-sm">
+                <details open className="hidden">
+                  <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
                     <Gift className="h-4 w-4 text-primary" />
                     {t("admin.clients.grant_tariff_title", "Выдать тариф")}
-                  </div>
+                    <span className="ml-auto text-xs text-muted-foreground group-open:hidden">Открыть форму</span>
+                  </summary>
                   <p className="text-xs text-muted-foreground">
                     {t("admin.clients.grant_tariff_hint", "Активирует выбранный тариф для клиента без оплаты. Будет создана запись платежа со статусом PAID и суммой 0. Реферальные бонусы не начисляются.")}
                   </p>
@@ -1344,11 +1573,14 @@ function ClientEditModal({
                       {grantMessage.text}
                     </div>
                   )}
-                </div>
+                </details>
 
-                <div className="rounded-[1.5rem] bg-gradient-to-br from-background/80 to-background/40 border border-white/10 p-5 space-y-3 text-sm hover:bg-white/5 transition-colors">
-                  <div className="font-medium text-xs uppercase tracking-wider text-muted-foreground mb-2">{t("admin.clients.info")}</div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1.5">
+                <details open className="group space-y-3 rounded-2xl border border-white/10 bg-background/50 p-4 text-sm sm:p-5">
+                  <summary className="mb-2 flex cursor-pointer list-none items-center text-xs font-medium uppercase tracking-wider text-muted-foreground [&::-webkit-details-marker]:hidden">
+                    {t("admin.clients.info")}
+                    <span className="ml-auto normal-case tracking-normal group-open:hidden">Показать реквизиты</span>
+                  </summary>
+                  <div className="grid grid-cols-1 gap-x-8 gap-y-1.5 sm:grid-cols-2 [&>div]:min-w-0 [&>div]:gap-3 [&>div>span:last-child]:break-all [&>div>span:last-child]:text-right">
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Email</span>
                       <span>{editing.email || "—"}</span>
@@ -1404,11 +1636,11 @@ function ClientEditModal({
                           <span className="text-muted-foreground text-xs">не привязан</span>
                         )}
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex flex-col gap-2 sm:flex-row">
                         <select
                           value={referrerLookupBy}
                           onChange={(e) => setReferrerLookupBy(e.target.value as typeof referrerLookupBy)}
-                          className="h-9 rounded-lg border border-input bg-background px-2 text-xs shrink-0"
+                          className="h-9 w-full shrink-0 rounded-lg border border-input bg-background px-2 text-xs sm:w-auto"
                           disabled={referrerSaving}
                         >
                           <option value="referralCode">Реф. код</option>
@@ -1426,7 +1658,7 @@ function ClientEditModal({
                         <Button
                           type="button"
                           size="sm"
-                          className="h-9 shrink-0 rounded-lg"
+                          className="h-9 w-full shrink-0 rounded-lg sm:w-auto"
                           onClick={attachReferrer}
                           disabled={referrerSaving || !referrerInput.trim()}
                         >
@@ -1435,91 +1667,12 @@ function ClientEditModal({
                       </div>
                       {referrerMessage && <p className="text-[11px] text-muted-foreground">{referrerMessage}</p>}
                     </div>
-                    {primarySubscriptionUrl && (
-                      <div className="flex justify-between sm:col-span-2">
-                        <span className="text-muted-foreground flex items-center gap-1"><Link className="h-3 w-3" /> {t("admin.clients.subscription")}</span>
-                        <span className="flex items-center gap-1 max-w-[60%]">
-                          <code className="text-xs truncate">{primarySubscriptionUrl}</code>
-                          <CopyButton text={primarySubscriptionUrl} />
-                        </span>
-                      </div>
-                    )}
                   </div>
-                </div>
+                </details>
 
-                <div className="rounded-[1.5rem] bg-gradient-to-br from-background/80 to-background/40 border border-white/10 p-5 space-y-3 text-sm hover:bg-white/5 transition-colors">
-                  <div className="font-medium text-xs uppercase tracking-wider text-muted-foreground mb-2">
-                    Подписки клиента
-                  </div>
-                  {secondarySubsLoading ? (
-                    <div className="text-sm text-muted-foreground">{t("admin.clients.loading_short")}</div>
-                  ) : secondarySubs.length === 0 ? (
-                    <div className="text-sm text-muted-foreground">У клиента ещё нет подписок</div>
-                  ) : (
-                    <div className="space-y-2">
-                      {secondarySubs.map((s) => {
-                        const status =
-                          s.giftStatus === "GIFT_RESERVED"
-                            ? "Код создан"
-                            : s.giftStatus === "GIFTED"
-                              ? "Подарена"
-                              : "Активна";
-                        // relation теперь из ownerId/giftedToClientId
-                        // (endpoint /admin/clients/:id/subscriptions включает обе ветки).
-                        const relation = s.ownerId === editing.id ? "Владелец" : "Получатель";
-                        // помечаем подарочные подписки (purchasedAsGift=true)
-                        // в админке отдельным бейджем — чтобы админ сразу видел что это подарок, а не обычная подписка.
-                        const isGiftPurchase = s.purchasedAsGift === true;
-                        return (
-                          <div key={s.id} className={cn(
-                            "flex items-center justify-between rounded-xl border px-4 py-3 gap-3 transition-colors",
-                            isGiftPurchase
-                              ? "border-pink-500/30 bg-pink-500/[0.04] hover:bg-pink-500/[0.08]"
-                              : "border-white/10 bg-foreground/[0.03] dark:bg-white/[0.03] hover:bg-foreground/[0.06] dark:hover:bg-white/[0.08]"
-                          )}>
-                            <div className="min-w-0">
-                              <div className="text-xs font-medium flex items-center gap-1.5 flex-wrap">
-                                <span>
-                                  {s.isPrimary ? "Главная" : `#${s.subscriptionIndex}`} · {s.tariffName ?? "Тариф не указан"}
-                                </span>
-                                {isGiftPurchase && (
-                                  <span className="inline-flex items-center gap-1 rounded-md bg-pink-500/15 text-pink-400 border border-pink-500/30 px-1.5 py-0.5 text-[10px] font-semibold">
-                                    <Gift className="h-2.5 w-2.5" /> Подарочная
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-[11px] text-muted-foreground">
-                                {relation} · {status}
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                              {s.remnawaveUuid && (
-                                <span className="text-[10px] text-muted-foreground truncate max-w-[140px]" title={s.remnawaveUuid}>
-                                  {s.remnawaveUuid}
-                                </span>
-                              )}
-                              {/* раньше эта кнопка вела на
-                                  /admin/secondary-subscriptions?search=<sub.id>, но та страница
-                                  (legacy «secondary subs» admin) для unify-схемы возвращала 0
-                                  результатов и не имела управления root-подпиской. Теперь
-                                  переключаем на вкладку «Подписки» в этом же диалоге — там
-                                  per-subscription панель: лимиты, сквады, продление, удаление. */}
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setTab("subscriptions")}
-                              >
-                                Открыть детально
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-2">
+                <section className="rounded-2xl border border-white/10 bg-foreground/[0.02] p-4 sm:p-5">
+                  <h3 className="mb-4 text-sm font-semibold">Профиль и доступ</h3>
+                  <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label>Email</Label>
                     <Input
@@ -1565,59 +1718,38 @@ function ClientEditModal({
                       onChange={(e) => setEditForm((f) => ({ ...f, balance: Number(e.target.value) || 0 }))}
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label>{t("admin.clients.referral_percent")}</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={editForm.referralPercent ?? ""}
-                      onChange={(e) =>
-                        setEditForm((f) => ({
-                          ...f,
-                          referralPercent: e.target.value === "" ? undefined : Number(e.target.value),
-                        }))
-                      }
-                      placeholder={t("admin.clients.referral_default")}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="flex items-center gap-2">
-                      {t("admin.clients.personal_discount")}
-                      <span className="text-[11px] font-normal text-muted-foreground">
-                        {t("admin.clients.personal_discount_hint")}
-                      </span>
-                    </Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={100}
-                      step="0.1"
-                      value={editForm.personalDiscountPercent ?? ""}
-                      onChange={(e) =>
-                        setEditForm((f) => ({
-                          ...f,
-                          personalDiscountPercent: e.target.value === "" ? undefined : Number(e.target.value),
-                        }))
-                      }
-                      placeholder={t("admin.clients.personal_discount_placeholder")}
-                    />
-                    {/* чекбокс одноразовости. */}
-                    <label className="flex items-start gap-2 cursor-pointer text-xs text-muted-foreground pt-1">
-                      <input
-                        type="checkbox"
-                        checked={editForm.personalDiscountIsOneTime ?? false}
-                        onChange={(e) =>
-                          setEditForm((f) => ({ ...f, personalDiscountIsOneTime: e.target.checked }))
-                        }
-                        className="mt-0.5 h-3.5 w-3.5 rounded border-white/20 bg-background/60 accent-primary"
-                      />
-                      <span>
-                        🎁 Одноразовая — сгорит после первой продуктовой покупки
-                        {editing.personalDiscountIsOneTime ? <span className="ml-1 text-amber-400">(сейчас активна)</span> : null}
-                      </span>
-                    </label>
-                  </div>
+                  <details open className="rounded-xl border border-white/10 bg-background/40 p-3 sm:col-span-2">
+                    <summary className="cursor-pointer text-sm font-medium">Продажи и реферальные настройки</summary>
+                    <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>{t("admin.clients.referral_percent")}</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={editForm.referralPercent ?? ""}
+                          onChange={(e) => setEditForm((f) => ({ ...f, referralPercent: e.target.value === "" ? undefined : Number(e.target.value) }))}
+                          placeholder={t("admin.clients.referral_default")}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>{t("admin.clients.personal_discount")}</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={100}
+                          step="0.1"
+                          value={editForm.personalDiscountPercent ?? ""}
+                          onChange={(e) => setEditForm((f) => ({ ...f, personalDiscountPercent: e.target.value === "" ? undefined : Number(e.target.value) }))}
+                          placeholder={t("admin.clients.personal_discount_placeholder")}
+                        />
+                        <label className="flex cursor-pointer items-start gap-2 pt-1 text-xs text-muted-foreground">
+                          <input type="checkbox" checked={editForm.personalDiscountIsOneTime ?? false} onChange={(e) => setEditForm((f) => ({ ...f, personalDiscountIsOneTime: e.target.checked }))} className="mt-0.5 h-3.5 w-3.5 accent-primary" />
+                          Одноразовая скидка на следующую покупку
+                        </label>
+                      </div>
+                    </div>
+                  </details>
                   <div className="space-y-2 flex items-end gap-2">
                     <label className="flex items-center gap-2">
                       <input
@@ -1646,23 +1778,25 @@ function ClientEditModal({
                       />
                     </div>
                   )}
-                </div>
+                  </div>
+                  {actionMessage && <p className="mt-3 text-sm text-muted-foreground">{actionMessage}</p>}
+                  <div className="sticky bottom-0 z-10 -mx-2 mt-4 border-t border-white/10 bg-background/95 p-2 backdrop-blur sm:static sm:m-0 sm:mt-4 sm:border-0 sm:bg-transparent sm:p-0">
+                    <Button
+                      onClick={onSave}
+                      disabled={saving}
+                      className="w-full rounded-xl border border-primary/30 bg-primary shadow-md shadow-primary/20 transition-all hover:bg-primary/90 sm:w-auto"
+                    >
+                      {saving ? t("admin.clients.saving") : t("admin.clients.save_profile")}
+                    </Button>
+                  </div>
+                </section>
 
-                {actionMessage && <p className="text-sm text-muted-foreground">{actionMessage}</p>}
-                <Button 
-                  onClick={onSave} 
-                  disabled={saving} 
-                  className="rounded-xl bg-primary hover:bg-primary/90 shadow-md shadow-primary/20 border border-primary/30 transition-all"
-                >
-                  {saving ? t("admin.clients.saving") : t("admin.clients.save_profile")}
-                </Button>
-
-                <hr />
-                <div>
-                  <h3 className="font-semibold mb-2 flex items-center gap-2 text-sm">
+                <details open className="rounded-2xl border border-white/10 bg-background/40 p-4">
+                  <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
                     <KeyRound className="h-4 w-4" /> {t("admin.clients.cabinet_password")}
-                  </h3>
-                  <div className="grid gap-3 sm:grid-cols-2">
+                    <span className="ml-auto text-xs font-normal text-muted-foreground">Изменить</span>
+                  </summary>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <Input
                       type="password"
                       value={passwordForm.newPassword}
@@ -1690,10 +1824,14 @@ function ClientEditModal({
                   >
                     {savingPassword ? t("admin.clients.saving") : t("admin.clients.set_password")}
                   </Button>
-                </div>
+                </details>
 
-                <hr />
-                <TariffRestrictionsSection clientId={editing.id} editing={editing} token={token} />
+                <details open className="rounded-2xl border border-white/10 bg-background/40 p-4">
+                  <summary className="cursor-pointer list-none text-sm font-semibold [&::-webkit-details-marker]:hidden">Ограничения тарифов</summary>
+                  <div className="mt-4">
+                    <TariffRestrictionsSection clientId={editing.id} editing={editing} token={token} />
+                  </div>
+                </details>
               </div>
             </TabsContent>
 
@@ -1701,51 +1839,39 @@ function ClientEditModal({
                 Заменили старую вкладку «Remna» (client-scoped). Теперь для каждой
                 подписки клиента (primary + secondary) свой блок с собственными
                 Данными Remna, Лимитами, Сквадами и Быстрыми действиями. */}
-            {(editing.remnawaveUuid || secondarySubs.some((s) => s.remnawaveUuid)) && (
-              <TabsContent value="subscriptions">
-                <div className="space-y-4">
-                  <ClientSubsOverviewBlock clientId={editing.id} token={token} />
-                  <ClientSubscriptionsTab
-                    clientId={editing.id}
-                    token={token}
-                    onChanged={() => {
-                      loadDevices();
-                      loadUsage();
-                      loadSecondarySubs();
-                    }}
-                  />
-                </div>
-              </TabsContent>
-            )}
+            <TabsContent value="subscriptions" keepMounted={false}>
+              <div className="space-y-4">
+                <ClientSubsOverviewBlock clientId={editing.id} token={token} refreshKey={refreshKey} onChanged={refreshClientData} />
+                <ClientSubscriptionsTab
+                  clientId={editing.id}
+                  token={token}
+                  tariffs={flatTariffs}
+                  refreshKey={refreshKey}
+                  onChanged={refreshClientData}
+                />
+              </div>
+            </TabsContent>
 
             {/* ────── Устройства (T-tabs-rework, 13.05.2026): со ВСЕХ подписок ────── */}
-            {(editing.remnawaveUuid || secondarySubs.some((s) => s.remnawaveUuid)) && (
-              <TabsContent value="devices">
-                <ClientAllDevicesTab clientId={editing.id} token={token} />
-              </TabsContent>
-            )}
+            <TabsContent value="devices" keepMounted={mountedTabs.has("manage:devices")}>
+              <ClientAllDevicesTab clientId={editing.id} token={token} refreshKey={refreshKey} onChanged={refreshClientData} />
+            </TabsContent>
 
             {/* ────── Услуги (T-admin-services, портировано из WolfVPN) ────── */}
             {canManageServices && (
-              <TabsContent value="services">
-                <ClientServicesTab clientId={editing.id} token={token} />
+              <TabsContent value="services" keepMounted={mountedTabs.has("manage:services")}>
+                <ClientServicesTab clientId={editing.id} token={token} refreshKey={refreshKey} onChanged={refreshClientData} />
               </TabsContent>
             )}
 
             {/* ────── Действия ────── */}
-            {(editing.remnawaveUuid || secondarySubs.some((s) => s.remnawaveUuid)) && (
-              <TabsContent value="actions">
-                <div className="space-y-5">
+            <TabsContent value="actions" keepMounted={mountedTabs.has("manage:actions")}>
+              <div className="space-y-5">
                   {/* массовые операции — здесь, не сверху диалога. */}
                   <ClientBulkActionsPanel
                     client={editing}
                     token={token}
-                    onChanged={() => {
-                      loadRemnaUser();
-                      loadDevices();
-                      loadUsage();
-                      loadSecondarySubs();
-                    }}
+                    onChanged={refreshClientData}
                   />
 
                   {/* Per-subscription quick actions (Отозвать/Disable/Enable/Reset/Unlink)
@@ -1753,36 +1879,198 @@ function ClientEditModal({
                       Здесь оставлены ТОЛЬКО массовые операции — они в ClientBulkActionsPanel выше. */}
                   {actionMessage && <p className="text-sm text-muted-foreground mt-2">{actionMessage}</p>}
 
-                  {usageData && usageData.sparklineData && usageData.sparklineData.some((v) => v > 0) && (
-                    <div className="mt-4">
-                      <h3 className="font-semibold text-sm mb-3">{t("admin.clients.traffic_30d_chart")}</h3>
-                      <div className="flex items-end gap-px h-24 rounded-[1.5rem] bg-gradient-to-br from-white/5 to-transparent border border-white/10 p-3 overflow-hidden">
-                        {(() => {
-                          const data = usageData.sparklineData;
-                          const max = Math.max(...data, 1);
-                          return data.map((v, i) => (
-                            <div
-                              key={i}
-                              className="flex-1 bg-primary/60 hover:bg-primary rounded-t transition-colors min-w-[2px]"
-                              style={{ height: `${Math.max((v / max) * 100, v > 0 ? 4 : 1)}%` }}
-                              title={`${usageData.categories?.[i] ?? ""}: ${formatTrafficBytes(v)}`}
-                            />
-                          ));
-                        })()}
-                      </div>
-                      <div className="flex justify-between text-[10px] text-muted-foreground mt-1 px-1">
-                        <span>{usageData.categories?.[0] ?? ""}</span>
-                        <span>{usageData.categories?.[usageData.categories.length - 1] ?? ""}</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </TabsContent>
-            )}
+              </div>
+            </TabsContent>
+              </Tabs>
+            </TabsContent>
+
+            <TabsContent value="monitoring" keepMounted={mountedTabs.has("monitoring")}>
+              <Tabs value={monitorView} onValueChange={changeMonitorView}>
+                <TabsList className="grid w-full grid-cols-2 rounded-xl bg-foreground/[0.03] p-1">
+                  <TabsTrigger value="activity" className="rounded-lg text-xs"><History className="h-3.5 w-3.5" /> История</TabsTrigger>
+                  <TabsTrigger value="traffic" className="rounded-lg text-xs"><Wifi className="h-3.5 w-3.5" /> Сессии и трафик</TabsTrigger>
+                </TabsList>
+                <TabsContent value="activity" keepMounted={mountedTabs.has("monitor:activity")}>
+                  <ClientActivityTab clientId={editing.id} token={token} refreshKey={refreshKey} />
+                </TabsContent>
+                <TabsContent value="traffic" keepMounted={mountedTabs.has("monitor:traffic")}>
+                  <ClientTrafficTab clientId={editing.id} token={token} usageData={usageData} refreshKey={refreshKey} active={tab === "monitoring" && monitorView === "traffic"} />
+                </TabsContent>
+              </Tabs>
+            </TabsContent>
           </Tabs>
+        </div>
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function ClientTrafficTab({
+  clientId,
+  token,
+  usageData,
+  refreshKey = 0,
+  active,
+}: {
+  clientId: string;
+  token: string;
+  usageData: RemnaUserUsageResponse["response"] | null;
+  refreshKey?: number;
+  active: boolean;
+}) {
+  const [sessions, setSessions] = useState<import("@/lib/api").ClientSessionItem[]>([]);
+  const [requestLogs, setRequestLogs] = useState<{ available: boolean; reason?: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [activeOnly, setActiveOnly] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const requestRef = useRef(0);
+
+  const load = useCallback(async () => {
+    const requestId = ++requestRef.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await api.getClientSessions(token, clientId, { active: activeOnly, limit: 100 });
+      if (requestId !== requestRef.current) return;
+      setSessions(response.sessions);
+      setRequestLogs(response.requestLogs);
+    } catch (e) {
+      if (requestId !== requestRef.current) return;
+      setError(e instanceof Error ? e.message : "Не удалось загрузить подключения");
+    } finally {
+      if (requestId === requestRef.current) setLoading(false);
+    }
+  }, [activeOnly, clientId, token]);
+
+  useEffect(() => {
+    if (!active) return;
+    load();
+    const interval = window.setInterval(load, 30000);
+    return () => window.clearInterval(interval);
+  }, [active, load, refreshKey]);
+
+  const chartData = usageData?.sparklineData ?? [];
+  const chartMax = Math.max(...chartData, 1);
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div>
+          <h3 className="font-semibold text-sm">Монитор подключений</h3>
+          <p className="text-[11px] text-muted-foreground">Обновляется только пока открыта эта вкладка.</p>
+        </div>
+        <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
+          <select
+            className="h-8 min-w-0 flex-1 rounded-lg border border-white/10 bg-background/70 px-2 text-xs sm:flex-none"
+            value={activeOnly ? "active" : "all"}
+            onChange={(event) => setActiveOnly(event.target.value === "active")}
+          >
+            <option value="active">Только активные</option>
+            <option value="all">Все подключения</option>
+          </select>
+          <Button variant="ghost" size="sm" className="h-8 gap-1" onClick={load} disabled={loading}>
+            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} /> Обновить
+          </Button>
+        </div>
+      </div>
+
+      {error && <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+      {!loading && sessions.length === 0 && (
+        <div className="rounded-2xl border border-dashed border-white/15 p-8 text-center text-sm text-muted-foreground">
+          <Wifi className="mx-auto mb-2 h-7 w-7 opacity-40" />
+          Нет подключений по данным Remnawave.
+        </div>
+      )}
+      <div className="grid gap-3">
+        {sessions.map((session) => (
+          <div key={session.id} className="rounded-2xl border border-white/10 bg-foreground/[0.03] p-4 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={cn("h-2 w-2 rounded-full", session.active ? "bg-emerald-400 animate-pulse" : "bg-muted-foreground")} />
+              <span className="font-medium text-sm">{session.nodeName ?? "Нода неизвестна"}</span>
+              <span className="text-[11px] text-muted-foreground">{session.subscriptionIndex === 0 ? "Главная" : `#${session.subscriptionIndex}`}</span>
+              {session.tariffName && <span className="text-[11px] text-muted-foreground">· {session.tariffName}</span>}
+              <span className={cn("ml-auto rounded-full border px-2 py-0.5 text-[10px]", session.active ? "border-emerald-500/30 text-emerald-400" : "border-white/10 text-muted-foreground")}>
+                {session.active ? "Активна" : "Завершена"}
+              </span>
+            </div>
+            <div className="grid grid-cols-1 gap-1 text-[11px] text-muted-foreground sm:grid-cols-2">
+              <span>Последняя активность: {session.lastActivityAt ? fmtMsk(session.lastActivityAt) : "—"}</span>
+              <span>Последняя нода: {session.lastConnectedAt ? fmtMsk(session.lastConnectedAt) : "—"}</span>
+              <span className="truncate">Username: {session.username ?? "—"}</span>
+              <span className="truncate">UUID ноды: {session.nodeUuid ?? "—"}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {requestLogs && (
+        <div className="rounded-2xl border border-amber-500/25 bg-amber-500/[0.06] p-4">
+          <div className="font-medium text-sm">Журнал посещённых ресурсов</div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {requestLogs.available ? "Доступен" : requestLogs.reason ?? "Логирование не настроено."}
+          </p>
+        </div>
+      )}
+
+      <div className="rounded-2xl border border-white/10 bg-background/40 p-4 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="font-semibold text-sm">Трафик за 30 дней</h3>
+          <span className="text-xs text-muted-foreground">{formatTrafficBytes(chartData.reduce((sum, value) => sum + value, 0))}</span>
+        </div>
+        {chartData.length > 0 ? (
+          <div className="flex h-24 items-end gap-px overflow-hidden rounded-xl border border-white/10 bg-white/[0.02] p-3">
+            {chartData.map((value, index) => (
+              <div key={index} className="min-w-[2px] flex-1 rounded-t bg-primary/60" style={{ height: `${Math.max((value / chartMax) * 100, value > 0 ? 4 : 1)}%` }} title={`${usageData?.categories?.[index] ?? ""}: ${formatTrafficBytes(value)}`} />
+            ))}
+          </div>
+        ) : <p className="text-xs text-muted-foreground">Нет данных за период.</p>}
+      </div>
+    </div>
+  );
+}
+
+function ClientActivityTab({ clientId, token, refreshKey = 0 }: { clientId: string; token: string; refreshKey?: number }) {
+  const [detail, setDetail] = useState<{ events: TimelineEvent[]; stats: Record<string, number> } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const requestRef = useRef(0);
+
+  const load = useCallback(async () => {
+    const requestId = ++requestRef.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await botConversationsApi.detail(token, clientId);
+      if (requestId !== requestRef.current) return;
+      setDetail({ events: response.events, stats: response.stats });
+    } catch (e) {
+      if (requestId !== requestRef.current) return;
+      setError(e instanceof Error ? e.message : "Не удалось загрузить активность");
+    } finally {
+      if (requestId === requestRef.current) setLoading(false);
+    }
+  }, [clientId, token]);
+
+  useEffect(() => { void load(); }, [load, refreshKey]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div>
+          <h3 className="font-semibold text-sm">Активность клиента</h3>
+          <p className="text-[11px] text-muted-foreground">Оплаты, рассылки, тикеты, подарки и действия администратора.</p>
+        </div>
+        <Button variant="ghost" size="sm" className="h-8 w-full gap-1 sm:ml-auto sm:w-auto" onClick={() => load()} disabled={loading}>
+          <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} /> Обновить
+        </Button>
+      </div>
+      {error && <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+      {loading && !detail ? (
+        <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
+      ) : detail ? (
+        <ClientTimeline events={detail.events} stats={detail.stats} compact />
+      ) : null}
+    </div>
   );
 }
 
@@ -2097,7 +2385,7 @@ function TariffRestrictionsSection({ clientId, editing, token }: { clientId: str
 }
 
 // T-admin-services (портировано из WolfVPN): вкладка «Услуги» — выдать/забрать доп. устройства подписке.
-function ClientServicesTab({ clientId, token }: { clientId: string; token: string }) {
+function ClientServicesTab({ clientId, token, refreshKey, onChanged }: { clientId: string; token: string; refreshKey: number; onChanged: () => void }) {
   const [items, setItems] = useState<import("@/lib/api").ClientServiceItem[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -2114,7 +2402,7 @@ function ClientServicesTab({ clientId, token }: { clientId: string; token: strin
       .catch(() => setItems(null))
       .finally(() => setLoading(false));
   }, [token, clientId]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshKey]);
 
   const linkedSubs = (items ?? []).filter((s) => s.linked);
 
@@ -2124,7 +2412,7 @@ function ClientServicesTab({ clientId, token }: { clientId: string; token: strin
     try {
       await api.grantClientDevices(token, clientId, { subscriptionId: grantSubId, deviceCount: grantCount, monthlyPrice: Math.max(0, grantPrice) });
       setGrantOpen(false); setGrantCount(1); setGrantPrice(0); setGrantSubId("");
-      load();
+      onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось выдать услугу");
     } finally { setBusy(null); }
@@ -2135,7 +2423,7 @@ function ClientServicesTab({ clientId, token }: { clientId: string; token: strin
     setBusy(subId); setError("");
     try {
       await api.removeClientServiceDevices(token, clientId, subId);
-      load();
+      onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось забрать услугу");
     } finally { setBusy(null); }
@@ -2248,7 +2536,7 @@ function ClientServicesTab({ clientId, token }: { clientId: string; token: strin
   );
 }
 
-function ClientAllDevicesTab({ clientId, token }: { clientId: string; token: string }) {
+function ClientAllDevicesTab({ clientId, token, refreshKey, onChanged }: { clientId: string; token: string; refreshKey: number; onChanged: () => void }) {
   const { t } = useTranslation();
   const [data, setData] = useState<import("@/lib/api").ClientAllDevicesResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -2261,7 +2549,7 @@ function ClientAllDevicesTab({ clientId, token }: { clientId: string; token: str
       .finally(() => setLoading(false));
   }, [token, clientId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshKey]);
 
   const deleteDevice = async (subId: string, uuid: string | null, hwid: string) => {
     if (!uuid) return;
@@ -2271,7 +2559,7 @@ function ClientAllDevicesTab({ clientId, token }: { clientId: string; token: str
       // если устройство с primary; иначе — через прямой Remna-uuid (надо отдельный endpoint).
       // Для минимального решения — оставляем через clientId — работает для primary subscription.
       await api.deleteClientRemnaDevice(token, clientId, hwid);
-      load();
+      onChanged();
     } catch (e) {
       alert(e instanceof Error ? e.message : t("admin.clients.delete_error"));
     }
@@ -2383,7 +2671,7 @@ function ClientAllDevicesTab({ clientId, token }: { clientId: string; token: str
 // сводка по всем подпискам клиента.
 // Показывает компактную таблицу — для каждой подписки строка с remna-метриками.
 // ─────────────────────────────────────────────────────────────────────────────
-function ClientSubsOverviewBlock({ clientId, token }: { clientId: string; token: string }) {
+function ClientSubsOverviewBlock({ clientId, token, refreshKey = 0, onChanged }: { clientId: string; token: string; refreshKey?: number; onChanged: () => void }) {
   const { t } = useTranslation();
   const [data, setData] = useState<import("@/lib/api").ClientSubsOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -2408,7 +2696,7 @@ function ClientSubsOverviewBlock({ clientId, token }: { clientId: string; token:
       .finally(() => setLoading(false));
   }, [token, clientId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshKey]);
 
   async function grantExtend() {
     if (!extendFor || extendDays < 1) return;
@@ -2422,7 +2710,7 @@ function ClientSubsOverviewBlock({ clientId, token }: { clientId: string; token:
       setExtendDone(`Подписка продлена на ${r.tariff.durationDays} дн. (${r.tariff.name})`);
       setExtendFor(null);
       setExtendNote("");
-      load();
+      onChanged();
       setTimeout(() => setExtendDone(null), 4000);
     } catch (e) {
       setExtendError(e instanceof Error ? e.message : "Ошибка продления");
@@ -2440,7 +2728,7 @@ function ClientSubsOverviewBlock({ clientId, token }: { clientId: string; token:
       setExtendDone(`Remna-юзер привязан как подписка #${r.subscriptionIndex}`);
       setAttachOpen(false);
       setAttachQuery("");
-      load();
+      onChanged();
       setTimeout(() => setExtendDone(null), 4000);
     } catch (e) {
       setAttachError(e instanceof Error ? e.message : "Ошибка привязки");
@@ -2485,7 +2773,7 @@ function ClientSubsOverviewBlock({ clientId, token }: { clientId: string; token:
       </div>
 
       {/* Таблица подписок */}
-      <div className="overflow-x-auto">
+      <div className="hidden overflow-x-auto sm:block">
         <table className="w-full text-xs">
           <thead className="text-[10px] uppercase text-muted-foreground border-b border-white/10">
             <tr>
@@ -2592,6 +2880,75 @@ function ClientSubsOverviewBlock({ clientId, token }: { clientId: string; token:
             })}
           </tbody>
         </table>
+      </div>
+
+      <div className="space-y-2 sm:hidden">
+        {data.items.map((it) => {
+          const isPrimary = it.subscriptionIndex === 0;
+          const expiresSoon = it.remna?.expireAt
+            ? new Date(it.remna.expireAt).getTime() - Date.now() < 3 * 86_400_000
+            : false;
+          const isExpired = it.remna?.expireAt
+            ? new Date(it.remna.expireAt).getTime() <= Date.now()
+            : false;
+          return (
+            <div key={it.subscriptionId} className="rounded-2xl border border-white/10 bg-background/30 p-3 text-xs">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5 font-medium">
+                    <span className={cn(
+                      "rounded-md border px-1.5 py-0.5 text-[10px] font-semibold",
+                      isPrimary ? "border-primary/30 bg-primary/10 text-primary" : "border-white/10 bg-muted text-muted-foreground"
+                    )}>
+                      {isPrimary ? t("admin.clients.sub_primary", "Главная") : `#${it.subscriptionIndex}`}
+                    </span>
+                    {it.tariffEmoji && <span>{it.tariffEmoji}</span>}
+                    <span className="truncate">{it.tariffName ?? (it.isTrial ? (it.trialName ?? "Trial") : "—")}</span>
+                    {it.isTrial && <span className="text-[9px] text-amber-400">trial</span>}
+                    {it.purchasedAsGift && <Gift className="h-3 w-3 text-pink-400" />}
+                  </div>
+                  <p className={cn("mt-1 text-[11px]", isExpired ? "text-red-400" : expiresSoon ? "text-amber-400" : "text-muted-foreground")}>
+                    Истекает: {it.remna?.expireAt ? fmtMskDate(it.remna.expireAt) : "—"}
+                  </p>
+                </div>
+                {it.remna ? (
+                  <span className={cn(
+                    "shrink-0 rounded-md border px-1.5 py-0.5 text-[10px]",
+                    it.remna.status === "ACTIVE" && "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
+                    it.remna.status === "DISABLED" && "border-red-500/30 bg-red-500/10 text-red-400",
+                    it.remna.status === "LIMITED" && "border-amber-500/30 bg-amber-500/10 text-amber-400",
+                    it.remna.status === "EXPIRED" && "border-gray-500/30 bg-gray-500/10 text-gray-400",
+                  )}>
+                    {it.remna.status ?? "—"}
+                  </span>
+                ) : <span className="shrink-0 text-[10px] text-muted-foreground">нет Remna</span>}
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
+                <span>Трафик: {it.remna ? `${formatTrafficBytes(it.remna.trafficUsedBytes ?? 0)} / ${it.remna.trafficLimitBytes && it.remna.trafficLimitBytes > 0 ? formatTrafficBytes(it.remna.trafficLimitBytes) : "∞"}` : "—"}</span>
+                <span>Устройства: {it.remna ? `${it.remna.deviceCount} / ${it.remna.hwidDeviceLimit ?? "∞"}` : "—"}</span>
+                <span>Нода: {it.remna?.lastConnectedNode ?? "—"}</span>
+                <span>Squads: {it.remna?.activeSquadNames?.join(", ") || "—"}</span>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-3 h-8 w-full gap-1 text-xs text-primary hover:bg-primary/10"
+                title="Продлить подписку вручную (компенсация/бонус)"
+                onClick={() => {
+                  setExtendFor({
+                    subId: it.subscriptionId,
+                    label: `${isPrimary ? "Главная" : `#${it.subscriptionIndex}`}${it.tariffName ? ` — ${it.tariffName}` : ""}`,
+                  });
+                  setExtendDays(30);
+                  setExtendError(null);
+                }}
+              >
+                <Zap className="h-3 w-3" />
+                Продлить
+              </Button>
+            </div>
+          );
+        })}
       </div>
 
       {extendDone && (

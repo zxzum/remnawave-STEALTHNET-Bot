@@ -864,13 +864,21 @@ export const api = {
     token: string,
     page = 1,
     limit = 20,
-    params?: { search?: string; isBlocked?: boolean; subscription?: "all" | "any" | "active" }
+    params?: {
+      search?: string;
+      isBlocked?: boolean;
+      subscription?: "all" | "any" | "active";
+      tariffId?: string;
+      subscriptionType?: "all" | "trial" | "regular" | "gifted" | "received";
+    }
   ): Promise<{ items: ClientRecord[]; total: number; page: number; limit: number }> {
     const sp = new URLSearchParams({ page: String(page), limit: String(limit) });
     if (params?.search?.trim()) sp.set("search", params.search.trim());
     if (params?.isBlocked === true) sp.set("isBlocked", "true");
     if (params?.isBlocked === false) sp.set("isBlocked", "false");
     if (params?.subscription && params.subscription !== "all") sp.set("subscription", params.subscription);
+    if (params?.tariffId?.trim()) sp.set("tariffId", params.tariffId.trim());
+    if (params?.subscriptionType && params.subscriptionType !== "all") sp.set("subscriptionType", params.subscriptionType);
     return request(`/admin/clients?${sp.toString()}`, { token });
   },
 
@@ -883,7 +891,12 @@ export const api = {
   async getClientsOnlineStatuses(
     token: string,
     uuids: string[]
-  ): Promise<Record<string, { onlineAt: string | null }>> {
+  ): Promise<Record<string, {
+    onlineAt: string | null;
+    lastConnectedNodeUuid: string | null;
+    lastConnectedNode: string | null;
+    lastConnectedAt: string | null;
+  }>> {
     return request("/admin/clients/online-statuses", {
       method: "POST",
       body: JSON.stringify({ uuids }),
@@ -996,6 +1009,22 @@ export const api = {
     return request(`/admin/clients/${clientId}/audit`, { method: "GET", token });
   },
 
+  async getClientActivity(token: string, clientId: string, params?: { limit?: number; cursor?: string }): Promise<ClientActivityResponse> {
+    const query = new URLSearchParams();
+    if (params?.limit) query.set("limit", String(params.limit));
+    if (params?.cursor) query.set("cursor", params.cursor);
+    const suffix = query.toString() ? `?${query}` : "";
+    return request(`/admin/clients/${encodeURIComponent(clientId)}/activity${suffix}`, { token });
+  },
+
+  async getClientSessions(token: string, clientId: string, params?: { active?: boolean; limit?: number }): Promise<ClientSessionsResponse> {
+    const query = new URLSearchParams();
+    if (params?.active !== undefined) query.set("active", String(params.active));
+    if (params?.limit) query.set("limit", String(params.limit));
+    const suffix = query.toString() ? `?${query}` : "";
+    return request(`/admin/clients/${encodeURIComponent(clientId)}/sessions${suffix}`, { token });
+  },
+
   async getClientAllDevices(token: string, clientId: string): Promise<ClientAllDevicesResponse> {
     return request(`/admin/clients/${clientId}/all-devices`, { method: "GET", token });
   },
@@ -1044,6 +1073,18 @@ export const api = {
     payload: { tariffId?: string; tariffPriceOptionId?: string; customDurationDays?: number; note?: string; createPaymentRecord?: boolean },
   ): Promise<{ ok: boolean; paymentId: string | null; subscriptionId: string; tariff: { id: string; name: string; durationDays: number }; message?: string }> {
     return request(`/admin/subscriptions/${encodeURIComponent(subscriptionId)}/grant-extend`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+      token,
+    });
+  },
+
+  async convertTrialSubscription(
+    token: string,
+    subscriptionId: string,
+    payload: { tariffId: string; tariffPriceOptionId?: string; note?: string },
+  ): Promise<{ ok: boolean; subscriptionId: string; subscriptionIndex: number; convertedDays: number; tariff: { id: string; name: string; durationDays: number } }> {
+    return request(`/admin/subscriptions/${encodeURIComponent(subscriptionId)}/convert-trial`, {
       method: "POST",
       body: JSON.stringify(payload),
       token,
@@ -3591,6 +3632,10 @@ export interface ClientRecord {
   _count?: { referrals: number };
   /** Активная нода Remna (если есть) */
   activeNode?: string | null;
+  /** Последняя нода подключения Remnawave, не squad. */
+  lastConnectedNode?: string | null;
+  lastConnectedNodeUuid?: string | null;
+  lastConnectedAt?: string | null;
   /** Время последнего подключения к VPN (ISO timestamp) */
   onlineAt?: string | null;
   /** реферер клиента (кто привёл). Только в детальной карточке. */
@@ -3630,6 +3675,8 @@ export interface AdminClientSubscriptionItem {
   subscriptionUrl?: string;
   tariffId: string | null;
   tariffName: string | null;
+  isTrial?: boolean;
+  trialName?: string | null;
   giftStatus: string | null;
   // для бейджа «Подарочная»/«Получена в подарок» в инлайн-блоке.
   purchasedAsGift?: boolean;
@@ -3731,12 +3778,53 @@ export interface ClientSubOverviewItem {
     hwidDeviceLimit: number | null;
     deviceCount: number;
     activeSquadsCount: number;
+    activeSquadNames: string[];
+    lastConnectedNodeUuid: string | null;
+    lastConnectedNode: string | null;
+    lastConnectedAt: string | null;
     subscriptionUrl: string | null;
     onlineAt: string | null;
   } | null;
 }
 export interface ClientSubsOverviewResponse {
   items: ClientSubOverviewItem[];
+}
+
+export interface ClientActivityItem {
+  id: string;
+  kind: string;
+  actorId: string | null;
+  targetType: string | null;
+  targetId: string | null;
+  payload: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface ClientActivityResponse {
+  items: ClientActivityItem[];
+  nextCursor: string | null;
+}
+
+export interface ClientSessionItem {
+  id: string;
+  subscriptionId: string;
+  subscriptionIndex: number;
+  tariffName: string | null;
+  remnawaveUuid: string;
+  username: string | null;
+  status: string | null;
+  active: boolean;
+  startedAt: string | null;
+  lastActivityAt: string | null;
+  lastConnectedAt: string | null;
+  nodeUuid: string | null;
+  nodeName: string | null;
+  source: string;
+}
+
+export interface ClientSessionsResponse {
+  sessions: ClientSessionItem[];
+  requestLogs: { available: boolean; reason?: string };
 }
 
 export interface RemnaUserUsageResponse {

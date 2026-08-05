@@ -9,7 +9,7 @@
  * per-subscription.
  */
 import { useState, useEffect, useCallback } from "react";
-import { api, type AdminClientSubscriptionItem } from "@/lib/api";
+import { api, type AdminClientSubscriptionItem, type TariffRecord } from "@/lib/api";
 import { SubscriptionRemnaPanel } from "./subscription-remna-panel";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
@@ -18,10 +18,12 @@ import { fmtMsk, fmtMskDate } from "@/lib/datetime";
 interface Props {
   clientId: string;
   token: string;
+  tariffs?: TariffRecord[];
+  refreshKey?: number;
   onChanged?: () => void;
 }
 
-export function ClientSubscriptionsTab({ clientId, token, onChanged }: Props) {
+export function ClientSubscriptionsTab({ clientId, token, tariffs = [], refreshKey = 0, onChanged }: Props) {
   const [items, setItems] = useState<AdminClientSubscriptionItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,9 +36,12 @@ export function ClientSubscriptionsTab({ clientId, token, onChanged }: Props) {
     try {
       const res = await api.getClientSubscriptionsList(token, clientId);
       setItems(res.items);
-      // Раскрываем primary по умолчанию.
-      const primary = res.items.find((s) => s.isPrimary);
-      if (primary) setExpanded(new Set([primary.id]));
+      setExpanded((current) => {
+        const ids = new Set(res.items.map((item) => item.id));
+        const kept = new Set([...current].filter((id) => ids.has(id)));
+        const primary = res.items.find((item) => item.isPrimary);
+        return kept.size > 0 || !primary ? kept : new Set([primary.id]);
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка загрузки подписок");
     } finally {
@@ -46,7 +51,7 @@ export function ClientSubscriptionsTab({ clientId, token, onChanged }: Props) {
 
   useEffect(() => {
     reload();
-  }, [reload]);
+  }, [reload, refreshKey]);
 
   useEffect(() => {
     // Грузим сквады один раз для всех подписок (один и тот же набор).
@@ -107,7 +112,7 @@ export function ClientSubscriptionsTab({ clientId, token, onChanged }: Props) {
           >
             <button
               onClick={() => toggle(sub.id)}
-              className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-white/[0.04] transition-colors"
+              className="flex w-full flex-col items-start justify-between gap-2 px-3 py-3 text-left transition-colors hover:bg-white/[0.04] sm:flex-row sm:items-center sm:px-4"
             >
               <div className="flex items-center gap-3 min-w-0">
                 {isOpen ? (
@@ -126,8 +131,9 @@ export function ClientSubscriptionsTab({ clientId, token, onChanged }: Props) {
                     {sub.isPrimary ? "Главная" : `#${sub.subscriptionIndex}`}
                   </span>
                   <span className="text-sm font-medium truncate">
-                    {sub.tariffName ?? "— без тарифа —"}
-                  </span>
+                  {sub.tariffName ?? "— без тарифа —"}
+                </span>
+                  {sub.isTrial && <span className="text-[11px] text-violet-400">trial</span>}
                   {sub.giftStatus && (
                     <span className="text-[11px] text-amber-400">🎁 {sub.giftStatus}</span>
                   )}
@@ -136,7 +142,7 @@ export function ClientSubscriptionsTab({ clientId, token, onChanged }: Props) {
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
+              <div className="flex items-center gap-3 pl-7 text-xs text-muted-foreground sm:shrink-0 sm:pl-0">
                 {sub.expireAt && (
                   <span title={`Истекает: ${fmtMsk(sub.expireAt)}`}>
                     до {fmtMskDate(sub.expireAt)}
@@ -156,10 +162,10 @@ export function ClientSubscriptionsTab({ clientId, token, onChanged }: Props) {
                   subscription={sub}
                   token={token}
                   remnaSquads={remnaSquads}
-                  onChanged={() => {
-                    reload();
-                    onChanged?.();
-                  }}
+                  tariffs={tariffs}
+              onChanged={() => {
+                onChanged?.();
+              }}
                 />
               </div>
             )}
