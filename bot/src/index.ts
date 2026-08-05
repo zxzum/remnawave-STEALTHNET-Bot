@@ -589,7 +589,7 @@ async function firstSubscriptionAccess(token: string): Promise<{
 
 function screenBannerUrl(config: { publicAppUrl?: string | null } | null | undefined, screen: string): string | null {
   const base = (config?.publicAppUrl ?? "").replace(/\/+$/, "");
-  return base ? `${base}/api/public/bot-asset/screen/${encodeURIComponent(screen)}.png` : null;
+  return base ? `${base}/api/public/bot-asset/screen/${encodeURIComponent(screen)}.png?v=${Date.now()}` : null;
 }
 
 const SCREEN_ASSET_NAMES: Record<string, string> = {
