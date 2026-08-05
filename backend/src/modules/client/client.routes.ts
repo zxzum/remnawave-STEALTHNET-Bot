@@ -3896,6 +3896,11 @@ clientRouter.post("/payments/platega", async (req, res) => {
   const personalDiscountMeta = personalDiscountPercent > 0 ? { personalDiscountPercent } : null;
   const paymentMetaObj: Record<string, unknown> = {};
   if (metadataExtra) Object.assign(paymentMetaObj, metadataExtra);
+  if (parsed.data.asAdditional) paymentMetaObj.isAdditionalSubscription = true;
+  if (parsed.data.asGift) paymentMetaObj.purchasedAsGift = true;
+  if (parsed.data.replaceTrialSubId) paymentMetaObj.replaceTrialSubId = parsed.data.replaceTrialSubId;
+  if (parsed.data.extendsSecondarySubId) paymentMetaObj.extendsSecondarySubId = parsed.data.extendsSecondarySubId;
+  if (parsed.data.removeExtrasOnActivate) paymentMetaObj.removeExtrasOnActivate = true;
   if (promoCodeRecord) {
     paymentMetaObj.promoCodeId = promoCodeRecord.id;
     paymentMetaObj.originalAmount = metadataExtra ? finalAmount : (originalAmount ?? finalAmount);
@@ -7227,9 +7232,16 @@ clientRouter.get("/payments/:id/status", async (req, res) => {
   const clientId = (req as unknown as { clientId: string }).clientId;
   const p = await prisma.payment.findFirst({
     where: { id: req.params.id, clientId },
-    select: { id: true, status: true, amount: true, currency: true, paidAt: true },
+    select: { id: true, provider: true, status: true, amount: true, currency: true, paidAt: true, tariffId: true, proxyTariffId: true, singboxTariffId: true, extraOptionState: true, metadata: true },
   });
   if (!p) return res.status(404).json({ message: "Платёж не найден" });
+
+  const isPlategaProduct = p.provider === "platega" && (
+    p.tariffId || p.proxyTariffId || p.singboxTariffId || /\"(?:customBuild|extraOption)\"/.test(p.metadata ?? "")
+  );
+  const fulfilled = p.status === "PAID" && (
+    !isPlategaProduct || p.extraOptionState === "APPLIED" || /\"plategaActivationAppliedAt\"/.test(p.metadata ?? "")
+  );
 
   return res.json({
     id: p.id,
@@ -7237,6 +7249,7 @@ clientRouter.get("/payments/:id/status", async (req, res) => {
     amount: p.amount,
     currency: p.currency,
     paidAt: p.paidAt?.toISOString() ?? null,
+    fulfilled,
   });
 });
 

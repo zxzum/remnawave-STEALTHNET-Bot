@@ -367,7 +367,9 @@ plategaWebhooksRouter.post("/platega", async (req, res) => {
     }
     await auditPaymentClientBotAlignment(payment);
     const callbackTransaction: PlategaTransaction = { id: transactionId, status: callbackStatus, amount, currency, payload, raw: data };
-    const callbackMismatch = validatePlategaTransaction(callbackTransaction, payment);
+    // Callback содержит gross amount (заказ + комиссия Platega). Точный net amount
+    // ниже сверяется по авторитетному GET /transaction/{id}, где есть `comission`.
+    const callbackMismatch = validatePlategaTransaction(callbackTransaction, payment, true);
     if (callbackMismatch) {
       ack(409, "rejected_payload", callbackMismatch, payment.id);
       await notifyPlategaPaymentEvent({ kind: "callback_failed", paymentId: payment.id, transactionId, details: `Callback ${callbackMismatch}` }).catch(() => {});

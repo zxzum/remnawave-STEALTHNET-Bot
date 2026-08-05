@@ -22,4 +22,6 @@ test("Platega transaction must match id, amount, currency and payload", () => {
   assert.equal(validatePlategaTransaction({ ...transaction, amount: 1 }, payment), "amount mismatch");
   assert.equal(validatePlategaTransaction({ ...transaction, currency: "USD" }, payment), "currency mismatch");
   assert.equal(validatePlategaTransaction({ ...transaction, payload: "other" }, payment), "payload mismatch");
+  assert.equal(validatePlategaTransaction({ ...transaction, amount: 107, raw: { comission: 6.75 } }, { ...payment, amount: 100.25 }), null);
+  assert.equal(validatePlategaTransaction({ ...transaction, amount: 107, raw: {} }, { ...payment, amount: 100.25 }, true), null);
 });

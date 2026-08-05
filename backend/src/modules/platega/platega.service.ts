@@ -44,9 +44,18 @@ export function verifyPlategaCallbackCredentials(
 export function validatePlategaTransaction(
   transaction: PlategaTransaction,
   payment: { externalId: string | null; orderId: string; amount: number; currency: string },
+  acceptGrossAmount = false,
 ): string | null {
   if (!payment.externalId || transaction.id !== payment.externalId) return "transaction id mismatch";
-  if (transaction.amount == null || Math.round(transaction.amount * 100) !== Math.round(payment.amount * 100)) return "amount mismatch";
+  const commissionRaw = transaction.raw.comission ?? transaction.raw.commission;
+  const commission = typeof commissionRaw === "number" ? commissionRaw : typeof commissionRaw === "string" ? Number(commissionRaw) : 0;
+  const amount = transaction.amount;
+  const amountMatches = amount != null && (
+    Math.round(amount * 100) === Math.round(payment.amount * 100)
+    || (Number.isFinite(commission) && Math.round((amount - commission) * 100) === Math.round(payment.amount * 100))
+    || (acceptGrossAmount && amount >= payment.amount)
+  );
+  if (!amountMatches) return "amount mismatch";
   if (!transaction.currency || transaction.currency.trim().toUpperCase() !== payment.currency.trim().toUpperCase()) return "currency mismatch";
   if (transaction.payload && transaction.payload !== payment.orderId) return "payload mismatch";
   return null;

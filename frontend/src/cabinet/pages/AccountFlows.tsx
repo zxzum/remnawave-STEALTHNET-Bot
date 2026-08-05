@@ -169,7 +169,7 @@ export function PaymentWait() {
       try {
         const result = await api.getPaymentStatus(state.token!, paymentId);
         if (!active) return;
-        if (result.status === "PAID") { setStatus("ok"); await refreshProfile(); return; }
+        if (result.status === "PAID" && result.fulfilled) { setStatus("ok"); await refreshProfile(); return; }
         if (result.status === "FAILED") { setStatus("error"); return; }
       } catch { /* transient provider delay */ }
       if (active) timeout = window.setTimeout(check, 3000);

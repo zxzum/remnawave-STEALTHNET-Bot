@@ -2031,7 +2031,7 @@ export const api = {
   },
 
   // T-pay-wait (портировано из WolfVPN): статус платежа для polling на странице ожидания оплаты.
-  async getPaymentStatus(token: string, id: string): Promise<{ id: string; status: string; amount: number; currency: string; paidAt: string | null }> {
+  async getPaymentStatus(token: string, id: string): Promise<{ id: string; status: string; amount: number; currency: string; paidAt: string | null; fulfilled: boolean }> {
     return request(`/client/payments/${encodeURIComponent(id)}/status`, { token });
   },
 
