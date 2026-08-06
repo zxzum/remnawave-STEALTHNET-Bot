@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Gift, KeyRound, ShoppingBag, Smartphone, X, ChevronRight, Monitor, Send, Package } from "lucide-react";
+import { Gift, KeyRound, ShoppingBag, Smartphone, X, ChevronRight, Monitor, Send, Package, RefreshCw } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import { useClientAuth } from "@/contexts/client-auth";
 import { TrialsPickerDialog } from "@/components/cabinet/trials-picker-dialog";
@@ -348,14 +348,18 @@ export default function Cabinet() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.35, duration: 0.4 }}
           >
-            <Link to={main ? `/cabinet/subscribe?sub=${main.id}` : "/cabinet/subscribe"} className="btn-primary px-6 py-4 text-base">
+            <Link to={main.tariffId ? `/cabinet/tariffs?renew=${main.tariffId}` : "/cabinet/tariffs"} className="btn-primary px-6 py-4 text-base">
+              <RefreshCw className="h-5 w-5" />
+              Продлить подписку
+            </Link>
+            <Link to={`/cabinet/subscribe?sub=${main.id}`} className="btn-ghost px-6 py-4 text-base">
               <KeyRound className="h-5 w-5" />
               Открыть ключи доступа
             </Link>
             {availableTrials.length > 0 && <Link to="/cabinet?trial=1" className="btn-ghost px-6 py-4 text-base"><Gift className="h-5 w-5" />Активировать пробный период</Link>}
             <Link to="/cabinet/tariffs" className="btn-ghost px-6 py-4 text-base">
               <ShoppingBag className="h-5 w-5" />
-              Перейти к тарифам
+              Все тарифы
             </Link>
           </motion.div>
 
