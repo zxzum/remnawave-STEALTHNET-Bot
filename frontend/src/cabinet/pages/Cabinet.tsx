@@ -8,6 +8,7 @@ import { useClientAuth } from "@/contexts/client-auth";
 import { TrialsPickerDialog } from "@/components/cabinet/trials-picker-dialog";
 import { cn } from "../lib/cn";
 import type { CabinetSubscription as Subscription } from "../model";
+import { PlanDialog } from "./Tariffs";
 
 function pluralDays(n: number) {
   const m10 = n % 10;
@@ -286,12 +287,16 @@ function EmailHintDialog() {
 }
 
 export default function Cabinet() {
-  const { availableTrials, reload, subscriptions, toast } = useApp();
+  const { availableTrials, reload, subscriptions, tariffGroups, toast } = useApp();
   const { state } = useClientAuth();
   const [params, setParams] = useSearchParams();
   const [selectedId, setSelectedId] = useState<string | undefined>(subscriptions[0]?.id);
+  const [renewOpen, setRenewOpen] = useState(false);
 
   const main = subscriptions.find((s) => s.id === selectedId) ?? subscriptions[0];
+  const renewalPlan = main?.tariffId
+    ? tariffGroups.flatMap((group) => group.plans).find((plan) => plan.id === main.tariffId) ?? null
+    : null;
   const rest = subscriptions.filter((s) => s.id !== main?.id);
   const bindOpen = params.get("bindTelegram") === "1";
   const trialOpen = params.get("trial") === "1";
@@ -352,7 +357,7 @@ export default function Cabinet() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.35, duration: 0.4 }}
           >
-            <Link to={main.tariffId ? `/cabinet/tariffs?renew=${main.tariffId}` : "/cabinet/tariffs"} className="btn-primary px-6 py-4 text-base">
+            <Link to="/cabinet/tariffs" onClick={(event) => { if (renewalPlan) { event.preventDefault(); setRenewOpen(true); } }} className="btn-primary px-6 py-4 text-base">
               <RefreshCw className="h-5 w-5" />
               Продлить подписку
             </Link>
@@ -381,6 +386,7 @@ export default function Cabinet() {
       <BindTelegramDialog open={bindOpen} onClose={() => setParams({})} />
       <EmailHintDialog />
       {trialDialog}
+      <PlanDialog plan={renewalPlan} open={renewOpen} onOpenChange={setRenewOpen} />
     </div>
   );
 }

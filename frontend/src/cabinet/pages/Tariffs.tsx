@@ -49,7 +49,7 @@ function formatMoney(value: number, currency: string) {
 
 /* ---------------- Конфигуратор + оплата ---------------- */
 
-function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | null; open: boolean; onOpenChange: (v: boolean) => void }) {
+export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | null; open: boolean; onOpenChange: (v: boolean) => void }) {
   const { user, subscriptions, toast, reload } = useApp();
   const { state, refreshProfile } = useClientAuth();
   const navigate = useNavigate();
@@ -764,24 +764,12 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
 
 export default function Tariffs() {
   const { tariffGroups } = useApp();
-  const [searchParams, setSearchParams] = useSearchParams();
   const [selected, setSelected] = useState<TariffPlan | null>(null);
   const firstGroupId = tariffGroups[0]?.id;
   const [openGroups, setOpenGroups] = useState<string[]>([]);
   const visibleGroups = firstGroupId
     ? [firstGroupId, ...openGroups.filter((id) => id !== firstGroupId)]
     : openGroups;
-
-  useEffect(() => {
-    const tariffId = searchParams.get("renew");
-    if (!tariffId || selected || tariffGroups.length === 0) return;
-    const plan = tariffGroups.flatMap((group) => group.plans).find((item) => item.id === tariffId);
-    if (!plan) return;
-    setSelected(plan);
-    const next = new URLSearchParams(searchParams);
-    next.delete("renew");
-    setSearchParams(next, { replace: true });
-  }, [searchParams, selected, setSearchParams, tariffGroups]);
 
   return (
     <div className="flex flex-col gap-5">
