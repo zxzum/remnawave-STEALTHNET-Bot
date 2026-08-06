@@ -562,6 +562,7 @@ clientAuthRouter.post("/verify-email", async (req, res) => {
       registrationSource: "web",
     }),
   });
+  notifyAdminsAboutNewClient(client.id).catch(() => {});
 
   await prisma.pendingEmailRegistration.delete({ where: { id: pending.id } }).catch(() => {});
 
@@ -749,6 +750,7 @@ clientAuthRouter.post("/telegram-miniapp", async (req, res) => {
       onboardingCompleted: false,
     }),
   });
+  notifyAdminsAboutNewClient(client.id).catch(() => {});
   const token = signClientToken(client.id);
   // isNewClient=true — клиент только что создан.
   // Бот после регистрации проверяет флаг и запускает event-driven welcome (after_registration).
@@ -959,6 +961,7 @@ clientAuthRouter.post("/google", async (req, res) => {
       autoRenewEnabled: configForDefaults.defaultAutoRenewEnabled ?? false,
     }),
   });
+  notifyAdminsAboutNewClient(client.id).catch(() => {});
   const token = signClientToken(client.id);
   // isNewClient=true — клиент только что создан.
   // Бот после регистрации проверяет флаг и запускает event-driven welcome (after_registration).
@@ -1039,6 +1042,7 @@ clientAuthRouter.post("/apple", async (req, res) => {
       autoRenewEnabled: configForDefaults.defaultAutoRenewEnabled ?? false,
     }),
   });
+  notifyAdminsAboutNewClient(client.id).catch(() => {});
   const token = signClientToken(client.id);
   // isNewClient=true — клиент только что создан.
   // Бот после регистрации проверяет флаг и запускает event-driven welcome (after_registration).
