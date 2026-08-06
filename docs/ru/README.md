@@ -13,10 +13,12 @@
 
 ---
 
-<h1 align="center">STEALTHNET 3.0</h1>
+<h1 align="center">Лазейка ВПН</h1>
+
+> Этот репозиторий содержит продукт **Лазейка ВПН**. Кодовая база исторически основана на STEALTHNET; это техническое наследие, а не название продукта.
 
 <p align="center">
-  <img src="https://img.shields.io/badge/STEALTHNET-3.0-blueviolet?style=for-the-badge&logoColor=white" alt="STEALTHNET 3.0" />
+  <img src="https://img.shields.io/badge/LAZEYKA%20VPN-3.0-blueviolet?style=for-the-badge&logoColor=white" alt="Лазейка ВПН" />
   <img src="https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" />
   <img src="https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB" alt="React" />
   <img src="https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js" />

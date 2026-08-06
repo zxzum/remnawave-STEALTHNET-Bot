@@ -279,13 +279,13 @@ export type BotButtonConfig = { id: string; visible: boolean; label: string; ord
 export type BotEmojiEntry = { unicode?: string; tgEmojiId?: string };
 export type BotEmojisConfig = Record<string, BotEmojiEntry>;
 const DEFAULT_BOT_BUTTONS: BotButtonConfig[] = [
-  { id: "cabinet", visible: true, label: "🚀 Открыть кабинет", order: 1, style: "primary", emojiKey: "", onePerRow: true },
-  { id: "my_subs", visible: true, label: "📋 Мои подписки", order: 2, style: "primary" },
+  { id: "cabinet", visible: true, label: "🔐 Войти в кабинет", order: 0, style: "primary", emojiKey: "", onePerRow: true },
+  { id: "my_subs", visible: true, label: "📋 Мои подписки", order: 2, style: "" },
   { id: "devices", visible: true, label: "📱 Устройства", order: 3, style: "primary", emojiKey: "DEVICES" },
-  { id: "trial", visible: true, label: "🎁 Попробовать бесплатно", order: 4, style: "success", emojiKey: "TRIAL" },
-  { id: "referral", visible: true, label: "💸 Пригласить и заработать", order: 5, style: "success", emojiKey: "" },
+  { id: "trial", visible: true, label: "🎁 Попробовать бесплатно", order: 4, style: "primary", emojiKey: "TRIAL" },
+  { id: "referral", visible: true, label: "🔗 Реферальная система", order: 5, style: "", emojiKey: "" },
   { id: "bot_menu", visible: true, label: "☰ Меню бота", order: 6, style: "primary", emojiKey: "", onePerRow: true },
-  { id: "support", visible: true, label: "🆘 Поддержка", order: 7, style: "primary", emojiKey: "NOTE" },
+  { id: "support", visible: true, label: "🆘 Поддержка", order: 7, style: "", emojiKey: "NOTE" },
   { id: "site", visible: true, label: "🌐 Сайт", order: 8, style: "" },
   { id: "tariffs", visible: true, label: "💳 Купить доступ / Продлить", order: 1, style: "" },
   { id: "proxy", visible: true, label: "🌐 Прокси", order: 0.5, style: "primary", emojiKey: "SERVERS" },
@@ -293,7 +293,7 @@ const DEFAULT_BOT_BUTTONS: BotButtonConfig[] = [
   { id: "singbox", visible: true, label: "🔑 Доступы", order: 0.55, style: "primary", emojiKey: "SERVERS" },
   { id: "my_singbox", visible: true, label: "📋 Мои доступы", order: 0.65, style: "primary", emojiKey: "SERVERS" },
   { id: "profile", visible: true, label: "🧩 Профиль", order: 1, style: "", emojiKey: "PUZZLE" },
-  { id: "topup", visible: true, label: "💳 Пополнить баланс", order: 2, style: "success", emojiKey: "CARD" },
+  { id: "topup", visible: true, label: "💳 Пополнить баланс", order: 2, style: "primary", emojiKey: "CARD" },
   { id: "vpn", visible: true, label: "🌐 Подключиться к VPN", order: 5, style: "danger", emojiKey: "SERVERS", onePerRow: true },
   { id: "tickets", visible: true, label: "🎫 Тикеты", order: 6.5, style: "primary", emojiKey: "NOTE" },
   { id: "promocode", visible: true, label: "🎟️ Промокод", order: 8, style: "primary", emojiKey: "STAR" },
@@ -408,11 +408,11 @@ export type BotInnerButtonStyles = {
 };
 
 const DEFAULT_BOT_INNER_BUTTON_STYLES: Required<BotInnerButtonStyles> = {
-  tariffPay: "success",
+  tariffPay: "primary",
   topup: "primary",
   back: "danger",
   profile: "primary",
-  trialConfirm: "success",
+  trialConfirm: "primary",
   lang: "primary",
   currency: "primary",
 };

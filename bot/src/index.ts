@@ -59,7 +59,6 @@ import {
   type InnerEmojiIds,
   type BotMenuSection,
 } from "./keyboard.js";
-import { formatTrafficLine } from "./traffic.js";
 import { t as _t, formatDays as _formatDays, setTranslations } from "./i18n.js";
 // 54-ФЗ-чек ЮКассы: prompt «нужен ли чек», ввод email, etc.
 import {
@@ -715,10 +714,17 @@ async function showFirstWelcome(ctx: Context, userId: number, config: ConfigSnap
   const text = !configuredText || legacyGenericWelcome || !hasProjectName ? DEFAULT_BOT_WELCOME_TEXT : configuredText;
   const markup: InlineMarkup = {
     inline_keyboard: [
-      [{ text: "Попробовать 2 дня бесплатно!", callback_data: "welcome:try", style: "success" }],
+      [{ text: "Попробовать 2 дня бесплатно!", callback_data: "welcome:try", style: "primary" }],
     ],
   };
   const caption = text.length > TELEGRAM_CAPTION_MAX ? `${text.slice(0, TELEGRAM_CAPTION_MAX - 3)}...` : text;
+
+  const banner = screenBannerUrl(config, "welcome");
+  if (banner) {
+    const sent = await ctx.replyWithPhoto(banner, { caption, reply_markup: markup });
+    if (sent?.message_id) lastBotScreens.set(userId, { chatId: sent.chat.id, messageId: sent.message_id });
+    return;
+  }
 
   const image = await api.getOnboardingAsset("welcome.png").catch(() => null);
   if (image) {
@@ -1347,10 +1353,12 @@ function parseSubInfo(item: {
     ?? inner?.trafficUsedBytes ?? inner?.usedTrafficBytes ?? inner?.traffic_used_bytes;
   const limitNum = typeof tlimit === "string" ? parseFloat(tlimit) : Number(tlimit);
   const usedNum = typeof tused === "string" ? parseFloat(tused) : Number(tused);
-  if (Number.isFinite(limitNum) && limitNum > 0) {
+  if (Number.isFinite(usedNum) && Number.isFinite(limitNum) && limitNum > 0) {
     const u = bytesToGb(Number.isFinite(usedNum) ? usedNum : 0);
     const l = bytesToGb(limitNum);
     trafficSuffix = ` | ${u}/${l} ГБ`;
+  } else if (Number.isFinite(usedNum)) {
+    trafficSuffix = ` | ${bytesToGb(usedNum)} ГБ / ∞`;
   }
 
   return { idx, typeEmoji, statusEmojiBig, statusEmojiSmall, daysStr, dateStr, trafficSuffix, isExpired };
@@ -1380,11 +1388,60 @@ function formatSubLine(item: {
     .split("{{SUB_TRAFFIC}}").join(trafficSuffix);
 }
 
-function buildCompactMainMenuText(serviceName: string, balance: number, currency: string): { text: string; entities: CustomEmojiEntity[] } {
-  void serviceName;
-  void balance;
-  void currency;
-  return { text: DEFAULT_BOT_WELCOME_TEXT, entities: [] };
+type CompactMenuSubscription = Pick<
+  api.SubscriptionListItem,
+  "type" | "id" | "subscriptionIndex" | "subscription" | "tariffDisplayName" | "trafficQuota"
+>;
+
+function subscriptionTrafficLines(
+  item: CompactMenuSubscription,
+  stats = richSubStats(item.subscription),
+): string[] {
+  const traffic = stats.trafficUsedGb == null
+    ? "—"
+    : `${gbCompact(stats.trafficUsedGb)} ГБ / ${stats.trafficLimitGb ? `${gbCompact(stats.trafficLimitGb)} ГБ` : "∞"}`;
+  const lines = [`Трафик: ${traffic}`];
+  const whitelistUsed = Number(item.trafficQuota?.usedBytes);
+  const whitelistLimit = Number(item.trafficQuota?.limitBytes);
+  if (Number.isFinite(whitelistLimit) && whitelistLimit > 0) {
+    lines.push(`Белые списки: ${gbCompact(bytesToGb(Number.isFinite(whitelistUsed) ? whitelistUsed : 0))} ГБ / ${gbCompact(bytesToGb(whitelistLimit))} ГБ`);
+  }
+  return lines;
+}
+
+function formatCompactSubscription(item: CompactMenuSubscription): string {
+  const stats = richSubStats(item.subscription);
+  const statusEmoji =
+    stats.status === "ACTIVE" ? "🟢" :
+    stats.status === "EXPIRED" || stats.status === "DISABLED" ? "🔴" : "🟡";
+  const name = item.tariffDisplayName?.trim() || "Подписка";
+  const details = subscriptionTrafficLines(item, stats).map((line) => `   ${line}`).join("\n");
+  return `${statusEmoji} #${item.subscriptionIndex ?? 0} · ${name}\n${details}`;
+}
+
+function buildCompactMainMenuText(
+  serviceName: string,
+  balance: number,
+  currency: string,
+  allSubs?: { items: CompactMenuSubscription[] } | null,
+): { text: string; entities: CustomEmojiEntity[] } {
+  const items = [...(allSubs?.items ?? [])].sort((a, b) => {
+    if (a.type !== b.type) return a.type === "root" ? -1 : 1;
+    return (a.subscriptionIndex ?? 0) - (b.subscriptionIndex ?? 0);
+  });
+  const lines = [
+    `🏠 Личный кабинет ${serviceName.trim() || "Лазейка ВПН"}`,
+    "Подписки и подключение — в одном месте.",
+    `💳 Баланс: ${formatMoney(balance, currency)}`,
+    "",
+    "📋 Подписки",
+  ];
+  if (items.length > 0) {
+    for (const item of items) lines.push(formatCompactSubscription(item));
+  } else {
+    lines.push("Пока нет активных подписок.");
+  }
+  return { text: lines.join("\n"), entities: [] };
 }
 
 function buildMainMenuText(opts: {
@@ -1742,9 +1799,9 @@ function buildMainMenuRichMarkdown(opts: {
       const left = s.daysLeft != null ? `${s.daysLeft} ${pluralDays(s.daysLeft)}` : "—";
       const traffic =
         s.trafficUsedGb != null && s.trafficLimitGb != null
-          ? `${gbCompact(s.trafficUsedGb)}/${gbCompact(s.trafficLimitGb)} GB`
+          ? `${gbCompact(s.trafficUsedGb)} GB / ${gbCompact(s.trafficLimitGb)} GB`
           : s.trafficUsedGb != null
-          ? `${gbCompact(s.trafficUsedGb)} GB`
+          ? `${gbCompact(s.trafficUsedGb)} GB / ∞`
           : "—";
       const devices = s.deviceLimit != null ? `${s.devicesUsed ?? 0}/${s.deviceLimit}` : "—";
       out.push(`| ${badge} ${emoji}${richCell(it.tariffDisplayName)} | ${left} | ${traffic} | ${devices} |`);
@@ -2264,7 +2321,12 @@ composer.command("start", async (ctx) => {
     const showSingbox = singboxRes.items?.some((c: { tariffs: unknown[] }) => c.tariffs?.length > 0) ?? false;
     const appUrl = config?.publicAppUrl?.replace(/\/$/, "") ?? null;
 
-    const { text, entities } = buildCompactMainMenuText(name, client?.balance ?? 0, client?.preferredCurrency ?? config?.defaultCurrency ?? "usd");
+    const { text, entities } = buildCompactMainMenuText(
+      name,
+      client?.balance ?? 0,
+      client?.preferredCurrency ?? config?.defaultCurrency ?? "usd",
+      allSubsRes,
+    );
     const caption = text.length > TELEGRAM_CAPTION_MAX ? text.slice(0, TELEGRAM_CAPTION_MAX - 3) + "..." : text;
     const captionEntities = text.length > TELEGRAM_CAPTION_MAX && entities.length ? entities.filter((e) => e.offset + e.length <= TELEGRAM_CAPTION_MAX - 3) : entities;
     const hasVideoInstructions = config?.videoInstructionsEnabled && (config?.videoInstructions?.length ?? 0) > 0;
@@ -3459,11 +3521,11 @@ composer.on("callback_query:data", async (ctx) => {
     const appUrl = config?.publicAppUrl?.replace(/\/$/, "") ?? null;
     const rawStyles = config?.botInnerButtonStyles;
     const innerStyles = {
-      tariffPay: rawStyles?.tariffPay !== undefined ? rawStyles.tariffPay : "success",
+      tariffPay: rawStyles?.tariffPay !== undefined ? rawStyles.tariffPay : "primary",
       topup: rawStyles?.topup !== undefined ? rawStyles.topup : "primary",
       back: rawStyles?.back !== undefined ? rawStyles.back : "danger",
       profile: rawStyles?.profile !== undefined ? rawStyles.profile : "primary",
-      trialConfirm: rawStyles?.trialConfirm !== undefined ? rawStyles.trialConfirm : "success",
+      trialConfirm: rawStyles?.trialConfirm !== undefined ? rawStyles.trialConfirm : "primary",
       lang: rawStyles?.lang !== undefined ? rawStyles.lang : "primary",
       currency: rawStyles?.currency !== undefined ? rawStyles.currency : "primary",
     };
@@ -3504,7 +3566,12 @@ composer.on("callback_query:data", async (ctx) => {
       const showProxy = proxyRes.items?.some((c: { tariffs: unknown[] }) => c.tariffs?.length > 0) ?? false;
       const showSingbox = singboxRes.items?.some((c: { tariffs: unknown[] }) => c.tariffs?.length > 0) ?? false;
       const name = config?.serviceName?.trim() || "Кабинет";
-      const { text, entities } = buildCompactMainMenuText(name, client?.balance ?? 0, client?.preferredCurrency ?? config?.defaultCurrency ?? "usd");
+      const { text, entities } = buildCompactMainMenuText(
+        name,
+        client?.balance ?? 0,
+        client?.preferredCurrency ?? config?.defaultCurrency ?? "usd",
+        allSubsRes,
+      );
       const hasVideoInstructionsCb = config?.videoInstructionsEnabled && (config?.videoInstructions?.length ?? 0) > 0;
       const hasSupportLinks = !!(supportBotLink() || config?.supportLink || config?.agreementLink || config?.offerLink || config?.instructionsLink || hasVideoInstructionsCb);
       const backMarkup = mainMenu({
@@ -7127,31 +7194,22 @@ composer.on("callback_query:data", async (ctx) => {
           if (a.type !== b.type) return a.type === "root" ? -1 : 1;
           return (a.subscriptionIndex ?? 0) - (b.subscriptionIndex ?? 0);
         });
-        // Формат тела: «🌐 #N — N дн. до DD.MM.YYYY [| used/limit ГБ]» (по строке на подписку).
-        // Формат кнопки: «✅ #N <typeEmoji> <tariff> (N дн.)».
-        // Дни жирные (через **markdown** + applyMarkdownAndEmoji).
+        // Тело и карточка используют один компактный формат: тариф, общий трафик
+        // и отдельная квота белых списков.
         const bodyLines = [`📋 Мои подписки (**${sorted.length}**)`, ""];
         const buttonItems = sorted.map((it) => {
           const info = parseSubInfo(it);
-          // T15.4: маркер 🎁 для триал-подписок в текстовой строке (под лимит callback_data
-          // в кнопках уже не влезает, поэтому только в body).
-          const trialBodyMark = it.trialId ? " 🎁" : "";
-          // без названия тарифа в текстовой строке —
-          // для истёкших «❌ истекла», для активных «N дн. до DD.MM.YYYY [+трафик]».
-          if (info.isExpired) {
-            bodyLines.push(`${info.typeEmoji} #${info.idx}${trialBodyMark} — ❌ истекла`);
-          } else {
-            bodyLines.push(`${info.typeEmoji} #${info.idx}${trialBodyMark} — **${info.daysStr}** до ${info.dateStr}${info.trafficSuffix}`);
+          bodyLines.push(formatCompactSubscription(it));
+          if (info.dateStr !== "—") {
+            bodyLines.push(`   До: ${info.dateStr} · осталось ${info.daysStr}`);
           }
-          // tariffDisplayName уже содержит эмодзи категории (🌐/🔒) в начале — не дублируем
-          // typeEmoji в лейбле кнопки. Slice 38 → запас под Telegram-лимит 64 байта.
-          const tariff = (it.tariffDisplayName || "—").slice(0, 38);
-          // T15.4: для trial — компактный маркер 🎁 в конце лейбла кнопки.
-          const trialBtnMark = it.trialId ? " 🎁" : "";
-          const lifetimeStr = info.isExpired ? "истекла" : info.daysStr;
-          const label = `${info.statusEmojiSmall} #${info.idx} ${tariff} (${lifetimeStr})${trialBtnMark}`;
+          bodyLines.push("");
+          const tariff = (it.tariffDisplayName || "Подписка").slice(0, 42);
+          const trialMark = it.trialId ? " 🎁" : "";
+          const label = `${info.statusEmojiSmall} #${info.idx} ${tariff}${trialMark}`;
           return { type: it.type, id: it.id, label };
         });
+        bodyLines.pop();
         const { text, entities } = applyMarkdownAndEmoji(bodyLines.join("\n"), config?.botEmojis ?? null);
         await editMessageContent(
           ctx,
@@ -7228,17 +7286,8 @@ composer.on("callback_query:data", async (ctx) => {
           devicesLine = `📱 Устройств: ${available} доступно`;
         }
 
-        // Трафик: используется/лимит. Если без лимита — «X.XX GB / ♾».
-        const tlimit = inner?.trafficLimitBytes ?? inner?.traffic_limit_bytes;
-        const tused = (inner?.userTraffic as { usedTrafficBytes?: number } | undefined)?.usedTrafficBytes
-          ?? inner?.trafficUsedBytes ?? inner?.usedTrafficBytes ?? inner?.traffic_used_bytes;
-        const limitNum = typeof tlimit === "string" ? parseFloat(tlimit) : Number(tlimit);
-        const usedNum = typeof tused === "string" ? parseFloat(tused) : Number(tused);
-        const trafficLine = formatTrafficLine({
-          remoteUsedBytes: Number.isFinite(usedNum) ? usedNum : 0,
-          remoteLimitBytes: limitNum,
-          localQuota: item.trafficQuota,
-        });
+        // Общий трафик и белые списки выводятся отдельными строками без progress bar.
+        const trafficLines = subscriptionTrafficLines(item).map((line) => `📊 ${line}`);
 
         // Ссылка для подключения
         const subUrl = getSubscriptionUrl(item.subscription);
@@ -7249,16 +7298,15 @@ composer.on("callback_query:data", async (ctx) => {
         const isTrialSub = !!item.trialId;
         const trialMark = isTrialSub ? "🎁 Пробная" : "";
         const lines = [
-          `📲 Подписка #${idx}`,
+          `📲 Подписка #${idx} · ${tariff}`,
           "",
         ];
         if (trialMark) lines.push(trialMark);
-        lines.push(`💎 Тариф: ${tariff}`);
         lines.push(`📊 Статус подписки — ${statusLabel}`);
         if (expireDateTimeStr) lines.push(`📅 до ${expireDateTimeStr}`);
         if (daysLeftStr) lines.push(`⏰ осталось ${daysLeftStr}`);
         if (devicesLine) lines.push(devicesLine);
-        lines.push(trafficLine);
+        lines.push(...trafficLines);
         if (subUrl) {
           lines.push("");
           lines.push("🔗 Ссылка для подключения:");
@@ -7635,7 +7683,7 @@ composer.on("callback_query:data", async (ctx) => {
         const text = `🎁 ${tariff.name}\n\nВыберите длительность подписки:`;
         // Используем тот же picker длительности что и для основных тарифов, но с другим callback prefix.
         // звёздочка «лучшая цена за день» убрана по запросу клиента.
-        const tariffPay = "success" as const;
+        const tariffPay = "primary" as const;
         const rows: { text: string; callback_data: string }[][] = opts.map((o, idx) => {
           const sym = tariff.currency.toUpperCase() === "RUB" ? "₽" : tariff.currency.toUpperCase() === "USD" ? "$" : tariff.currency;
           return [{ text: `${o.durationDays} дн — ${o.price} ${sym}`.slice(0, 64), callback_data: `gift_topt:${idx}` }];

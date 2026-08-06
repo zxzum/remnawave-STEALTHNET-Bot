@@ -57,13 +57,13 @@ const DEFAULT_PLATEGA_METHODS: { id: number; enabled: boolean; label: string }[]
 
 type BotButtonItem = { id: string; visible: boolean; label: string; order: number; style?: string; emojiKey?: string; onePerRow?: boolean };
 const DEFAULT_BOT_BUTTONS: BotButtonItem[] = [
-  { id: "cabinet", visible: true, label: "🚀 Открыть кабинет", order: 1, style: "primary", emojiKey: "", onePerRow: true },
-  { id: "my_subs", visible: true, label: "📋 Мои подписки", order: 2, style: "primary" },
+  { id: "cabinet", visible: true, label: "🔐 Войти в кабинет", order: 0, style: "primary", emojiKey: "", onePerRow: true },
+  { id: "my_subs", visible: true, label: "📋 Мои подписки", order: 2, style: "" },
   { id: "devices", visible: true, label: "📱 Устройства", order: 3, style: "primary", emojiKey: "DEVICES" },
-  { id: "trial", visible: true, label: "🎁 Попробовать бесплатно", order: 4, style: "success", emojiKey: "TRIAL" },
-  { id: "referral", visible: true, label: "💸 Пригласить и заработать", order: 5, style: "success", emojiKey: "" },
+  { id: "trial", visible: true, label: "🎁 Попробовать бесплатно", order: 4, style: "primary", emojiKey: "TRIAL" },
+  { id: "referral", visible: true, label: "🔗 Реферальная система", order: 5, style: "", emojiKey: "" },
   { id: "bot_menu", visible: true, label: "☰ Меню бота", order: 6, style: "primary", emojiKey: "", onePerRow: true },
-  { id: "support", visible: true, label: "🆘 Поддержка", order: 7, style: "primary", emojiKey: "NOTE" },
+  { id: "support", visible: true, label: "🆘 Поддержка", order: 7, style: "", emojiKey: "NOTE" },
   { id: "site", visible: true, label: "🌐 Сайт", order: 8, style: "" },
   { id: "tariffs", visible: true, label: "💳 Купить доступ / Продлить", order: 1, style: "" },
   { id: "proxy", visible: true, label: "🌐 Прокси", order: 0.5, style: "primary", emojiKey: "SERVERS" },
@@ -71,7 +71,7 @@ const DEFAULT_BOT_BUTTONS: BotButtonItem[] = [
   { id: "singbox", visible: true, label: "🔑 Доступы", order: 0.55, style: "primary", emojiKey: "SERVERS" },
   { id: "my_singbox", visible: true, label: "📋 Мои доступы", order: 0.65, style: "primary", emojiKey: "SERVERS" },
   { id: "profile", visible: true, label: "🧩 Профиль", order: 1, style: "", emojiKey: "PUZZLE" },
-  { id: "topup", visible: true, label: "💳 Пополнить баланс", order: 2, style: "success", emojiKey: "CARD" },
+  { id: "topup", visible: true, label: "💳 Пополнить баланс", order: 2, style: "primary", emojiKey: "CARD" },
   { id: "vpn", visible: true, label: "🌐 Подключиться к VPN", order: 5, style: "danger", emojiKey: "SERVERS", onePerRow: true },
   { id: "tickets", visible: true, label: "🎫 Тикеты", order: 6.5, style: "primary", emojiKey: "NOTE" },
   { id: "promocode", visible: true, label: "🎟️ Промокод", order: 8, style: "primary", emojiKey: "STAR" },
@@ -156,11 +156,11 @@ const BOT_MENU_LINE_LABELS: Record<string, string> = {
 
 /** Все ключи стилей внутренних кнопок и их дефолты — при изменении одного не терять остальные */
 const DEFAULT_BOT_INNER_STYLES: Record<string, string> = {
-  tariffPay: "success",
+  tariffPay: "primary",
   topup: "primary",
   back: "danger",
   profile: "primary",
-  trialConfirm: "success",
+  trialConfirm: "primary",
   lang: "primary",
   currency: "primary",
 };
@@ -226,10 +226,9 @@ const BOT_EMOJI_LABELS: Record<string, string> = {
 
 /** Опции стилей кнопок с цветовыми превью. Внутренние ID-стили примерно одинаковы в TG. */
 const BOT_STYLE_OPTIONS: { value: string; label: string; swatch: string }[] = [
-  { value: "", label: "По умолчанию", swatch: "bg-muted" },
-  { value: "primary", label: "Синий", swatch: "bg-blue-500" },
-  { value: "success", label: "Зелёный", swatch: "bg-emerald-500" },
-  { value: "danger", label: "Красный", swatch: "bg-red-500" },
+  { value: "", label: "Нейтральный", swatch: "bg-muted" },
+  { value: "primary", label: "Акцентный", swatch: "bg-cyan-500" },
+  { value: "danger", label: "Негативный", swatch: "bg-red-500" },
 ];
 
 /** Человеко-читаемые имена кнопок главного меню по их id (для подсказок справа от ввода). */

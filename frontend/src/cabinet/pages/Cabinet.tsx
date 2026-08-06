@@ -17,6 +17,10 @@ function pluralDays(n: number) {
   return "дней";
 }
 
+function formatGb(value: number) {
+  return `${value.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} ГБ`;
+}
+
 export function PageHeader() {
   const { user } = useApp();
   return (
@@ -96,7 +100,7 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
             <div className="mb-2 flex items-baseline justify-between text-sm">
               <span className="font-medium text-fog-300">Трафик по белым спискам</span>
               <span className="font-bold">
-                {sub.whitelistUsedGB.toLocaleString("ru-RU")} / {sub.whitelistGB.toLocaleString("ru-RU")} ГБ
+                {formatGb(sub.whitelistUsedGB)} / {formatGb(sub.whitelistGB)}
               </span>
             </div>
             <TrafficBar used={sub.whitelistUsedGB} limit={sub.whitelistGB} />

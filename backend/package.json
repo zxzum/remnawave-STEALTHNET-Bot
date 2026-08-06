@@ -1,7 +1,7 @@
 {
   "name": "stealthnet-api",
   "version": "5.2.0",
-  "description": "STEALTHNET 5.1.0 — модульный Web API",
+  "description": "Лазейка ВПН — модульный Web API; историческая база: STEALTHNET",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

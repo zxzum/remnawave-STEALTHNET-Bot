@@ -11,7 +11,7 @@ const DEFAULTS: Array<[string, string]> = [
   ["service_name", "STEALTHNET"],
   [
     "bot_inner_button_styles",
-    '{"tariffPay":"success","topup":"primary","back":"danger","profile":"primary","trialConfirm":"success","lang":"primary","currency":"primary"}',
+    '{"tariffPay":"primary","topup":"primary","back":"danger","profile":"primary","trialConfirm":"primary","lang":"primary","currency":"primary"}',
   ],
   ["category_emojis", '{"ordinary":"📦","premium":"⭐"}'],
   [
