@@ -3221,22 +3221,8 @@ export function SettingsPage() {
                     <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 mt-4 space-y-2">
                       <Label className="text-emerald-700 dark:text-emerald-400">🔒 Защита webhook'ов от форджинга</Label>
                       <p className="text-xs text-muted-foreground">
-                        Включается автоматически когда заданы <code className="text-[11px]">Merchant ID</code> и <code className="text-[11px]">Secret key</code> выше. Каждый входящий webhook проверяется через Platega API: запрашиваем у них реальный статус транзакции и доверяем только их ответу. Атакер не может подделать ответ от <code className="text-[11px]">app.platega.io</code>, поэтому форджинг невозможен.
+                        Callback обязан прислать <code className="text-[11px]">X-MerchantId</code> и <code className="text-[11px]">X-Secret</code>. Затем сервер повторно сверяет в Platega API ID, статус, сумму, валюту и payload платежа.
                       </p>
-                      <details className="text-xs">
-                        <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Опционально: HMAC подпись (на будущее)</summary>
-                        <div className="mt-2 space-y-1.5">
-                          <p className="text-muted-foreground">
-                            Если когда-нибудь Platega добавит подписание webhook'ов в кабинете — впишешь сюда секрет и все webhook'и без валидной HMAC-SHA256 в <code className="text-[11px]">X-Signature</code> будут отвергаться. <strong>Сейчас в их кабинете такой опции нет — оставь поле пустым.</strong>
-                          </p>
-                          <Input
-                            type="password"
-                            value={(settings as { plategaWebhookSecret?: string | null }).plategaWebhookSecret ?? ""}
-                            onChange={(e) => setSettings((s) => (s ? { ...s, plategaWebhookSecret: e.target.value || null } as typeof s : s))}
-                            placeholder="(оставь пустым — Platega не поддерживает HMAC)"
-                          />
-                        </div>
-                      </details>
                     </div>
                     <div className="space-y-2">
                       <Label>{t("admin.settings.payment_methods")}</Label>

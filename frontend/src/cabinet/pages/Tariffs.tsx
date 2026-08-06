@@ -54,7 +54,7 @@ function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | null; ope
   const { state, refreshProfile } = useClientAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [step, setStep] = useState<"config" | "checkout">("config");
+  const [step, setStep] = useState<"config" | "checkout" | "success">("config");
   const [days, setDays] = useState(30);
   const [extra, setExtra] = useState(0);
   const [agreed, setAgreed] = useState(true);
@@ -66,6 +66,7 @@ function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | null; ope
   const [conversion, setConversion] = useState<TariffConversionPreview | null>(null);
   const [keepExistingExtras, setKeepExistingExtras] = useState(true);
   const [selectedTrialId, setSelectedTrialId] = useState<string | null>(null);
+  const [pendingPaymentId, setPendingPaymentId] = useState<string | null>(null);
 
   useEffect(() => { if (open) void api.getPublicConfig().then(setConfig).catch(() => undefined); }, [open]);
   useEffect(() => {
@@ -101,6 +102,32 @@ function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | null; ope
     });
     return () => { current = false; };
   }, [open, plan, selectedOptionId, state.token]);
+
+  useEffect(() => {
+    if (!pendingPaymentId || !state.token) return;
+    let active = true;
+    let timeout = 0;
+    const check = async () => {
+      try {
+        const payment = await api.getPaymentStatus(state.token!, pendingPaymentId);
+        if (!active) return;
+        if (payment.status === "PAID" && payment.fulfilled) {
+          setPendingPaymentId(null);
+          await Promise.all([refreshProfile(), reload()]);
+          if (active) setStep("success");
+          return;
+        }
+        if (payment.status === "FAILED") {
+          setPendingPaymentId(null);
+          toast({ title: "Платёж не прошёл", variant: "error" });
+          return;
+        }
+      } catch { /* callback или сверка ещё обрабатываются */ }
+      if (active) timeout = window.setTimeout(check, 2500);
+    };
+    void check();
+    return () => { active = false; window.clearTimeout(timeout); };
+  }, [pendingPaymentId, refreshProfile, reload, state.token, toast]);
 
   if (!plan) return null;
 
@@ -197,9 +224,10 @@ function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | null; ope
       const result = await create();
       const url = resolvePaymentUrl(result, redirect.isTelegramMiniApp);
       if (!url) throw new Error("Платёжная система не вернула ссылку");
+      if (redirect.isTelegramMiniApp) setPendingPaymentId(result.paymentId);
       redirect.open(url);
       if (!redirect.isTelegramMiniApp) navigate(`/cabinet/payment-wait?id=${encodeURIComponent(result.paymentId)}&kind=tariff`, { state: { url, provider } });
-      onOpenChange(false);
+      if (!redirect.isTelegramMiniApp) onOpenChange(false);
     } catch (cause) {
       redirect.cancel();
       toast({ title: "Не удалось открыть оплату", description: cause instanceof Error ? cause.message : undefined, variant: "error" });
@@ -388,6 +416,27 @@ function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | null; ope
                       Перейти к оплате · {formatMoney(basePrice, plan.currency)}
                     </button>
                   </div>
+                </motion.div>
+              ) : step === "success" ? (
+                <motion.div
+                  key="success"
+                  initial={{ opacity: 0, scale: 0.94 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="p-7 text-center"
+                >
+                  <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-mint-500/15 text-mint-400">
+                    <Check className="h-8 w-8" strokeWidth={3} />
+                  </div>
+                  <Dialog.Title className="mt-5 text-2xl font-extrabold">Оплата прошла</Dialog.Title>
+                  <Dialog.Description className="mt-2 text-sm text-fog-500">
+                    Подписка уже активирована. Если был пробный период, он автоматически конвертирован.
+                  </Dialog.Description>
+                  <button
+                    onClick={() => { onOpenChange(false); navigate("/cabinet/dashboard?payment=success"); }}
+                    className="btn-primary mt-6 w-full px-6 py-4"
+                  >
+                    Перейти к подписке
+                  </button>
                 </motion.div>
               ) : (
                 <motion.div

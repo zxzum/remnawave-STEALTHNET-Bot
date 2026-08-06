@@ -20,6 +20,7 @@ import { migrateLandingToBlocks } from "./scripts/migrate-landing-to-blocks.js";
 import { registerCron } from "./modules/diagnostics/cron-registry.js";
 import { runContestDailyReminder } from "./modules/contest/contest-daily-reminder.service.js";
 import { startSquadTrafficWorker } from "./modules/squad-traffic/squad-traffic.worker.js";
+import { startPlategaReconciliation } from "./modules/platega/platega-reconciliation.cron.js";
 
 async function main() {
   await prisma.$connect();
@@ -49,6 +50,7 @@ async function main() {
   startAutoRenewScheduler();
   startGiftExpiryCron();
   startSubscriptionMaintenance();
+  startPlategaReconciliation();
   // крон удаления «заброшенных» аккаунтов УДАЛЁН.
   // Он удалял всех с onboardingCompleted=false старше 30 мин — а теперь этот флаг ставится
   // TG-юзерам для запуска онбординга (см. /telegram-login-check, /register). Крон бы их стирал.

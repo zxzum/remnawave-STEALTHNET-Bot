@@ -439,7 +439,7 @@ All variables are described in `.env.example`:
 | `REMNA_API_URL`          |   yes    | Remnawave panel URL                    |
 | `REMNA_ADMIN_TOKEN`      |   yes    | Remnawave API token                    |
 | `BOT_TOKEN`              |    no    | Telegram bot token                     |
-| `SUPPORT_BOT_USERNAME`   |    no    | Username отдельного SupportBot (default `stealthnet_support_bot`) |
+| `SUPPORT_BOT_USERNAME`   |    no    | Username отдельного SupportBot (default `lazeika_support_bot`) |
 | `SUPPORT_API_KEY`        |    no    | Секрет для internal API SupportBot     |
 | `USE_BUILTIN_NGINX`      |    no    | `true` for built-in nginx              |
 | `CERTBOT_EMAIL`          |    no    | Email for Let's Encrypt                |

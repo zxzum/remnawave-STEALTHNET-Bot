@@ -9,6 +9,7 @@
 import type express from "express";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../db.js";
+import { getSystemConfig } from "../client/client.service.js";
 
 export type WebhookOutcome =
   | "accepted"
@@ -187,6 +188,12 @@ export async function replayWebhook(
   const origHeaders = (original.headers ?? {}) as Record<string, string>;
   for (const [k, v] of Object.entries(origHeaders)) {
     if (typeof v === "string") headers[k] = v;
+  }
+  if (original.provider === "platega") {
+    const config = await getSystemConfig();
+    if (config.plategaMerchantId) headers["x-merchantid"] = config.plategaMerchantId;
+    if (config.plategaSecret) headers["x-secret"] = config.plategaSecret;
+    headers["content-type"] = "application/json";
   }
   // Маркер в headers — чтобы handler не плодил бесконечный replay loop.
   headers["x-replay-from"] = id;

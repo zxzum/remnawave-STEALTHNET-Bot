@@ -1173,6 +1173,9 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
           where: { id: payment.id },
           data: { subscriptionId: extendsSecondaryId, metadata: JSON.stringify(meta) },
         }).catch(() => {});
+        if (!targetSub.trialId && !isGiftPurchase) {
+          await replaceTrialOnPurchase(client.id, getReplaceTrialSubId(payment.metadata));
+        }
         await resetOneTimeDiscount();
       }
       return result;
@@ -1221,6 +1224,9 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
             where: { id: payment.id },
             data: { subscriptionId: convertible.id, metadata: JSON.stringify(meta) },
           }).catch(() => {});
+          if (!convertible.trialId) {
+            await replaceTrialOnPurchase(client.id, getReplaceTrialSubId(payment.metadata));
+          }
           await resetOneTimeDiscount();
           // Single-режим: оставляем ровно одну подписку — удаляем остальные.
           if (!multiSubEnabled) {
@@ -1290,6 +1296,7 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
         trafficLimitBytes: customBuild.trafficLimitBytes,
       }, "NEW_PURCHASE");
       await prisma.payment.update({ where: { id: payment.id }, data: { subscriptionId: result.data.subscriptionId } }).catch(() => {});
+      if (!isGiftPurchase) await replaceTrialOnPurchase(client.id, getReplaceTrialSubId(payment.metadata));
       // Single-режим: кастом-билд, как и обычная покупка, оставляет ОДНУ подписку.
       // Не для подарков (иначе консолидация снесла бы реальные подписки клиента).
       if (!isGiftPurchase) {

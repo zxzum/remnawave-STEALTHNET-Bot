@@ -96,7 +96,7 @@ if (!BOT_TOKEN) {
   process.exit(1);
 }
 
-const SUPPORT_BOT_USERNAME = (process.env.SUPPORT_BOT_USERNAME || "stealthnet_support_bot")
+const SUPPORT_BOT_USERNAME = (process.env.SUPPORT_BOT_USERNAME || "lazeika_support_bot")
   .trim()
   .replace(/^@+/, "");
 

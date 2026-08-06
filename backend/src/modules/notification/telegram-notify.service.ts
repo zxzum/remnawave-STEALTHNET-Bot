@@ -505,6 +505,39 @@ export async function notifyTariffActivationFailed(clientId: string, paymentId: 
   await sendTelegramToAdminsForEvent("tariff_payment", lines.join("\n"));
 }
 
+export async function notifyPlategaPaymentEvent(params: {
+  kind: "canceled" | "callback_failed" | "service_issued" | "recovered";
+  paymentId?: string | null;
+  transactionId?: string | null;
+  details?: string;
+  callbackAvailable?: boolean;
+}): Promise<void> {
+  const titles = {
+    canceled: "⛔️ Платёж Platega отменён",
+    callback_failed: "🚨 Callback Platega не обработан",
+    service_issued: "✅ Оплата Platega обработана, услуга выдана",
+    recovered: "🔄 Платёж Platega восстановлен сверкой",
+  } as const;
+  const payment = params.paymentId ? await prisma.payment.findUnique({
+    where: { id: params.paymentId },
+    select: {
+      amount: true,
+      currency: true,
+      client: { select: { id: true, email: true, telegramId: true, telegramUsername: true } },
+    },
+  }) : null;
+  const lines = [`<b>${titles[params.kind]}</b>`, ``];
+  if (payment?.client) lines.push(`👤 Клиент: ${escapeHtml(formatClientLabel(payment.client))}`);
+  if (payment?.client.telegramId) lines.push(`🆔 TG ID: <code>${escapeHtml(payment.client.telegramId)}</code>`);
+  if (payment) lines.push(`💵 Сумма: <b>${formatMoney(payment.amount, payment.currency)}</b>`);
+  if (params.paymentId) lines.push(`🧾 Payment: <code>${escapeHtml(params.paymentId)}</code>`);
+  if (params.transactionId) lines.push(`🔗 Transaction: <code>${escapeHtml(params.transactionId)}</code>`);
+  if (params.details) lines.push(`ℹ️ ${escapeHtml(params.details.slice(0, 500))}`);
+  if (params.callbackAvailable != null) lines.push(`🌐 Callback: <b>${params.callbackAvailable ? "доступен" : "НЕДОСТУПЕН"}</b>`);
+  lines.push(`🕐 ${formatDate(new Date())}`);
+  await sendTelegramToAdminsForEvent("tariff_payment", lines.join("\n"));
+}
+
 /**
  * уведомление клиенту об успешной активации
  * extra-option (доп. устройства / трафик / серверы), после оплаты картой / криптой / etc.

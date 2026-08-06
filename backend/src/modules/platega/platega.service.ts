@@ -5,6 +5,7 @@
 
 import { proxyFetch } from "../proxy-util/proxy-fetch.js";
 import { getProxyUrl } from "../proxy-util/get-proxy-url.js";
+import { timingSafeEqual } from "node:crypto";
 
 const PLATEGA_API_BASE = "https://app.platega.io";
 
@@ -12,6 +13,53 @@ export type PlategaConfig = {
   merchantId: string;
   secret: string;
 };
+
+export type PlategaTransaction = {
+  id: string;
+  status: string;
+  amount?: number;
+  currency?: string;
+  payload?: string;
+  raw: Record<string, unknown>;
+};
+
+function safeEqual(actual: string | undefined, expected: string): boolean {
+  if (!actual) return false;
+  const a = Buffer.from(actual.trim());
+  const b = Buffer.from(expected.trim());
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Platega подписывает callback обычными X-MerchantId/X-Secret, не HMAC. */
+export function verifyPlategaCallbackCredentials(
+  headers: Record<string, string | string[] | undefined>,
+  config: PlategaConfig,
+): boolean {
+  const first = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] : value;
+  const get = (name: string) => first(Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1]);
+  return safeEqual(get("x-merchantid"), config.merchantId)
+    && safeEqual(get("x-secret"), config.secret);
+}
+
+export function validatePlategaTransaction(
+  transaction: PlategaTransaction,
+  payment: { externalId: string | null; orderId: string; amount: number; currency: string },
+  acceptGrossAmount = false,
+): string | null {
+  if (!payment.externalId || transaction.id !== payment.externalId) return "transaction id mismatch";
+  const commissionRaw = transaction.raw.comission ?? transaction.raw.commission;
+  const commission = typeof commissionRaw === "number" ? commissionRaw : typeof commissionRaw === "string" ? Number(commissionRaw) : 0;
+  const amount = transaction.amount;
+  const amountMatches = amount != null && (
+    Math.round(amount * 100) === Math.round(payment.amount * 100)
+    || (Number.isFinite(commission) && Math.round((amount - commission) * 100) === Math.round(payment.amount * 100))
+    || (acceptGrossAmount && amount >= payment.amount)
+  );
+  if (!amountMatches) return "amount mismatch";
+  if (!transaction.currency || transaction.currency.trim().toUpperCase() !== payment.currency.trim().toUpperCase()) return "currency mismatch";
+  if (transaction.payload && transaction.payload !== payment.orderId) return "payload mismatch";
+  return null;
+}
 
 export function isPlategaConfigured(config: PlategaConfig | null): boolean {
   return Boolean(config?.merchantId?.trim() && config?.secret?.trim());
@@ -94,16 +142,13 @@ export async function createPlategaTransaction(
  * webhook с правильным transactionId — Platega API вернёт реальный статус, и
  * мы пометим платёж только если API подтверждает.
  *
- * Endpoint: `POST /transaction/status` с `{ transactionId }` в теле и
- * `X-MerchantId` + `X-Secret` в заголовках. Если у Platega окажется другой
- * формат (`GET /transaction/{id}` или `GET /transactions/:id`) — fallback
- * пробует и его.
+ * Официальный endpoint: `GET /transaction/{id}`.
  */
 export async function getPlategaTransactionStatus(
   config: PlategaConfig,
   transactionId: string,
 ): Promise<
-  | { ok: true; status: string; amount?: number; currency?: string; raw: Record<string, unknown> }
+  | ({ ok: true } & PlategaTransaction)
   | { error: string; status?: number }
 > {
   if (!transactionId.trim()) return { error: "transactionId required" };
@@ -115,68 +160,36 @@ export async function getPlategaTransactionStatus(
   };
   const proxy = await getProxyUrl("payments");
 
-  // 1) Основной endpoint — POST /transaction/status (как в openapi-style API).
-  const candidates: { url: string; method: "GET" | "POST"; body?: string }[] = [
-    { url: `${PLATEGA_API_BASE}/transaction/status`, method: "POST", body: JSON.stringify({ id: transactionId }) },
-    { url: `${PLATEGA_API_BASE}/transaction/${encodeURIComponent(transactionId)}`, method: "GET" },
-    { url: `${PLATEGA_API_BASE}/transactions/${encodeURIComponent(transactionId)}`, method: "GET" },
-  ];
-
-  let lastErr = "no candidates tried";
-  let lastStatus: number | undefined;
-
-  for (const c of candidates) {
-    try {
-      const res = await proxyFetch(c.url, {
-        method: c.method,
-        headers,
-        body: c.body,
-      }, proxy);
-      lastStatus = res.status;
-      const text = await res.text();
-
-      // Если 401/403 — креды неверные, дальше пробовать бесполезно.
-      if (res.status === 401 || res.status === 403) {
-        return { error: "Platega: неверные креды merchantId/secret", status: res.status };
-      }
-      // Если 404/405 — этот endpoint не существует, пробуем следующий.
-      if (res.status === 404 || res.status === 405) {
-        lastErr = `${c.method} ${c.url} → ${res.status}`;
-        continue;
-      }
-      if (!res.ok) {
-        lastErr = `${c.method} ${c.url} → ${res.status} ${text?.slice(0, 200)}`;
-        continue;
-      }
-
-      let data: Record<string, unknown> = {};
-      try {
-        data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
-      } catch {
-        return { error: "Platega: невалидный JSON в ответе" };
-      }
-
-      // Извлекаем status из разных возможных полей (как делает webhook handler).
-      const tx = (data.transaction && typeof data.transaction === "object")
-        ? (data.transaction as Record<string, unknown>)
-        : {};
-      const statusStr = String(
-        data.status ?? tx.status ?? data.state ?? data.paymentStatus ?? data.payment_status ?? "",
-      ).trim();
-      if (!statusStr) {
-        return { error: "Platega: API ответил без status" };
-      }
-
-      const amountRaw = data.amount ?? tx.amount;
-      const currencyRaw = data.currency ?? tx.currency;
-      const amount = typeof amountRaw === "number" ? amountRaw : typeof amountRaw === "string" ? Number(amountRaw) : undefined;
-      const currency = typeof currencyRaw === "string" ? currencyRaw : undefined;
-
-      return { ok: true, status: statusStr, amount, currency, raw: data };
-    } catch (e) {
-      lastErr = e instanceof Error ? e.message : String(e);
+  try {
+    const res = await proxyFetch(`${PLATEGA_API_BASE}/transaction/${encodeURIComponent(transactionId)}`, {
+      method: "GET",
+      headers,
+      signal: AbortSignal.timeout(15_000),
+    }, proxy);
+    const text = await res.text();
+    if (res.status === 401 || res.status === 403) {
+      return { error: "Platega: неверные креды merchantId/secret", status: res.status };
     }
-  }
+    if (!res.ok) return { error: `Platega status → ${res.status} ${text.slice(0, 200)}`, status: res.status };
 
-  return { error: `Platega API status check failed: ${lastErr}`, status: lastStatus };
+    let data: Record<string, unknown>;
+    try {
+      data = text ? JSON.parse(text) as Record<string, unknown> : {};
+    } catch {
+      return { error: "Platega: невалидный JSON в ответе" };
+    }
+    const details = data.paymentDetails && typeof data.paymentDetails === "object"
+      ? data.paymentDetails as Record<string, unknown>
+      : {};
+    const id = String(data.id ?? "").trim();
+    const status = String(data.status ?? "").trim();
+    const amountRaw = details.amount;
+    const amount = typeof amountRaw === "number" ? amountRaw : typeof amountRaw === "string" ? Number(amountRaw) : undefined;
+    const currency = typeof details.currency === "string" ? details.currency : undefined;
+    const payload = typeof data.payload === "string" ? data.payload : undefined;
+    if (!id || !status) return { error: "Platega: API ответил без id/status" };
+    return { ok: true, id, status, amount, currency, payload, raw: data };
+  } catch (e) {
+    return { error: `Platega API status check failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
 }
