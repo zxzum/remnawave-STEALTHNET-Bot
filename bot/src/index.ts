@@ -603,7 +603,6 @@ const SCREEN_ASSET_NAMES: Record<string, string> = {
   setup: "my-subscription.png",
 };
 
-const WELCOME_TRIAL_DAYS = 2;
 const DEFAULT_BOT_WELCOME_TEXT = [
   "👋 Добро пожаловать в Лазейка ВПН!",
   "",
@@ -712,24 +711,14 @@ async function showSetupDevicePicker(ctx: Context, token: string, config: Config
 async function showFirstWelcome(ctx: Context, userId: number, config: ConfigSnapshot | null): Promise<void> {
   const configuredText = (config?.botWelcomeText ?? "").trim();
   const legacyGenericWelcome = /^(?:что (?:умеет|делает) этот бот\b|лазейка vpn\s*\n\s*\n\s*ваш vpn, устройства и бонусы)/i.test(configuredText);
-  const text = !configuredText || legacyGenericWelcome ? DEFAULT_BOT_WELCOME_TEXT : configuredText;
+  const hasProjectName = /лазейка\s+впн/i.test(configuredText);
+  const text = !configuredText || legacyGenericWelcome || !hasProjectName ? DEFAULT_BOT_WELCOME_TEXT : configuredText;
   const markup: InlineMarkup = {
     inline_keyboard: [
-      [{ text: `🎁 Попробовать ${WELCOME_TRIAL_DAYS} ${formatDaysRu(WELCOME_TRIAL_DAYS)} бесплатно`, callback_data: "welcome:try", style: "success" }],
+      [{ text: "Попробовать 2 дня бесплатно!", callback_data: "welcome:try", style: "success" }],
     ],
   };
-  const banner = screenBannerUrl(config, "welcome");
   const caption = text.length > TELEGRAM_CAPTION_MAX ? `${text.slice(0, TELEGRAM_CAPTION_MAX - 3)}...` : text;
-
-  if (banner) {
-    try {
-      const sent = await ctx.replyWithPhoto(banner, { caption, reply_markup: markup });
-      if (sent?.message_id) lastBotScreens.set(userId, { chatId: sent.chat.id, messageId: sent.message_id });
-      return;
-    } catch {
-      // Fallback ниже нужен, если Telegram временно не может скачать публичный URL.
-    }
-  }
 
   const image = await api.getOnboardingAsset("welcome.png").catch(() => null);
   if (image) {
