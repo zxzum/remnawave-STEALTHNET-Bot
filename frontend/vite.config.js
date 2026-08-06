@@ -11,7 +11,7 @@ export default defineConfig({
             selfDestroying: true,
             injectRegister: false,
             includeAssets: [
-                "favicon.svg",
+                "favicon.png",
                 "favicon-16.png",
                 "favicon-32.png",
                 "apple-touch-icon.png",

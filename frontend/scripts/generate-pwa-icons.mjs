@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const publicDir = resolve(__dirname, "..", "public");
-const srcSvg = readFileSync(resolve(publicDir, "pwa-icon-source.svg"));
+const srcIcon = readFileSync(resolve(publicDir, "favicon.png"));
 
 const targets = [
   { out: "icon-192.png", size: 192 },
@@ -23,7 +23,7 @@ async function generate() {
     const inner = Math.round(size * (1 - pad * 2));
     const offset = Math.round((size - inner) / 2);
 
-    const iconBuffer = await sharp(srcSvg, { density: 384 })
+    const iconBuffer = await sharp(srcIcon)
       .resize(inner, inner, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
       .png()
       .toBuffer();

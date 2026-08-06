@@ -518,8 +518,8 @@ function TitleAndThemeSync() {
       if (document.querySelectorAll('link[rel="icon"]').length === 0) {
         const def = document.createElement("link");
         def.rel = "icon";
-        def.type = "image/svg+xml";
-        def.href = "/favicon.svg";
+        def.type = "image/png";
+        def.href = "/favicon-32.png";
         document.head.appendChild(def);
       }
     }

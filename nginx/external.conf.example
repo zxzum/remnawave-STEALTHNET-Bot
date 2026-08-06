@@ -61,9 +61,9 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
-    # favicon: если нет favicon.ico — отдаём favicon.svg
+    # favicon: если нет favicon.ico — отдаём favicon-32.png
     location = /favicon.ico {
-        try_files /favicon.ico /favicon.svg =204;
+        try_files /favicon.ico /favicon-32.png =204;
         add_header Cache-Control "public, max-age=86400";
     }
 
