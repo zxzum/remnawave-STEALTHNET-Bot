@@ -8,6 +8,7 @@ const publicDir = resolve(__dirname, "..", "public");
 const srcIcon = readFileSync(resolve(publicDir, "favicon.png"));
 
 const targets = [
+  { out: "favicon.png", size: 1254 },
   { out: "icon-192.png", size: 192 },
   { out: "icon-512.png", size: 512 },
   { out: "icon-512-maskable.png", size: 512, pad: 0.12 },
@@ -15,6 +16,13 @@ const targets = [
   { out: "favicon-32.png", size: 32 },
   { out: "favicon-16.png", size: 16 },
 ];
+
+const roundedMask = async (size) => sharp(Buffer.from(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}"><rect width="${size}" height="${size}" fill="#000"/><rect width="${size}" height="${size}" rx="${Math.round(size * 0.18)}" fill="#fff"/></svg>`,
+))
+  .greyscale()
+  .raw()
+  .toBuffer();
 
 async function generate() {
   for (const t of targets) {
@@ -28,7 +36,7 @@ async function generate() {
       .png()
       .toBuffer();
 
-    await sharp({
+    const composed = await sharp({
       create: {
         width: size,
         height: size,
@@ -37,6 +45,12 @@ async function generate() {
       },
     })
       .composite([{ input: iconBuffer, top: offset, left: offset }])
+      .removeAlpha()
+      .png()
+      .toBuffer();
+
+    await sharp(composed)
+      .joinChannel(await roundedMask(size), { raw: { width: size, height: size, channels: 1 } })
       .png({ compressionLevel: 9 })
       .toFile(resolve(publicDir, t.out));
 

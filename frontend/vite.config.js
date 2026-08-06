@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
+const iconVersion = "?v=rounded";
 export default defineConfig({
     plugins: [
         react(),
@@ -29,9 +30,9 @@ export default defineConfig({
                 theme_color: "#0f172a",
                 categories: ["productivity", "utilities"],
                 icons: [
-                    { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
-                    { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
-                    { src: "/icon-512-maskable.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+                    { src: `/icon-192.png${iconVersion}`, sizes: "192x192", type: "image/png", purpose: "any" },
+                    { src: `/icon-512.png${iconVersion}`, sizes: "512x512", type: "image/png", purpose: "any" },
+                    { src: `/icon-512-maskable.png${iconVersion}`, sizes: "512x512", type: "image/png", purpose: "maskable" },
                 ],
                 shortcuts: [
                     {
@@ -39,14 +40,14 @@ export default defineConfig({
                         short_name: "Кабинет",
                         description: "Личный кабинет: тарифы, подписки, подключения",
                         url: "/cabinet",
-                        icons: [{ src: "/icon-192.png", sizes: "192x192" }],
+                        icons: [{ src: `/icon-192.png${iconVersion}`, sizes: "192x192" }],
                     },
                     {
                         name: "Админка",
                         short_name: "Админ",
                         description: "Управление клиентами и тарифами",
                         url: "/admin",
-                        icons: [{ src: "/icon-192.png", sizes: "192x192" }],
+                        icons: [{ src: `/icon-192.png${iconVersion}`, sizes: "192x192" }],
                     },
                 ],
             },

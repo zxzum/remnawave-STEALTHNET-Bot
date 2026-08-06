@@ -519,7 +519,7 @@ function TitleAndThemeSync() {
         const def = document.createElement("link");
         def.rel = "icon";
         def.type = "image/png";
-        def.href = "/favicon-32.png";
+        def.href = "/favicon-32.png?v=rounded";
         document.head.appendChild(def);
       }
     }
