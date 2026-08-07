@@ -728,13 +728,6 @@ async function showFirstWelcome(ctx: Context, userId: number, config: ConfigSnap
   };
   const caption = text.length > TELEGRAM_CAPTION_MAX ? `${text.slice(0, TELEGRAM_CAPTION_MAX - 3)}...` : text;
 
-  const banner = screenBannerUrl(config, "welcome");
-  if (banner) {
-    const sent = await ctx.replyWithPhoto(banner, { caption, reply_markup: markup });
-    if (sent?.message_id) lastBotScreens.set(userId, { chatId: sent.chat.id, messageId: sent.message_id });
-    return;
-  }
-
   const image = await api.getOnboardingAsset("welcome.png").catch(() => null);
   if (image) {
     const sent = await ctx.replyWithPhoto(new InputFile(image, "welcome.png"), { caption, reply_markup: markup });
