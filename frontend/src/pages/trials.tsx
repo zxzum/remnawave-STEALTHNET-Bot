@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/auth";
 import { api } from "@/lib/api";
 import type { TrialRecord, CreateTrialPayload, TariffCategoryWithTariffs } from "@/lib/api";
+import { isMeteredSquadAllowed, parseInternalSquadsResponse, toggleSquadUuid, type TrialSquadOption } from "@/lib/trial-squads";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -225,9 +226,12 @@ function TrialFormDialog({
   // источник триала: существующий тариф ИЛИ standalone из сквада.
   const [source, setSource] = useState<"tariff" | "squad">(trial && !trial.tariffId ? "squad" : "tariff");
   const [tariffId, setTariffId] = useState(trial?.tariffId ?? tariffs[0]?.id ?? "");
-  const [squadUuid, setSquadUuid] = useState<string>(trial?.squadUuids?.[0] ?? "");
+  const [squadUuids, setSquadUuids] = useState<string[]>(trial?.squadUuids ?? []);
   const [deviceLimit, setDeviceLimit] = useState<number>(trial?.deviceLimit ?? 1);
-  const [squads, setSquads] = useState<{ uuid: string; name?: string }[]>([]);
+  const [squads, setSquads] = useState<TrialSquadOption[]>([]);
+  const [squadsLoading, setSquadsLoading] = useState(false);
+  const [squadsError, setSquadsError] = useState<string | null>(null);
+  const [squadsReloadKey, setSquadsReloadKey] = useState(0);
   // конвертация триала: тоггл + «в любой тариф».
   const [convertEnabled, setConvertEnabled] = useState<boolean>(trial?.convertEnabled ?? true);
   const [convertAllTariffs, setConvertAllTariffs] = useState<boolean>(trial?.convertAllTariffs ?? false);
@@ -238,13 +242,27 @@ function TrialFormDialog({
 
   // сквады из Remna — для standalone-источника.
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      setSquads([]);
+      return;
+    }
+    let active = true;
+    setSquadsLoading(true);
+    setSquadsError(null);
     api.getRemnaSquadsInternal(token).then((r) => {
-      const res = r as { response?: { internalSquads?: { uuid?: string; name?: string }[] } };
-      const list = res?.response?.internalSquads ?? [];
-      setSquads(Array.isArray(list) ? list.map((s) => ({ uuid: s.uuid ?? "", name: s.name })) : []);
-    }).catch(() => setSquads([]));
-  }, [token]);
+      if (!active) return;
+      setSquads(parseInternalSquadsResponse(r));
+    }).catch(() => {
+      if (!active) return;
+      setSquadsError("Не удалось загрузить сквады из Remnawave.");
+      setSquads([]);
+    }).finally(() => {
+      if (active) setSquadsLoading(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [token, squadsReloadKey]);
   const [enabled, setEnabled] = useState(trial?.enabled ?? true);
   const [sortOrder, setSortOrder] = useState<number>(trial?.sortOrder ?? 0);
   const [description, setDescription] = useState(trial?.description ?? "");
@@ -255,16 +273,26 @@ function TrialFormDialog({
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Не теряем UUID уже сохранённого триала, если Remnawave временно не вернул его в списке.
+  const squadOptions: TrialSquadOption[] = [
+    ...squads,
+    ...squadUuids.filter((uuid) => !squads.some((squad) => squad.uuid === uuid)).map((uuid) => ({ uuid })),
+  ];
+  const meteredSquadOptions = source === "squad"
+    ? squadOptions.filter((squad) => squadUuids.includes(squad.uuid))
+    : (tariffs.find((t) => t.id === tariffId)?.internalSquadUuids ?? [])
+        .map((uuid) => squads.find((squad) => squad.uuid === uuid) ?? { uuid });
+
   const handleSave = async () => {
     if (!token) return;
-    if (!name.trim() || durationDays < 1 || (source === "tariff" ? !tariffId : !squadUuid)) {
+    if (!name.trim() || durationDays < 1 || (source === "tariff" ? !tariffId : squadUuids.length === 0)) {
       setErr(source === "tariff"
         ? "Заполните название, выберите тариф и укажите длительность ≥ 1."
-        : "Заполните название, выберите сквад и укажите длительность ≥ 1.");
+        : "Заполните название, выберите хотя бы один сквад и укажите длительность ≥ 1.");
       return;
     }
-    const allowedSquads = source === "squad" ? [squadUuid] : (tariffs.find((t) => t.id === tariffId)?.internalSquadUuids ?? []);
-    if (trafficLimitMode === "LOCAL_SQUAD" && !allowedSquads.includes(meteredSquadUuid)) {
+    const allowedSquads = source === "squad" ? squadUuids : (tariffs.find((t) => t.id === tariffId)?.internalSquadUuids ?? []);
+    if (trafficLimitMode === "LOCAL_SQUAD" && !isMeteredSquadAllowed(allowedSquads, meteredSquadUuid)) {
       setErr("Выберите учитываемый squad из назначенных триалу.");
       return;
     }
@@ -274,7 +302,7 @@ function TrialFormDialog({
       const payload: CreateTrialPayload = {
         name: name.trim(),
         tariffId: source === "tariff" ? tariffId : null,
-        squadUuids: source === "squad" ? [squadUuid] : null,
+        squadUuids: source === "squad" ? squadUuids : null,
         deviceLimit: source === "squad" ? Math.max(1, deviceLimit) : null,
         durationDays,
         trafficLimitBytes: trafficGb.trim() ? Math.round(Number(trafficGb) * 1024 ** 3) : null,
@@ -346,11 +374,11 @@ function TrialFormDialog({
               onClick={() => setSource("squad")}
               className={`rounded-lg border px-3 py-2 text-xs font-medium transition ${source === "squad" ? "border-primary/60 bg-primary/10 text-primary" : "border-input bg-background text-muted-foreground"}`}
             >
-              Из сквада (не тариф)
+              Из сквадов (самостоятельный тариф)
             </button>
           </div>
           <p className="text-[10px] text-muted-foreground">
-            «Из сквада» — псевдо-тариф: в каталоге тарифов не отображается, сквад и лимиты задаются прямо здесь.
+            «Из сквадов» — самостоятельный тариф: в каталоге тарифов не отображается, сквады и лимиты задаются прямо здесь.
           </p>
         </div>
 
@@ -368,14 +396,10 @@ function TrialFormDialog({
           <Input id="trial-traffic-limit" type="number" min={0} step={0.1} value={trafficGb} onChange={(e) => setTrafficGb(e.target.value)} placeholder="Не ограничено" />
           {trafficLimitMode === "LOCAL_SQUAD" && (
             <><Label htmlFor="trial-metered-squad" className="text-xs">Учитываемый squad</Label>
-            <select id="trial-metered-squad" value={meteredSquadUuid} onChange={(e) => setMeteredSquadUuid(e.target.value)} className="w-full rounded-xl border border-white/10 bg-foreground/[0.03] px-3 py-2 text-sm">
+            <select id="trial-metered-squad" value={meteredSquadUuid} onChange={(e) => setMeteredSquadUuid(e.target.value)} disabled={meteredSquadOptions.length === 0} className="w-full rounded-xl border border-white/10 bg-foreground/[0.03] px-3 py-2 text-sm">
               <option value="">Выберите squad</option>
-              {(source === "squad"
-                ? squads.filter((s) => s.uuid === squadUuid)
-                : (tariffs.find((t) => t.id === tariffId)?.internalSquadUuids ?? [])
-                    .map((uuid) => squads.find((s) => s.uuid === uuid) ?? { uuid })
-              ).map((s) => <option key={s.uuid} value={s.uuid}>{s.name || s.uuid}</option>)}
-            </select><p className="text-[10px] text-muted-foreground">Ежемесячно от даты покупки.</p></>
+              {meteredSquadOptions.map((squad) => <option key={squad.uuid} value={squad.uuid}>{squad.name || squad.uuid}</option>)}
+            </select><p className="text-[10px] text-muted-foreground">Ежемесячно от даты покупки; для локальной квоты выбирается один учитываемый squad.</p></>
           )}
         </div>
 
@@ -397,20 +421,53 @@ function TrialFormDialog({
           </select>
         </div>
         ) : (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3">
           <div className="grid gap-1">
-            <Label htmlFor="trial-squad" className="text-xs">Сквад (Remna)</Label>
-            <select
-              id="trial-squad"
-              value={squadUuid}
-              onChange={(e) => setSquadUuid(e.target.value)}
-              className="w-full rounded-xl border border-white/10 bg-foreground/[0.03] dark:bg-white/[0.02] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-            >
-              <option value="">— Выберите сквад —</option>
-              {squads.map((s) => (
-                <option key={s.uuid} value={s.uuid}>{s.name ?? s.uuid}</option>
-              ))}
-            </select>
+            <Label className="text-xs">Сквады (Remnawave)</Label>
+            {squadsLoading && (
+              <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-foreground/[0.03] px-3 py-3 text-xs text-muted-foreground" aria-live="polite">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Загружаем сквады…
+              </div>
+            )}
+            {!squadsLoading && squadsError && (
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-3 text-xs text-red-500 dark:text-red-400" role="alert">
+                <span>{squadsError}</span>
+                <Button type="button" variant="outline" size="sm" onClick={() => setSquadsReloadKey((key) => key + 1)}>
+                  Повторить
+                </Button>
+              </div>
+            )}
+            {!squadsLoading && !squadsError && squadOptions.length === 0 && (
+              <div className="rounded-xl border border-white/10 bg-foreground/[0.03] px-3 py-3 text-xs text-muted-foreground">
+                В Remnawave нет доступных сквадов.
+              </div>
+            )}
+            {!squadsLoading && !squadsError && squadOptions.length > 0 && (
+              <div id="trial-squads" role="group" aria-label="Сквады standalone trial" className="grid max-h-48 gap-1.5 overflow-y-auto rounded-xl border border-white/10 bg-foreground/[0.03] p-2">
+                {squadOptions.map((squad) => {
+                  const checked = squadUuids.includes(squad.uuid);
+                  return (
+                    <label key={squad.uuid} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm transition hover:bg-foreground/5">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => {
+                          const next = toggleSquadUuid(squadUuids, squad.uuid);
+                          setSquadUuids(next);
+                          if (!next.includes(meteredSquadUuid)) setMeteredSquadUuid("");
+                        }}
+                        className="h-4 w-4"
+                      />
+                      <span>{squad.name ?? squad.uuid}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            <p className="text-[10px] text-muted-foreground">
+              Выбрано: {squadUuids.length}. Доступ к каждому выбранному squad выдаётся в рамках одного самостоятельного триала.
+            </p>
           </div>
           <div className="grid gap-1">
             <Label htmlFor="trial-devlimit" className="text-xs">Лимит устройств</Label>
