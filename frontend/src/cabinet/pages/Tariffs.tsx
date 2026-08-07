@@ -142,10 +142,24 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
   const selectedOption = plan.durationOptions.find((option) => option.days === days) ?? plan.durationOptions[0];
   const promoCode = discountPercent > 0 || discountFixed > 0 ? promo.trim() : undefined;
   const trialSubscriptions = subscriptions.filter((subscription) => subscription.isTrial);
-  const conversionExtension = conversion?.willConvert && conversion.mode === "extend"
+  const trialConversionCandidates = trialSubscriptions.filter((subscription) => (
+    subscription.trialConvertEnabled
+    && (subscription.tariffId === plan.id
+      || subscription.trialConvertAllTariffs
+      || subscription.convertTariffIds.includes(plan.id))
+  ));
+  const trialExtensionId = trialConversionCandidates.find((subscription) => subscription.id === selectedTrialId)?.id
+    ?? trialConversionCandidates[0]?.id
+    ?? null;
+  const conversionExtension = conversion?.willConvert && conversion.subscription?.isTrial
+    ? conversion.subscription.id
+    : conversion?.willConvert && conversion.mode === "extend"
     ? conversion.subscription?.id
     : null;
-  const extensionId = explicitTarget?.id ?? conversionExtension ?? (ownedSub?.source.type === "secondary" ? ownedSub.id : null);
+  const extensionId = explicitTarget?.id
+    ?? conversionExtension
+    ?? trialExtensionId
+    ?? (ownedSub?.source.type === "secondary" ? ownedSub.id : null);
   const purchaseMode = extensionId
     ? {
         extendsSecondarySubId: extensionId,
@@ -551,18 +565,18 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                     </div>
                   )}
 
-                  {!conversion?.willConvert && trialSubscriptions.length > 1 && (
+                  {!conversion?.willConvert && trialConversionCandidates.length > 1 && (
                     <div className="mt-4 rounded-3xl border border-white/8 bg-white/3 p-4">
-                      <p className="text-sm font-bold">Какую пробную подписку заменить</p>
+                      <p className="text-sm font-bold">Какую пробную подписку конвертировать</p>
                       <div className="mt-2 flex flex-col gap-2">
-                        {trialSubscriptions.map((subscription) => (
+                        {trialConversionCandidates.map((subscription) => (
                           <button
                             type="button"
                             key={subscription.id}
                             onClick={() => setSelectedTrialId(subscription.id)}
                             className={cn(
                               "rounded-xl border px-3 py-2 text-left text-xs font-semibold transition-all",
-                              (selectedTrialId ?? trialSubscriptions[0].id) === subscription.id
+                              (selectedTrialId ?? trialConversionCandidates[0].id) === subscription.id
                                 ? "border-violet-glow/50 bg-violet-glow/12"
                                 : "border-white/8 bg-white/3",
                             )}

@@ -151,6 +151,30 @@ test("maps a wrapped Remnawave subscription", () => {
   assert.equal(subscription.extraDevicesMonthlyPrice, 190);
 });
 
+test("maps standalone trial conversion policy for tariff selection", () => {
+  const subscription = mapSubscription({
+    type: "root",
+    id: "trial-sub",
+    subscriptionIndex: 0,
+    tariffDisplayName: "🎁 Trial",
+    tariffId: null,
+    trialId: "trial-1",
+    convertTariffIds: ["paid-1"],
+    trialConvertEnabled: true,
+    trialConvertAllTariffs: false,
+    subscription: { response: { status: "ACTIVE", expireAt: "2026-08-22T00:00:00.000Z" } },
+  }, new Date("2026-07-22T00:00:00.000Z"));
+
+  assert.deepEqual(
+    {
+      convertTariffIds: subscription.convertTariffIds,
+      trialConvertEnabled: subscription.trialConvertEnabled,
+      trialConvertAllTariffs: subscription.trialConvertAllTariffs,
+    },
+    { convertTariffIds: ["paid-1"], trialConvertEnabled: true, trialConvertAllTariffs: false },
+  );
+});
+
 test("maps local whitelist usage separately from Remnawave traffic", () => {
   const subscription = mapSubscription({
     type: "root", id: "s1", subscriptionIndex: 0, tariffDisplayName: "Whitelist",

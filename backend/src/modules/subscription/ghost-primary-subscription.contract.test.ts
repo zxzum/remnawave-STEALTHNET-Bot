@@ -19,9 +19,20 @@ test("ghost primary: аннулирование удаляет Subscription и �
   );
 
   assert.match(lifecycle, /subscriptionIndex\s*===\s*0/);
-  assert.match(lifecycle, /prisma\.subscription\.delete/);
+  assert.match(lifecycle, /(?:prisma|tx)\.subscription\.delete/);
   assert.match(lifecycle, /remnawaveUuid:\s*null/);
   assert.match(lifecycle, /currentTariffId:\s*null/);
   assert.match(lifecycle, /autoRenewEnabled:\s*false/);
   assert.match(lifecycle, /autoRenewTariffId:\s*null/);
+});
+
+test("ghost primary: после удаления index 0 следующая owned subscription становится primary", () => {
+  const lifecycle = lifecycleService.slice(
+    lifecycleService.indexOf("async function completeSubscriptionDeletion"),
+    lifecycleService.indexOf("function notifyRevoked"),
+  );
+
+  assert.match(lifecycle, /deletionRequestedAt:\s*null/);
+  assert.match(lifecycle, /purchasedAsGift:\s*false/);
+  assert.match(lifecycle, /subscriptionIndex:\s*0/);
 });

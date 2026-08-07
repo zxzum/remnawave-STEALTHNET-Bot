@@ -151,7 +151,7 @@ export default function Keys() {
         <div className="icon-tile mx-auto h-16 w-16 rounded-2xl"><KeyRound className="h-7 w-7" /></div>
         <h2 className="mt-5 text-xl font-extrabold">Ключа пока нет</h2>
         <p className="mt-2 text-sm leading-relaxed text-fog-500">Сначала выберите и оплатите тариф — после этого здесь появится ключ для подключения VPN.</p>
-        {availableTrials.length > 0 && <Link to="/cabinet?trial=1" className="btn-primary mt-4 px-6 py-4"><Gift className="h-5 w-5" />Активировать пробный период</Link>}
+        {availableTrials.length > 0 && <Link to="/cabinet/dashboard?trial=1" className="btn-primary mt-4 px-6 py-4"><Gift className="h-5 w-5" />Активировать пробный период</Link>}
         <Link to="/cabinet/tariffs" className="btn-primary mt-6 px-6 py-4"><ShoppingBag className="h-5 w-5" />Перейти к тарифам</Link>
       </section>
     </div>

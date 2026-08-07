@@ -1759,7 +1759,7 @@ clientRouter.get("/tariff-conversion-preview", async (req, res) => {
   // чистого тарифа, при «оставить» — в дни тарифа с устройствами.
   // Глобальный single-режим (мульти-подписки выкл): смена тарифа = ЖЁСТКАЯ замена.
   // Старая подписка обнуляется, остаток дней СГОРАЕТ, новая с нуля на выбранный тариф.
-  if (!multiSubEnabled) {
+  if (!multiSubEnabled && convertible.trialId == null) {
     return res.json({
       willConvert: true,
       mode: "replace",

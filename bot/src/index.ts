@@ -11,6 +11,12 @@ import { ProxyAgent as UndiciProxyAgent } from "undici";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import * as api from "./api.js";
 import {
+  canExtendSubscription,
+  FIRST_WELCOME_TRIAL_BUTTON,
+  selectPrimarySubscriptionItem,
+  shouldPreserveSubscriptionLink,
+} from "./subscription-access.js";
+import {
   mainMenu,
   botSectionsMenu,
   botSectionMenu,
@@ -571,7 +577,10 @@ async function firstSubscriptionAccess(token: string): Promise<{
   trafficLimitBytes: number | null;
 }> {
   const all = await api.getAllSubscriptions(token).catch(() => ({ items: [] }));
-  const item = all.items.find((candidate) => candidate.remnawaveUuid || getSubscriptionUrl(candidate.subscription));
+  const item = selectPrimarySubscriptionItem(
+    all.items,
+    (candidate) => Boolean(candidate.remnawaveUuid || getSubscriptionUrl(candidate.subscription)),
+  );
   const user = item ? getSubUser(item.subscription) : null;
   const rawExpireAt = user?.expireAt ?? user?.expirationDate ?? user?.expire_at;
   const rawTraffic = user?.trafficLimitBytes ?? user?.traffic_limit_bytes;
@@ -714,7 +723,7 @@ async function showFirstWelcome(ctx: Context, userId: number, config: ConfigSnap
   const text = !configuredText || legacyGenericWelcome || !hasProjectName ? DEFAULT_BOT_WELCOME_TEXT : configuredText;
   const markup: InlineMarkup = {
     inline_keyboard: [
-      [{ text: "Попробовать 2 дня бесплатно!", callback_data: "welcome:try", style: "primary" }],
+      [FIRST_WELCOME_TRIAL_BUTTON],
     ],
   };
   const caption = text.length > TELEGRAM_CAPTION_MAX ? `${text.slice(0, TELEGRAM_CAPTION_MAX - 3)}...` : text;
@@ -2674,6 +2683,9 @@ async function showPaymentMethodsForTariff(ctx: any, userId: number, tariff: Tar
   try {
     const conv = await api.tariffConversionPreview(token, { tariffId: tariff.id, priceOptionId: eff?.id });
     if (conv.willConvert && conv.subscription) {
+      if (shouldPreserveSubscriptionLink(conv)) {
+        extendingSecondaryPending.set(userId, { tariffId: tariff.id, secondaryId: conv.subscription.id });
+      }
       const subName = conv.subscription.tariffName ? `«${conv.subscription.tariffName}»` : `#${conv.subscription.index}`;
       const extras = conv.extras;
       const dropChosen = convDropExtras.has(userId);
@@ -5845,7 +5857,7 @@ composer.on("callback_query:data", async (ctx) => {
         const subs = await api.getAllSubscriptions(token);
         // Раньше: фильтр type === "secondary". Теперь — любая подписка с этим id (root тоже).
         const sec = subs.items?.find((it) => it.id === sid);
-        if (!sec || !sec.tariffId) {
+        if (!sec || !canExtendSubscription(sec)) {
           await editMessageContent(ctx, "❌ Подписка или тариф не найдены.", backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
           return;
         }
@@ -5907,7 +5919,11 @@ composer.on("callback_query:data", async (ctx) => {
         const { items } = await api.getPublicTariffs();
         const tariff = items?.flatMap((c: TariffCategory) => c.tariffs).find((t: TariffItem) => t.id === sec.tariffId);
         if (!tariff) {
-          await editMessageContent(ctx, "❌ Тариф не найден.", backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
+          await editMessageContent(
+            ctx,
+            sec.trialId ? "❌ Для этого пробного периода не настроены тарифы для конвертации." : "❌ Тариф не найден.",
+            backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds),
+          );
           return;
         }
         // Помечаем что эта оплата — продление именно этой secondary.

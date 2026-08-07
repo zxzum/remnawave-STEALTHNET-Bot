@@ -29,6 +29,31 @@ export type ActivationResult =
   | { ok: true; /** дни, добавленные pro-rata конвертацией остатка (режим convert) */ convertedDays?: number }
   | { ok: false; error: string; status: number };
 
+export type TrialConversionPolicy = {
+  tariffId?: string | null;
+  convertEnabled?: boolean | null;
+  convertAllTariffs?: boolean | null;
+  convertTariffIds?: string | string[] | null;
+};
+
+export function trialAllowsTariff(trial: TrialConversionPolicy, targetTariffId: string): boolean {
+  if (trial.convertEnabled === false) return false;
+  if (trial.tariffId === targetTariffId || trial.convertAllTariffs === true) return true;
+  const rawIds = Array.isArray(trial.convertTariffIds)
+    ? trial.convertTariffIds
+    : typeof trial.convertTariffIds === "string"
+      ? (() => {
+          try {
+            const parsed = JSON.parse(trial.convertTariffIds) as unknown;
+            return Array.isArray(parsed) ? parsed.map((id) => String(id)) : [];
+          } catch {
+            return [];
+          }
+        })()
+      : [];
+  return rawIds.includes(targetTariffId);
+}
+
 type TrafficAwareTariff = {
   id?: string;
   trafficLimitBytes: bigint | null;
@@ -982,7 +1007,25 @@ export async function findConvertibleSubscription(
     currentPricePerDay: true,
     trialId: true,
     tariff: { select: { name: true } },
+    trial: { select: { convertEnabled: true, convertAllTariffs: true, convertTariffIds: true } },
   } as const;
+
+  const trialCandidates = await prisma.subscription.findMany({
+    where: { ...commonWhere, trialId: { not: null } },
+    orderBy: { expireAt: { sort: "desc", nulls: "last" } },
+    select: candidateSelect,
+  });
+  const trialCandidate = trialCandidates.find((trial) => trialAllowsTariff({
+    tariffId: trial.tariffId,
+    convertEnabled: trial.trial?.convertEnabled,
+    convertAllTariffs: trial.trial?.convertAllTariffs,
+    convertTariffIds: trial.trial?.convertTariffIds,
+  }, tariffId));
+  let candidate = trialCandidate ?? null;
+
+  // Триал — явный кандидат на конвертацию даже для обычной категории:
+  // его политика задаётся в самом триале, а не в singleSubscriptionMode категории.
+  if (!candidate && multiSubEnabled && !perCategorySingle) return null;
 
   // приоритет универсален для ЛЮБОЙ подписки (не только #0):
   // 1) подписка с ТЕМ ЖЕ тарифом (не триал) → продление именно её;
@@ -992,14 +1035,14 @@ export async function findConvertibleSubscription(
   // Мульти выкл (глобальный single) → берём ЛЮБУЮ подписку клиента (без фильтра категории);
   // мульти вкл (категория-single) → только подписки той же категории.
   const secondaryScope = multiSubEnabled ? { tariff: { categoryId: tariff!.categoryId } } : {};
-  const candidate =
+  candidate =
     (await prisma.subscription.findFirst({
       where: { ...commonWhere, tariffId, trialId: null },
       orderBy: { expireAt: { sort: "desc", nulls: "last" } },
       select: candidateSelect,
     })) ??
     (await prisma.subscription.findFirst({
-      where: { ...commonWhere, ...secondaryScope },
+      where: { ...commonWhere, ...secondaryScope, trialId: null },
       orderBy: { expireAt: { sort: "desc", nulls: "last" } },
       select: candidateSelect,
     }));
@@ -1130,19 +1173,19 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
         return { ok: false, error: "Подписка не принадлежит клиенту или удаляется", status: 403 };
       }
       if (targetSub?.trialId) {
-        if (targetSub.trial?.convertEnabled === false) {
-          return { ok: false, error: "Этот пробный период нельзя конвертировать или продлить", status: 400 };
-        }
-        const sameAsTrialTariff = targetSub.tariffId != null && targetSub.tariffId === tariff.id;
-        if (!sameAsTrialTariff && targetSub.trial?.convertAllTariffs !== true) {
-          let allowed: string[] = [];
-          try {
-            const parsed = targetSub.trial?.convertTariffIds ? JSON.parse(targetSub.trial.convertTariffIds) as unknown : [];
-            if (Array.isArray(parsed)) allowed = parsed.map((x) => String(x));
-          } catch { /* битый JSON → пустой список */ }
-          if (!allowed.includes(tariff.id)) {
-            return { ok: false, error: "Этот тариф недоступен для перехода с пробного периода", status: 400 };
-          }
+        if (!trialAllowsTariff({
+          tariffId: targetSub.tariffId,
+          convertEnabled: targetSub.trial?.convertEnabled,
+          convertAllTariffs: targetSub.trial?.convertAllTariffs,
+          convertTariffIds: targetSub.trial?.convertTariffIds,
+        }, tariff.id)) {
+          return {
+            ok: false,
+            error: targetSub.trial?.convertEnabled === false
+              ? "Этот пробный период нельзя конвертировать или продлить"
+              : "Этот тариф недоступен для перехода с пробного периода",
+            status: 400,
+          };
         }
       }
       // юзер выбрал «продлить без устройств» —

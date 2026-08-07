@@ -132,6 +132,21 @@ test("checkout preserves the approved Platega block and uses production payment 
   assert.doesNotMatch(tariffs, /SALE10|Здесь будет редирект|Прототип/);
 });
 
+test("eligible standalone trials use UUID-preserving extension checkout", async () => {
+  const tariffs = await readFile(new URL("./pages/Tariffs.tsx", import.meta.url), "utf8");
+  assert.match(tariffs, /trialExtensionId/);
+  assert.match(tariffs, /extendsSecondarySubId: extensionId/);
+  assert.match(tariffs, /replaceTrialSubId/);
+});
+
+test("Mini App exposes a direct trial activation entry", async () => {
+  const cabinet = await readFile(new URL("./pages/Cabinet.tsx", import.meta.url), "utf8");
+  const keys = await readFile(new URL("./pages/Keys.tsx", import.meta.url), "utf8");
+  assert.match(cabinet, /to="\/cabinet\/dashboard\?trial=1"/);
+  assert.match(keys, /to="\/cabinet\/dashboard\?trial=1"/);
+  assert.match(cabinet, /<TrialsPickerDialog/);
+});
+
 test("profile top-up and payment history use production APIs", async () => {
   const profile = await readFile(new URL("./pages/Profile.tsx", import.meta.url), "utf8");
   const store = await readFile(new URL("./store/AppContext.tsx", import.meta.url), "utf8");

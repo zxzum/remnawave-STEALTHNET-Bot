@@ -310,7 +310,7 @@ export async function getSubscription(token: string): Promise<{ subscription: un
  * Если массив пустой — кнопка «🎁 Получить пробную» в главном меню скрывается.
  */
 export async function getAvailableTrials(token: string): Promise<{
-  items: { id: string; name: string; tariffId: string; tariffName: string | null; durationDays: number; description: string | null; sortOrder: number }[];
+  items: { id: string; name: string; tariffId: string | null; tariffName: string | null; durationDays: number; description: string | null; sortOrder: number }[];
   hasAnyEnabled: boolean;
 }> {
   return fetchJson("/api/client/trials/available", { token });
@@ -369,7 +369,7 @@ export async function activateTrialById(
   trialId: string;
   durationDays: number;
   // для кнопки «🌐 Локации» на экране активации.
-  tariffId: string;
+  tariffId: string | null;
   tariffHasLocations: boolean;
   /** T-unify (12.05.2026) — URL подписки для кнопки «📲 Инструкции по установке». */
   subscriptionUrl?: string | null;

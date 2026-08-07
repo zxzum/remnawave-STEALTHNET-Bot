@@ -165,30 +165,81 @@ async function completeSubscriptionDeletion(
   subscriptionId: string,
   links: { ownerId: string; subscriptionIndex: number },
 ) {
-  await prisma.$transaction([
-    prisma.subscription.delete({
+  await prisma.$transaction(async (tx) => {
+    await tx.subscription.delete({
       where: { id: subscriptionId },
-    }),
-    ...(links.subscriptionIndex === 0
-      ? [prisma.client.update({
-          where: { id: links.ownerId },
-          data: {
-            remnawaveUuid: null,
-            currentTariffId: null,
-            currentPricePerDay: null,
-            customPrimaryPrice: null,
-            autoRenewEnabled: false,
-            autoRenewTariffId: null,
-            autoRenewPriceOptionId: null,
-            autoRenewExtraDevices: 0,
-            autoRenewRetryCount: 0,
-            autoRenewNotifiedAt: null,
-            autoRenewPromoCode: null,
-            lastArnNotifiedKey: null,
-          },
-        })]
-      : []),
-  ]);
+    });
+    const isPrimary = links.subscriptionIndex === 0;
+    if (!isPrimary) return;
+
+    const replacement = await tx.subscription.findFirst({
+      where: {
+        ownerId: links.ownerId,
+        subscriptionIndex: { gt: 0 },
+        deletionRequestedAt: null,
+        purchasedAsGift: false,
+        giftStatus: null,
+        giftedToClientId: null,
+        remnawaveUuid: { not: null },
+      },
+      orderBy: { subscriptionIndex: "asc" },
+      select: {
+        id: true,
+        remnawaveUuid: true,
+        tariffId: true,
+        customPrice: true,
+        currentPricePerDay: true,
+        autoRenewEnabled: true,
+        autoRenewTariffId: true,
+        autoRenewPriceOptionId: true,
+        extraDevices: true,
+        autoRenewPromoCode: true,
+      },
+    });
+
+    if (replacement) {
+      await tx.subscription.update({
+        where: { id: replacement.id },
+        data: { subscriptionIndex: 0 },
+      });
+      await tx.client.update({
+        where: { id: links.ownerId },
+        data: {
+          remnawaveUuid: replacement.remnawaveUuid,
+          currentTariffId: replacement.tariffId,
+          currentPricePerDay: replacement.currentPricePerDay,
+          customPrimaryPrice: replacement.customPrice,
+          autoRenewEnabled: replacement.autoRenewEnabled,
+          autoRenewTariffId: replacement.autoRenewTariffId,
+          autoRenewPriceOptionId: replacement.autoRenewPriceOptionId,
+          autoRenewExtraDevices: replacement.extraDevices,
+          autoRenewRetryCount: 0,
+          autoRenewNotifiedAt: null,
+          autoRenewPromoCode: replacement.autoRenewPromoCode,
+          lastArnNotifiedKey: null,
+        },
+      });
+      return;
+    }
+
+    await tx.client.update({
+      where: { id: links.ownerId },
+      data: {
+        remnawaveUuid: null,
+        currentTariffId: null,
+        currentPricePerDay: null,
+        customPrimaryPrice: null,
+        autoRenewEnabled: false,
+        autoRenewTariffId: null,
+        autoRenewPriceOptionId: null,
+        autoRenewExtraDevices: 0,
+        autoRenewRetryCount: 0,
+        autoRenewNotifiedAt: null,
+        autoRenewPromoCode: null,
+        lastArnNotifiedKey: null,
+      },
+    });
+  });
 }
 
 function notifyRevoked(subscriptionId: string, links: { ownerId: string; subscriptionIndex: number }) {

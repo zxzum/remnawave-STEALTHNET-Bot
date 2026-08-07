@@ -59,6 +59,9 @@ export type CabinetSubscription = {
   source: { type: "root" | "secondary"; id: string };
   tariffId: string | null;
   isTrial: boolean;
+  convertTariffIds: string[];
+  trialConvertEnabled: boolean;
+  trialConvertAllTariffs: boolean;
   extraDevices: number;
   extraDevicesMonthlyPrice: number;
 };
@@ -181,6 +184,9 @@ type SubscriptionItem = {
   trafficQuota?: unknown;
   tariffId?: string | null;
   trialId?: string | null;
+  convertTariffIds?: string[];
+  trialConvertEnabled?: boolean;
+  trialConvertAllTariffs?: boolean;
   extraDevices?: number;
   extraDevicesMonthlyPrice?: number;
 };
@@ -259,6 +265,9 @@ export function mapSubscription(
     source: { type: item.type, id: item.id },
     tariffId: item.tariffId ?? null,
     isTrial: Boolean(item.trialId),
+    convertTariffIds: item.convertTariffIds ?? [],
+    trialConvertEnabled: item.trialConvertEnabled !== false,
+    trialConvertAllTariffs: item.trialConvertAllTariffs === true,
     extraDevices: Math.max(0, finiteNumber(item.extraDevices) ?? 0),
     extraDevicesMonthlyPrice: Math.max(0, finiteNumber(item.extraDevicesMonthlyPrice) ?? 0),
   };

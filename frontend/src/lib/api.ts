@@ -2269,7 +2269,7 @@ export const api = {
     data: { tariffId?: string; tariffPriceOptionId?: string;
       deviceCount?: number; proxyTariffId?: string; singboxTariffId?: string; promoCode?: string;
       // мульти-подписки как в боте.
-      extendsSecondarySubId?: string; asAdditional?: boolean; asGift?: boolean; removeExtrasOnActivate?: boolean }
+      extendsSecondarySubId?: string; asAdditional?: boolean; asGift?: boolean; removeExtrasOnActivate?: boolean; replaceTrialSubId?: string }
   ): Promise<{ message: string; paymentId: string; newBalance: number }> {
     return request("/client/payments/balance", { method: "POST", body: JSON.stringify(data), token });
   },
@@ -4935,7 +4935,7 @@ export interface ClientDeviceItem {
 export interface ClientTrialOption {
   id: string;
   name: string;
-  tariffId: string;
+  tariffId: string | null;
   tariffName: string | null;
   durationDays: number;
   description: string | null;
@@ -4951,7 +4951,7 @@ export interface ClientTrialActivateResponse {
   subscriptionId: string;
   trialId: string;
   durationDays: number;
-  tariffId: string;
+  tariffId: string | null;
   tariffHasLocations: boolean;
   subscriptionUrl: string | null;
 }
