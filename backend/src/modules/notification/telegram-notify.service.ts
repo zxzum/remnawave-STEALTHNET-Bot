@@ -65,7 +65,8 @@ type AdminNotificationEventType =
   | "promo_activated"
   | "gift_redeemed"
   | "auto_renew_failed"
-  | "subscription_revoked";
+  | "subscription_revoked"
+  | "error";
 
 type AdminNotificationPreferenceRow = {
   telegramId: string;
@@ -231,6 +232,11 @@ async function sendTelegramToAdminsForEvent(eventType: AdminNotificationEventTyp
         })
       )
   );
+}
+
+/** Отправить техническую ошибку в ту же группу, куда уже приходят уведомления админки. */
+export async function notifyAdminsAboutError(text: string): Promise<void> {
+  await sendTelegramToAdminsForEvent("error", text);
 }
 
 function formatMoney(amount: number, currency: string): string {

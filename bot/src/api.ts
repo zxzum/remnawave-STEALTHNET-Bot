@@ -45,8 +45,37 @@ export async function getOnboardingAsset(name: "select-your-device.png" | "happ-
   return new Uint8Array(await res.arrayBuffer());
 }
 
+/** Баннер экрана скачивается ботом, чтобы Telegram не ходил по внешнему URL сам. */
+export async function getScreenAsset(screen: string): Promise<Uint8Array> {
+  const safeScreen = encodeURIComponent(screen.trim());
+  const res = await fetch(`${API_URL}/api/public/bot-asset/screen/${safeScreen}.png`, { headers: getHeaders() });
+  if (!res.ok) throw new Error(`Не удалось загрузить баннер (${res.status})`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+export type TelegramMergeChoice = "smart" | "keep_both" | "to_primary" | "to_absorbed";
+export type TelegramLinkPreview = {
+  defaultChoice: "smart";
+  primary: { id: string; email: string | null; balance: number; paymentsCount: number };
+  absorbed: { id: string; email: string | null; balance: number; paymentsCount: number };
+  trials: { keptSubscriptionId: string | null; keptExpireAt: string | null; removedSubscriptionIds: string[]; summed: false };
+  sameTariffs: Array<{ tariffId: string; tariffName: string; subscriptionIds: string[]; remainingDays: number; summedRemainingDays: number; finalExpireAt: string | null; removedSubscriptionIds: string[] }>;
+  conversionOptions: Array<{ value: Exclude<TelegramMergeChoice, "smart">; label: string; targetTariffName?: string; convertedDays?: number }>;
+};
+export type TelegramLinkResponse = {
+  message: string;
+  requiresConfirmation?: boolean;
+  code?: string;
+  preview?: TelegramLinkPreview;
+};
+
 /** Привязка Telegram к аккаунту по коду (вызывается ботом при /link КОД) */
-export async function linkTelegramFromBot(code: string, telegramId: number, telegramUsername?: string): Promise<{ message: string }> {
+export async function linkTelegramFromBot(
+  code: string,
+  telegramId: number,
+  telegramUsername?: string,
+  options?: { confirm?: boolean; mergeChoice?: TelegramMergeChoice },
+): Promise<TelegramLinkResponse> {
   const botToken = process.env.BOT_TOKEN || "";
   const res = await fetch(`${API_URL}/api/public/link-telegram-from-bot`, {
     method: "POST",
@@ -54,14 +83,49 @@ export async function linkTelegramFromBot(code: string, telegramId: number, tele
       "Content-Type": "application/json",
       "X-Telegram-Bot-Token": botToken,
     },
-    body: JSON.stringify({ code: code.trim(), telegramId, telegramUsername: telegramUsername ?? "" }),
+    body: JSON.stringify({ code: code.trim(), telegramId, telegramUsername: telegramUsername ?? "", ...options }),
   });
-  const data = (await res.json().catch(() => ({}))) as { message?: string };
+  const data = (await res.json().catch(() => ({}))) as TelegramLinkResponse;
   if (!res.ok) {
     const msg = typeof data.message === "string" ? data.message : `HTTP ${res.status}`;
     throw new Error(msg);
   }
-  return data as { message: string };
+  return data;
+}
+
+export type BotErrorReportInput = {
+  occurredAt?: string;
+  method?: string;
+  errorName?: string;
+  message: string;
+  stack?: string;
+  telegram?: {
+    userId?: number;
+    username?: string;
+    firstName?: string;
+    lastName?: string;
+    languageCode?: string;
+    chatId?: number | string;
+    messageId?: number;
+    updateId?: number;
+    text?: string;
+    callbackData?: string;
+  };
+  payload?: Record<string, unknown>;
+};
+
+/** Отправляет ошибку в backend и никогда не ломает основной обработчик. */
+export async function reportBotError(report: BotErrorReportInput): Promise<void> {
+  try {
+    const res = await fetch(`${API_URL}/api/public/report-bot-error`, {
+      method: "POST",
+      headers: getHeaders(),
+      body: JSON.stringify({ occurredAt: new Date().toISOString(), ...report }),
+    });
+    if (!res.ok) console.warn(`[Bot error report] backend returned ${res.status}`);
+  } catch (error) {
+    console.warn("[Bot error report] failed:", error instanceof Error ? error.message : error);
+  }
 }
 
 /** Подтверждение deep-link авторизации (бот → API) */

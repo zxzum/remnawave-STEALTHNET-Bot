@@ -5,11 +5,13 @@
  */
 
 import "dotenv/config";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Bot, Composer, Context, InputFile } from "grammy";
 import type { Api } from "grammy";
 import { ProxyAgent as UndiciProxyAgent } from "undici";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import * as api from "./api.js";
+import { getScreenAsset } from "./api.js";
 import {
   canExtendSubscription,
   FIRST_WELCOME_TRIAL_BUTTON,
@@ -155,6 +157,55 @@ async function createBotWithProxy(token: string): Promise<Bot> {
 
 /** Общая логика для основного (единственного) бота. */
 const composer = new Composer<Context>();
+const botErrorContext = new AsyncLocalStorage<Context>();
+composer.use((ctx, next) => botErrorContext.run(ctx, next));
+
+function telegramErrorContext(ctx: Context | undefined): api.BotErrorReportInput["telegram"] {
+  if (!ctx) return undefined;
+  const raw = ctx as unknown as {
+    from?: { id?: number; username?: string; first_name?: string; last_name?: string; language_code?: string };
+    chat?: { id?: number | string };
+    update?: { update_id?: number };
+    msg?: { message_id?: number; text?: string; caption?: string };
+    callbackQuery?: { data?: string; message?: { message_id?: number; chat?: { id?: number | string } } };
+  };
+  return {
+    userId: raw.from?.id,
+    username: raw.from?.username,
+    firstName: raw.from?.first_name,
+    lastName: raw.from?.last_name,
+    languageCode: raw.from?.language_code,
+    chatId: raw.chat?.id ?? raw.callbackQuery?.message?.chat?.id,
+    messageId: raw.msg?.message_id ?? raw.callbackQuery?.message?.message_id,
+    updateId: raw.update?.update_id,
+    text: raw.msg?.text ?? raw.msg?.caption,
+    callbackData: raw.callbackQuery?.data,
+  };
+}
+
+function telegramPayloadSummary(payload: unknown): Record<string, unknown> {
+  if (!payload || typeof payload !== "object") return {};
+  const source = payload as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const key of ["chat_id", "message_id", "message_thread_id", "caption", "text", "parse_mode"]) {
+    const value = source[key];
+    if (typeof value === "string") result[key] = value.slice(0, 600);
+    else if (typeof value === "number" || typeof value === "boolean") result[key] = value;
+  }
+  return result;
+}
+
+function reportTelegramError(error: unknown, ctx?: Context, method?: string, payload?: unknown): void {
+  const value = error instanceof Error ? error : new Error(String(error));
+  void api.reportBotError({
+    method,
+    errorName: value.name,
+    message: value.message,
+    stack: value.stack,
+    telegram: telegramErrorContext(ctx),
+    payload: telegramPayloadSummary(payload),
+  });
+}
 
 // ——— Принудительная подписка на канал ———
 
@@ -611,6 +662,46 @@ const SCREEN_ASSET_NAMES: Record<string, string> = {
   setup: "my-subscription.png",
 };
 
+function telegramLinkPreviewText(preview: api.TelegramLinkPreview): string {
+  const lines = [
+    "🔗 Найдены два аккаунта",
+    `💰 Общий баланс после объединения: ${(preview.primary.balance + preview.absorbed.balance).toFixed(2)}`,
+    `💳 Платежей: ${preview.primary.paymentsCount + preview.absorbed.paymentsCount}`,
+  ];
+  if (preview.trials.removedSubscriptionIds.length) {
+    lines.push(`🎁 Trial: оставляем срок до ${preview.trials.keptExpireAt ?? "без даты"}, trial не суммируется.`);
+  }
+  for (const item of preview.sameTariffs) {
+    lines.push(`📦 ${item.tariffName}: ${item.remainingDays} дн. → ${item.summedRemainingDays} дн.`);
+  }
+  if (preview.conversionOptions.length > 1) lines.push("\nДля разных тарифов выберите, как конвертировать остаток:");
+  else lines.push("\nОдинаковые тарифы будут объединены автоматически.");
+  return lines.join("\n");
+}
+
+function telegramLinkPreviewMarkup(code: string, preview: api.TelegramLinkPreview): InlineMarkup {
+  const rows: { text: string; callback_data: string }[][] = [[{ text: "✅ Объединить по умным правилам", callback_data: `link_merge:smart:${code}` }]];
+  for (const option of preview.conversionOptions) {
+    if (option.value === "keep_both" && preview.conversionOptions.length === 1) continue;
+    rows.push([{ text: option.label, callback_data: `link_merge:${option.value}:${code}` }]);
+  }
+  rows.push([{ text: "❌ Отмена", callback_data: "menu:main" }]);
+  return { inline_keyboard: rows };
+}
+
+async function handleTelegramLink(ctx: Context, code: string, lang: string): Promise<void> {
+  const from = ctx.from;
+  if (!from) return;
+  const result = await api.linkTelegramFromBot(code, from.id, from.username ?? undefined);
+  if (result.requiresConfirmation && result.preview) {
+    await ctx.reply(telegramLinkPreviewText(result.preview), {
+      reply_markup: telegramLinkPreviewMarkup(result.code ?? code, result.preview),
+    });
+    return;
+  }
+  await ctx.reply(_t("link.success", lang));
+}
+
 const DEFAULT_BOT_WELCOME_TEXT = [
   "👋 Добро пожаловать в Лазейка ВПН!",
   "",
@@ -632,17 +723,18 @@ async function renderCommandScreen(
   const caption = text.length > TELEGRAM_CAPTION_MAX ? text.slice(0, TELEGRAM_CAPTION_MAX - 3) + "..." : text;
   const captionEntities = text.length > TELEGRAM_CAPTION_MAX && entities ? entities.filter((e) => e.offset + e.length <= TELEGRAM_CAPTION_MAX - 3) : entities;
   const banner = screenBannerUrl(config, screen);
+  const image = banner ? await api.getScreenAsset(screen).catch(() => null) : null;
   const previous = lastBotScreens.get(userId);
-  if (previous && activeTelegramApi && banner) {
+  if (previous && activeTelegramApi && image) {
     await activeTelegramApi.editMessageMedia(previous.chatId, previous.messageId, {
-      type: "photo", media: banner, caption, caption_entities: captionEntities?.length ? captionEntities : undefined,
+      type: "photo", media: new InputFile(image, `${screen}.png`), caption, caption_entities: captionEntities?.length ? captionEntities : undefined,
     }, { reply_markup: markup });
     return;
   }
   const assetName = (SCREEN_ASSET_NAMES[screen] ?? "welcome.png") as Parameters<typeof api.getOnboardingAsset>[0];
-  const image = await api.getOnboardingAsset(assetName).catch(() => null);
-  if (image) {
-    const sent = await ctx.replyWithPhoto(new InputFile(image, assetName), {
+  const fallbackImage = image ?? await api.getOnboardingAsset(assetName).catch(() => null);
+  if (fallbackImage) {
+    const sent = await ctx.replyWithPhoto(new InputFile(fallbackImage, image ? `${screen}.png` : assetName), {
       caption, caption_entities: captionEntities?.length ? captionEntities : undefined, reply_markup: markup,
     });
     if (sent?.message_id) lastBotScreens.set(userId, { chatId: sent.chat.id, messageId: sent.message_id });
@@ -1843,10 +1935,15 @@ async function editMessageContent(ctx: {
   const caption = text.length > TELEGRAM_CAPTION_MAX ? text.slice(0, TELEGRAM_CAPTION_MAX - 3) + "..." : text;
   const truncatedEntities = text.length > TELEGRAM_CAPTION_MAX && entities ? entities.filter((e) => e.offset + e.length <= TELEGRAM_CAPTION_MAX - 3) : entities;
   if (bannerUrl && ctx.editMessageMedia) {
-    return ctx.editMessageMedia(
-      { type: "photo", media: bannerUrl, caption, caption_entities: truncatedEntities?.length ? truncatedEntities : undefined },
-      { reply_markup },
-    );
+    const match = /\/screen\/([^/]+)\.png(?:\?|$)/.exec(bannerUrl);
+    const screen = match ? decodeURIComponent(match[1]) : null;
+    const image = screen ? await getScreenAsset(screen).catch(() => null) : null;
+    if (image) {
+      return ctx.editMessageMedia(
+        { type: "photo", media: new InputFile(image, `${screen}.png`), caption, caption_entities: truncatedEntities?.length ? truncatedEntities : undefined },
+        { reply_markup },
+      );
+    }
   }
   if (hasMediaWithCaption) return ctx.editMessageCaption({ caption, caption_entities: truncatedEntities?.length ? truncatedEntities : undefined, reply_markup });
   return ctx.editMessageText(text, { entities: entities?.length ? entities : undefined, reply_markup });
@@ -2191,8 +2288,7 @@ composer.command("start", async (ctx) => {
       return;
     }
     try {
-      await api.linkTelegramFromBot(code, from.id, from.username ?? undefined);
-      await ctx.reply(_t("link.success", lang));
+      await handleTelegramLink(ctx, code, lang);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : _t("error_generic", lang);
       await ctx.reply(`❌ ${msg}`);
@@ -2377,11 +2473,11 @@ composer.command("start", async (ctx) => {
     }
     if (!richMenuSent) {
       const previous = lastBotScreens.get(from.id);
-      const banner = screenBannerUrl(config, "welcome");
-      if (previous && activeTelegramApi && banner) {
-        await activeTelegramApi.editMessageMedia(previous.chatId, previous.messageId, { type: "photo", media: banner, caption, caption_entities: captionEntities.length ? captionEntities : undefined }, { reply_markup: markup }).catch(() => {});
-      } else if (banner) {
-        const sent = await ctx.replyWithPhoto(banner, { caption, caption_entities: captionEntities.length ? captionEntities : undefined, reply_markup: markup });
+      const image = await api.getScreenAsset("welcome").catch(() => null);
+      if (previous && activeTelegramApi && image) {
+        await activeTelegramApi.editMessageMedia(previous.chatId, previous.messageId, { type: "photo", media: new InputFile(image, "welcome.png"), caption, caption_entities: captionEntities.length ? captionEntities : undefined }, { reply_markup: markup }).catch(() => {});
+      } else if (image) {
+        const sent = await ctx.replyWithPhoto(new InputFile(image, "welcome.png"), { caption, caption_entities: captionEntities.length ? captionEntities : undefined, reply_markup: markup });
         if (sent?.message_id) lastBotScreens.set(from.id, { chatId: sent.chat.id, messageId: sent.message_id });
       } else {
         const welcomeImage = await api.getOnboardingAsset("welcome.png").catch(() => null);
@@ -2412,8 +2508,7 @@ composer.command("link", async (ctx) => {
     return;
   }
   try {
-    await api.linkTelegramFromBot(code, from.id, from.username ?? undefined);
-    await ctx.reply(_t("link.success", lang));
+    await handleTelegramLink(ctx, code, lang);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : _t("error_generic", lang);
     await ctx.reply(`❌ ${msg}`);
@@ -2848,6 +2943,28 @@ composer.on("callback_query:data", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
   await ctx.answerCallbackQuery().catch(() => {});
+
+  if (data.startsWith("link_merge:")) {
+    const [, choice, code] = data.split(":");
+    if (!code || !["smart", "keep_both", "to_primary", "to_absorbed"].includes(choice)) return;
+    try {
+      const result = await api.linkTelegramFromBot(code, userId, ctx.from?.username ?? undefined, {
+        confirm: true,
+        mergeChoice: choice as api.TelegramMergeChoice,
+      });
+      if (result.requiresConfirmation && result.preview) {
+        await ctx.editMessageText(telegramLinkPreviewText(result.preview), {
+          reply_markup: telegramLinkPreviewMarkup(result.code ?? code, result.preview),
+        });
+        return;
+      }
+      await ctx.editMessageText(`✅ ${result.message || _t("link.success", getUserLang(userId))}`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : _t("error_generic", getUserLang(userId));
+      await ctx.editMessageText(`❌ ${msg}`).catch(() => ctx.reply(`❌ ${msg}`));
+    }
+    return;
+  }
 
   if (data.startsWith("setup:")) {
     const token = await getOrRestoreToken(userId, ctx.from?.username);
@@ -8589,8 +8706,19 @@ const botInstances: Bot[] = [];
   }
   const b = await createBotWithProxy(token);
   activeTelegramApi = b.api;
+  b.api.config.use(async (previous, method, payload, signal) => {
+    try {
+      return await previous(method, payload, signal);
+    } catch (error) {
+      reportTelegramError(error, botErrorContext.getStore(), String(method), payload);
+      throw error;
+    }
+  });
   b.use(composer);
-  b.catch((err) => console.error("[Bot] error:", err));
+  b.catch((err) => {
+    console.error("[Bot] error:", err);
+    reportTelegramError(err.error, err.ctx);
+  });
   botInstances.push(b);
 }
 // start() для long polling не завершается — нельзя await, иначе после старта код не пойдёт дальше.

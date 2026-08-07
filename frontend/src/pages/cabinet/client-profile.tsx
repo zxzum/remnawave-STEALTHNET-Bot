@@ -10,8 +10,8 @@ import { useClientAuth } from "@/contexts/client-auth";
 import { useCabinetMiniapp } from "@/pages/cabinet/cabinet-layout";
 import { PayNowPanel } from "@/components/payment/pay-now-panel";
 import { cn } from "@/lib/utils";
-import { api } from "@/lib/api";
-import type { ClientPayment } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
+import type { ClientPayment, ClientTelegramMergePreview, TelegramMergeChoice } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -40,6 +40,25 @@ function formatPaymentStatus(status: string, t: (key: string) => string): string
   if (s === "failed") return t("cabinet.profile.payment_failed");
   if (s === "refunded") return t("cabinet.profile.payment_refunded");
   return status || "—";
+}
+
+function chooseTelegramMergeChoice(preview: ClientTelegramMergePreview): TelegramMergeChoice | null {
+  const lines = [
+    "Найдены два Telegram-аккаунта.",
+    `Общий баланс: ${(preview.primary.balance + preview.absorbed.balance).toFixed(2)}`,
+    `Платежей: ${preview.primary.paymentsCount + preview.absorbed.paymentsCount}`,
+  ];
+  if (preview.trials.removedSubscriptionIds.length) lines.push(`Trial: оставляем самый поздний срок (${preview.trials.keptExpireAt ?? "без даты"}), без суммирования.`);
+  for (const item of preview.sameTariffs) lines.push(`${item.tariffName}: ${item.remainingDays} дн. → ${item.summedRemainingDays} дн.`);
+  if (preview.conversionOptions.length <= 1) return "smart";
+  const options: TelegramMergeChoice[] = ["smart", ...preview.conversionOptions.map((item) => item.value)];
+  const uniqueOptions = [...new Set(options)];
+  lines.push("", "Выберите вариант:", "0 — умные правила (рекомендуется)");
+  preview.conversionOptions.forEach((item, index) => lines.push(`${index + 1} — ${item.label}${item.convertedDays != null ? ` (${item.convertedDays} дн.)` : ""}`));
+  const answer = window.prompt(lines.join("\n"), "0");
+  if (answer == null) return null;
+  const index = Number.parseInt(answer.trim(), 10);
+  return Number.isInteger(index) && index >= 0 && index < uniqueOptions.length ? uniqueOptions[index] : null;
 }
 
 export function ClientProfilePage() {
@@ -505,6 +524,27 @@ function ClassicProfilePage() {
         setLinkTelegramCode(null);
       }
     } catch (err) {
+      if (err instanceof ApiError) {
+        const details = err.data as { requiresConfirmation?: boolean; preview?: ClientTelegramMergePreview };
+        if (details.requiresConfirmation && details.preview) {
+          const mergeChoice = chooseTelegramMergeChoice(details.preview);
+          if (!mergeChoice) {
+            setLinkTelegramError("Объединение отменено");
+            return;
+          }
+          try {
+            const confirmed = await api.clientLinkTelegramConfirm(token, { initData, mergeChoice });
+            if (confirmed.client) {
+              await refreshProfile();
+              setLinkTelegramCode(null);
+              return;
+            }
+          } catch (confirmError) {
+            setLinkTelegramError(confirmError instanceof Error ? confirmError.message : t("cabinet.profile.link_telegram_error"));
+            return;
+          }
+        }
+      }
       setLinkTelegramError(err instanceof Error ? err.message : t("cabinet.profile.link_telegram_error"));
     } finally {
       setLinkTelegramLoading(false);

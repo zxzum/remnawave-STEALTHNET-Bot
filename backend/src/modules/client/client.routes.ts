@@ -5,7 +5,8 @@ import { env } from "../../config/index.js";
 import { Router, type Request } from "express";
 import { z } from "zod";
 import { prisma, createPayment, asClientUncheckedCreate, asClientWhere, asClientSelect, asPaymentUncheckedCreate, asTelegramAuthUpdate, type TelegramAuthTokenRecord, type ClientEmptyCloneRow } from "../../db.js";
-import { mergeClients, isBotOnlyAccount } from "./merge-clients.service.js";
+import { mergeClients, getMergePreview, isBotOnlyAccount } from "./merge-clients.service.js";
+import type { MergeChoice } from "./account-merge-policy.js";
 import {
   hashPassword,
   verifyPassword,
@@ -24,7 +25,9 @@ import {
   notifyAdminsAboutClientTicketMessage,
   notifyAdminsAboutNewClient,
   notifyAdminsAboutNewTicket,
+  notifyAdminsAboutError,
 } from "../notification/telegram-notify.service.js";
+import { formatBotErrorNotification } from "../notification/telegram-error-notification.js";
 import { requireClientAuth } from "./client.middleware.js";
 import { remnaCreateUser, remnaUpdateUser, isRemnaConfigured, remnaGetUser, remnaGetUserByUsername, remnaGetUserByEmail, remnaGetUserByTelegramId, extractRemnaUuid, remnaUsernameFromClient, remnaGetUserHwidDevices, remnaDeleteUserHwidDevice, remnaRevokeUserSubscription } from "../remna/remna.client.js";
 import { isSmtpConfigured, isMailConfigured, mailConfigFromSystem, sendEmail } from "../mail/mail.service.js";
@@ -1612,7 +1615,11 @@ clientRouter.post("/link-telegram-request", async (req, res) => {
 });
 
 /** Привязать Telegram из Mini App (initData от Telegram WebApp) */
-const linkTelegramSchema = z.object({ initData: z.string().min(1) });
+const linkTelegramSchema = z.object({
+  initData: z.string().min(1),
+  confirm: z.boolean().optional(),
+  mergeChoice: z.enum(["smart", "keep_both", "to_primary", "to_absorbed"]).optional(),
+});
 clientRouter.post("/link-telegram", async (req, res) => {
   const client = (req as unknown as { client: { id: string; telegramId: string | null } }).client;
   if (client.telegramId) return res.status(400).json({ message: "Telegram уже привязан" });
@@ -1647,8 +1654,22 @@ clientRouter.post("/link-telegram", async (req, res) => {
     if (!isBotOnlyAccount(other)) {
       return res.status(409).json({ message: "Этот Telegram-аккаунт уже привязан к другому аккаунту с почтой. Сначала войдите в тот аккаунт и отвяжите Telegram, либо обратитесь в поддержку." });
     }
+    const preview = await getMergePreview(client.id, other.id).catch((e) => {
+      console.error("[link-telegram] preview failed:", e);
+      return null;
+    });
+    if (!preview) return res.status(500).json({ message: "Не удалось подготовить объединение аккаунтов" });
+    if (body.data.confirm !== true) {
+      return res.status(409).json({
+        message: "Найдены данные второго аккаунта. Подтвердите объединение после просмотра условий.",
+        requiresConfirmation: true,
+        preview,
+      });
+    }
     try {
-      await mergeClients(client.id, other.id, { telegramId, telegramUsername });
+      await mergeClients(client.id, other.id, { telegramId, telegramUsername }, {
+        subscriptionMerge: (body.data.mergeChoice ?? "smart") as MergeChoice,
+      });
     } catch (e) {
       console.error("[link-telegram] merge failed:", e);
       return res.status(500).json({ message: "Не удалось объединить аккаунты. Обратитесь в поддержку." });
@@ -1661,6 +1682,48 @@ clientRouter.post("/link-telegram", async (req, res) => {
     select: { id: true, email: true, telegramId: true, telegramUsername: true, preferredLang: true, preferredCurrency: true, balance: true, referralCode: true, remnawaveUuid: true, trialUsed: true, isBlocked: true, autoRenewEnabled: true, autoRenewTariffId: true, yoomoneyAccessToken: true, createdAt: true, onboardingCompleted: true, passwordHash: true },
   });
   if (!updated) return res.status(500).json({ message: "Не удалось привязать Telegram" });
+  if (updated.telegramId !== telegramId) return res.status(500).json({ message: "Telegram не записался в аккаунт. Повторите попытку." });
+  return res.json({ client: toClientShape(updated) });
+});
+
+/** Подтвердить объединение Telegram-аккаунтов из Mini App после предпросмотра. */
+clientRouter.post("/link-telegram-confirm", async (req, res) => {
+  const client = (req as unknown as { client: { id: string; telegramId: string | null } }).client;
+  if (client.telegramId) return res.status(400).json({ message: "Telegram уже привязан" });
+  const body = linkTelegramSchema.safeParse(req.body);
+  if (!body.success || body.data.confirm !== true) return res.status(400).json({ message: "Требуется явное подтверждение объединения" });
+  const botToken = (process.env.BOT_TOKEN ?? "").trim();
+  if (!botToken || !validateTelegramInitData(body.data.initData, botToken)) {
+    return res.status(401).json({ message: "Недействительные или устаревшие данные Telegram" });
+  }
+  const tgUser = parseTelegramUser(body.data.initData);
+  if (!tgUser) return res.status(400).json({ message: "Нет данных пользователя" });
+  const telegramId = String(tgUser.id);
+  const telegramUsername = tgUser.username?.trim() ?? null;
+  const other = (await prisma.client.findFirst({
+    where: asClientWhere({ telegramId }),
+    select: asClientSelect({ id: true, email: true, passwordHash: true, googleId: true, appleId: true }),
+  })) as ClientEmptyCloneRow | null;
+  if (other && other.id !== client.id) {
+    if (!isBotOnlyAccount(other)) {
+      return res.status(409).json({ message: "Этот Telegram-аккаунт уже привязан к другому аккаунту с почтой." });
+    }
+    try {
+      await mergeClients(client.id, other.id, { telegramId, telegramUsername }, {
+        subscriptionMerge: (body.data.mergeChoice ?? "smart") as MergeChoice,
+      });
+    } catch (e) {
+      console.error("[link-telegram-confirm] merge failed:", e);
+      return res.status(500).json({ message: "Не удалось объединить аккаунты. Обратитесь в поддержку." });
+    }
+  } else {
+    await prisma.client.update({ where: { id: client.id }, data: { telegramId, telegramUsername } });
+  }
+  const updated = await prisma.client.findUnique({
+    where: { id: client.id },
+    select: { id: true, email: true, telegramId: true, telegramUsername: true, preferredLang: true, preferredCurrency: true, balance: true, referralCode: true, remnawaveUuid: true, trialUsed: true, isBlocked: true, autoRenewEnabled: true, autoRenewTariffId: true, yoomoneyAccessToken: true, createdAt: true, onboardingCompleted: true, passwordHash: true },
+  });
+  if (!updated || updated.telegramId !== telegramId) return res.status(500).json({ message: "Telegram не записался в аккаунт. Повторите попытку." });
   return res.json({ client: toClientShape(updated) });
 });
 
@@ -7547,11 +7610,73 @@ publicConfigRouter.get("/deeplink", (req, res) => {
   res.type("html").send(html);
 });
 
+/** Приём ошибок Telegram API от бота. Токен проверяется до разбора пользовательских данных. */
+const botErrorReportSchema = z.object({
+  occurredAt: z.string().max(80).optional(),
+  method: z.string().max(100).optional(),
+  errorName: z.string().max(200).optional(),
+  message: z.string().min(1).max(4000),
+  stack: z.string().max(10000).optional(),
+  telegram: z.object({
+    userId: z.number().int().optional(),
+    username: z.string().max(255).optional(),
+    firstName: z.string().max(255).optional(),
+    lastName: z.string().max(255).optional(),
+    languageCode: z.string().max(32).optional(),
+    chatId: z.union([z.number(), z.string().max(255)]).optional(),
+    messageId: z.number().int().optional(),
+    updateId: z.number().int().optional(),
+    text: z.string().max(1000).optional(),
+    callbackData: z.string().max(1000).optional(),
+  }).optional(),
+  payload: z.record(z.unknown()).optional(),
+});
+publicConfigRouter.post("/report-bot-error", async (req, res) => {
+  const headerToken = typeof req.headers["x-telegram-bot-token"] === "string" ? req.headers["x-telegram-bot-token"].trim() : "";
+  const expectedToken = (process.env.BOT_TOKEN ?? "").trim();
+  if (!headerToken || !expectedToken || headerToken !== expectedToken) {
+    return res.status(401).json({ message: "Требуется авторизация" });
+  }
+  const body = botErrorReportSchema.safeParse(req.body);
+  if (!body.success) return res.status(400).json({ message: "Некорректный отчёт об ошибке" });
+  const telegramId = body.data.telegram?.userId;
+  const client = telegramId == null
+    ? null
+    : await prisma.client.findUnique({
+      where: { telegramId: String(telegramId) },
+      select: {
+        id: true,
+        email: true,
+        telegramId: true,
+        telegramUsername: true,
+        balance: true,
+        createdAt: true,
+        _count: { select: { ownedSubscriptions: true, payments: true } },
+      },
+    });
+  const text = formatBotErrorNotification(body.data, client && {
+    id: client.id,
+    email: client.email,
+    telegramId: client.telegramId,
+    telegramUsername: client.telegramUsername,
+    balance: client.balance,
+    createdAt: client.createdAt,
+    subscriptionsCount: client._count.ownedSubscriptions,
+    paymentsCount: client._count.payments,
+  });
+  await notifyAdminsAboutError(text).catch((error) => {
+    console.warn("[report-bot-error] notification failed:", error);
+  });
+  return res.json({ ok: true });
+});
+
 /** Привязка Telegram к аккаунту по коду (вызывается ботом после /link КОД) */
 const linkTelegramFromBotSchema = z.object({
   code: z.string().min(1),
   telegramId: z.number(),
   telegramUsername: z.string().optional(),
+  confirm: z.boolean().optional(),
+  mergeChoice: z.enum(["smart", "keep_both", "to_primary", "to_absorbed"]).optional(),
 });
 publicConfigRouter.post("/link-telegram-from-bot", async (req, res) => {
   // v5.0.0: токен один (основной BOT_TOKEN).
@@ -7562,7 +7687,7 @@ publicConfigRouter.post("/link-telegram-from-bot", async (req, res) => {
   }
   const body = linkTelegramFromBotSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Проверьте введённые данные", errors: body.error.flatten() });
-  const { code, telegramId, telegramUsername } = body.data;
+  const { code, telegramId, telegramUsername, confirm, mergeChoice } = body.data;
   const tid = String(telegramId);
   const pending = await prisma.pendingTelegramLink.findUnique({ where: { code: code.trim() } });
   if (!pending) return res.status(400).json({ message: "Неверный или просроченный код" });
@@ -7591,17 +7716,30 @@ publicConfigRouter.post("/link-telegram-from-bot", async (req, res) => {
     //     подписки, баланс и рефералы объединяются, дубль удаляется).
     // Если у TG-аккаунта есть email/OAuth — это полноценный отдельный аккаунт, отказ.
     if (!isBotOnlyAccount(other)) {
-      await prisma.pendingTelegramLink.deleteMany({ where: { id: pending.id } }).catch(() => {});
       return res.status(409).json({ message: "Этот Telegram-аккаунт уже привязан к другому аккаунту с почтой. Войдите в тот аккаунт и отвяжите Telegram, либо обратитесь в поддержку." });
+    }
+    const preview = await getMergePreview(pending.clientId, other.id).catch((e) => {
+      console.error("[link-telegram-from-bot] preview failed:", e);
+      return null;
+    });
+    if (!preview) return res.status(500).json({ message: "Не удалось подготовить объединение аккаунтов" });
+    if (confirm !== true) {
+      return res.status(409).json({
+        message: "Найдены данные второго аккаунта. Подтвердите объединение.",
+        requiresConfirmation: true,
+        code: pending.code,
+        preview,
+      });
     }
     try {
       await mergeClients(pending.clientId, other.id, {
         telegramId: tid,
         telegramUsername: (telegramUsername ?? "").trim() || null,
+      }, {
+        subscriptionMerge: (mergeChoice ?? "smart") as MergeChoice,
       });
     } catch (e) {
       console.error("[link-telegram-from-bot] merge failed:", e);
-      await prisma.pendingTelegramLink.deleteMany({ where: { id: pending.id } }).catch(() => {});
       return res.status(500).json({ message: "Не удалось объединить аккаунты. Обратитесь в поддержку." });
     }
   } else {
@@ -7611,6 +7749,8 @@ publicConfigRouter.post("/link-telegram-from-bot", async (req, res) => {
     });
   }
   await prisma.pendingTelegramLink.deleteMany({ where: { id: pending.id } }).catch(() => {});
+  const verified = await prisma.client.findUnique({ where: { id: pending.clientId }, select: { telegramId: true } });
+  if (verified?.telegramId !== tid) return res.status(500).json({ message: "Telegram не записался в аккаунт. Повторите попытку." });
   return res.json({ message: "Telegram привязан" });
 });
 

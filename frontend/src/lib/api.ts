@@ -47,6 +47,28 @@ export interface ClientAuditResult {
   checked: number;
 }
 
+export type TelegramMergeChoice = "smart" | "keep_both" | "to_primary" | "to_absorbed";
+export type ClientTelegramMergePreview = {
+  defaultChoice: "smart";
+  primary: { id: string; email: string | null; balance: number; paymentsCount: number };
+  absorbed: { id: string; email: string | null; balance: number; paymentsCount: number };
+  trials: { keptSubscriptionId: string | null; keptExpireAt: string | null; removedSubscriptionIds: string[]; summed: false };
+  sameTariffs: Array<{ tariffId: string; tariffName: string; subscriptionIds: string[]; remainingDays: number; summedRemainingDays: number; finalExpireAt: string | null; removedSubscriptionIds: string[] }>;
+  conversionOptions: Array<{ value: Exclude<TelegramMergeChoice, "smart">; label: string; targetTariffName?: string; convertedDays?: number }>;
+};
+export type ClientTelegramLinkConflict = {
+  message?: string;
+  requiresConfirmation?: boolean;
+  preview?: ClientTelegramMergePreview;
+};
+
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number, public readonly data: unknown) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export interface Admin {
   id: string;
   email: string;
@@ -317,7 +339,7 @@ async function request<T>(
 
   if (!res.ok) {
     const message = (data as { message?: string })?.message ?? res.statusText;
-    throw new Error(message);
+    throw new ApiError(message, res.status, data);
   }
   return data as T;
 }
@@ -2575,6 +2597,14 @@ export const api = {
   /** Привязать Telegram из Mini App (initData от Telegram WebApp) */
   async clientLinkTelegram(token: string, data: { initData: string }): Promise<{ client: ClientProfile }> {
     return request("/client/link-telegram", { method: "POST", body: JSON.stringify(data), token });
+  },
+
+  async clientLinkTelegramConfirm(token: string, data: { initData: string; mergeChoice: TelegramMergeChoice }): Promise<{ client: ClientProfile }> {
+    return request("/client/link-telegram-confirm", {
+      method: "POST",
+      body: JSON.stringify({ ...data, confirm: true }),
+      token,
+    });
   },
 
   /** Запросить привязку email (отправить письмо со ссылкой) */
