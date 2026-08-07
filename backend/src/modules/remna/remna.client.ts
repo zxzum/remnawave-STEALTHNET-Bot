@@ -29,7 +29,8 @@ function getHeaders(): Record<string, string> {
 
 export async function remnaFetch<T>(
   path: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  timeoutMs = 12_000,
 ): Promise<{ data?: T; error?: string; status: number }> {
   if (!isRemnaConfigured()) {
     return { error: "Remna API not configured", status: 503 };
@@ -40,9 +41,8 @@ export async function remnaFetch<T>(
   // (или ProxyCheck, рвущий сокет) подвешивала клиентские эндпоинты (/client/subscription,
   // /client/devices синхронно ходят в Remna) до дефолтного undici-таймаута — фронт ловил
   // «fetch failed», и API «как будто отваливался». Теперь — быстрый контролируемый отказ.
-  const REMNA_TIMEOUT_MS = 12_000;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REMNA_TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       ...options,
@@ -95,6 +95,11 @@ export function remnaGetUsers(params?: { page?: number; limit?: number; start?: 
 /** GET /api/users/{uuid} */
 export function remnaGetUser(uuid: string) {
   return remnaFetch<unknown>(`/api/users/${uuid}`);
+}
+
+/** GET /api/users/by-short-uuid/{shortUuid} */
+export function remnaGetUserByShortUuid(shortUuid: string, timeoutMs = 12_000) {
+  return remnaFetch<unknown>(`/api/users/by-short-uuid/${encodeURIComponent(shortUuid)}`, {}, timeoutMs);
 }
 
 /** DELETE /api/users/{uuid} — удалить пользователя из Remna */

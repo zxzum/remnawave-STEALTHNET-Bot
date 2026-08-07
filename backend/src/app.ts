@@ -53,6 +53,7 @@ import { emailTemplatesRouter } from "./modules/email-templates/email-templates.
 import { botMessagesRouter } from "./modules/bot-messages/bot-messages.routes.js";
 import { botConversationsRouter } from "./modules/bot-conversations/bot-conversations.routes.js";
 import { trafficQuotaAdminRouter } from "./modules/squad-traffic/squad-traffic.admin.routes.js";
+import { publicWhitelistQuotaRouter } from "./modules/public-whitelist-quota/public-whitelist-quota.routes.js";
 import { supportInternalRouter } from "./modules/support/support.internal.routes.js";
 import { requireAuth } from "./modules/auth/middleware.js";
 import { renderSpaIndex } from "./modules/branding/spa-html.js";
@@ -68,6 +69,9 @@ app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginResourcePolicy: { policy: "cross-origin" },
 }));
+
+// This router owns its stricter CORS policy and must run before the general CORS middleware.
+app.use("/v1/whitelist", publicWhitelistQuotaRouter);
 /**
  * CORS origins — динамический список:
  *   1) Если в `.env CORS_ORIGIN` явно задан (не "*") — используется как whitelist
