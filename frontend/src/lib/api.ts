@@ -2071,17 +2071,24 @@ export const api = {
     return request(`/client/payments/${encodeURIComponent(id)}/status`, { token });
   },
 
-  async clientRegister(data: ClientRegisterPayload): Promise<ClientAuthResponse | ClientAuthRequires2FA | { message: string; requiresVerification: true }> {
+  async clientRegister(data: ClientRegisterPayload): Promise<ClientAuthResponse | ClientAuthRequires2FA | ClientRegistrationVerification | { message: string; requiresVerification: true }> {
     return request("/client/auth/register", {
       method: "POST",
       body: JSON.stringify(data),
     });
   },
 
-  async clientVerifyEmail(token: string): Promise<ClientAuthResponse | ClientAuthRequires2FA> {
+  async clientVerifyEmail(token: string): Promise<ClientAuthResponse | ClientAuthRequires2FA | ClientRegistrationVerification> {
     return request("/client/auth/verify-email", {
       method: "POST",
       body: JSON.stringify({ token }),
+    });
+  },
+
+  async clientCompleteRegistration(token: string, password: string): Promise<ClientAuthResponse> {
+    return request("/client/auth/complete-registration", {
+      method: "POST",
+      body: JSON.stringify({ token, password }),
     });
   },
 
@@ -5161,6 +5168,11 @@ export interface ClientAuthResponse {
 export interface ClientAuthRequires2FA {
   requires2FA: true;
   tempToken: string;
+}
+
+export interface ClientRegistrationVerification {
+  registrationToken: string;
+  email: string;
 }
 
 export type ClientRegisterPayload = {

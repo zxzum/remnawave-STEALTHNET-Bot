@@ -284,3 +284,21 @@ test("logs out the browser cabinet after the client account is deleted", async (
   assert.match(login, /account-deleted/);
   assert.match(login, /Аккаунт удалён/);
 });
+
+test("registration verifies email before account creation", async () => {
+  const auth = await readFile(new URL("./pages/Auth.tsx", import.meta.url), "utf8");
+  const flows = await readFile(new URL("./pages/AccountFlows.tsx", import.meta.url), "utf8");
+  const context = await readFile(new URL("../contexts/client-auth.tsx", import.meta.url), "utf8");
+  assert.match(auth, /skipEmailVerification/);
+  assert.match(auth, /completeRegistration/);
+  assert.match(auth, /registrationToken/);
+  assert.match(flows, /cabinet\/register\?registrationToken=/);
+  assert.match(context, /completeRegistration/);
+});
+
+test("registration success modal recommends Telegram settings", async () => {
+  const cabinet = await readFile(new URL("./pages/Cabinet.tsx", import.meta.url), "utf8");
+  assert.match(cabinet, /registration=success/);
+  assert.match(cabinet, /Аккаунт успешно создан/);
+  assert.match(cabinet, /настройк/);
+});

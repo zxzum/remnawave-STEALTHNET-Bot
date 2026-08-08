@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import type { ClientProfile, ClientAuthResponse } from "@/lib/api";
+import type { ClientProfile, ClientAuthResponse, ClientRegistrationVerification } from "@/lib/api";
 import { api, setClientSessionLostFn, setClientTokenRefreshFn } from "@/lib/api";
 
 const STORAGE_TOKEN = "stealthnet_client_token";
@@ -39,13 +39,14 @@ type ClientAuthState = {
 type ClientAuthValue = {
   state: ClientAuthState;
   login: (email: string, password: string) => Promise<void>;
-  register: (data: { email: string; password: string; preferredLang?: string; preferredCurrency?: string; referralCode?: string; utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_content?: string; utm_term?: string }) => Promise<{ requiresVerification: true } | void>;
+  register: (data: { email: string; password?: string; preferredLang?: string; preferredCurrency?: string; referralCode?: string; utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_content?: string; utm_term?: string }) => Promise<{ requiresVerification: true } | void>;
   registerByTelegram: (data: { telegramId: string; telegramUsername?: string; preferredLang?: string; preferredCurrency?: string; referralCode?: string; utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_content?: string; utm_term?: string }) => Promise<void>;
   loginByGoogle: (idToken: string) => Promise<void>;
   loginByApple: (idToken: string) => Promise<void>;
   /** Авторизация через deep-link (tg:// протокол). Принимает ответ от telegram-login-check */
   loginByTelegramDeepLink: (res: { token?: string; client?: ClientProfile; requires2FA?: boolean; tempToken?: string }) => void;
-  verifyEmail: (token: string) => Promise<void>;
+  verifyEmail: (token: string) => Promise<ClientRegistrationVerification | void>;
+  completeRegistration: (token: string, password: string) => Promise<void>;
   /** Подтвердить привязку email по токену из письма */
   verifyLinkEmail: (verificationToken: string) => Promise<void>;
   /** Ввести код 2FA после ответа requires2FA (пароль/Telegram уже проверены) */
@@ -173,7 +174,7 @@ export function ClientAuthProvider({ children }: { children: React.ReactNode }) 
   }, []);
 
   const register = useCallback(
-    async (data: { email: string; password: string; preferredLang?: string; preferredCurrency?: string; referralCode?: string; utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_content?: string; utm_term?: string }) => {
+    async (data: { email: string; password?: string; preferredLang?: string; preferredCurrency?: string; referralCode?: string; utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_content?: string; utm_term?: string }) => {
       const res = await api.clientRegister({
         email: data.email,
         password: data.password,
@@ -263,8 +264,9 @@ export function ClientAuthProvider({ children }: { children: React.ReactNode }) 
     }
   }, []);
 
-  const verifyEmail = useCallback(async (token: string) => {
+  const verifyEmail = useCallback(async (token: string): Promise<ClientRegistrationVerification | void> => {
     const res = await api.clientVerifyEmail(token);
+    if ("registrationToken" in res) return res;
     if ("requires2FA" in res && res.requires2FA) {
       setState((prev) => ({ ...prev, miniappAuthLoading: false, miniappAuthAttempted: true, pending2FAToken: res.tempToken }));
       return;
@@ -273,6 +275,12 @@ export function ClientAuthProvider({ children }: { children: React.ReactNode }) 
       setState({ token: res.token, client: res.client, miniappAuthLoading: false, miniappAuthAttempted: true, pending2FAToken: null, isNewTelegramUser: true });
       saveState(res.token, res.client);
     }
+  }, []);
+
+  const completeRegistration = useCallback(async (token: string, password: string) => {
+    const res = await api.clientCompleteRegistration(token, password);
+    setState({ token: res.token, client: res.client, miniappAuthLoading: false, miniappAuthAttempted: true, pending2FAToken: null, isNewTelegramUser: true });
+    saveState(res.token, res.client);
   }, []);
 
   const verifyLinkEmail = useCallback(async (verificationToken: string) => {
@@ -336,6 +344,7 @@ export function ClientAuthProvider({ children }: { children: React.ReactNode }) 
     loginByApple,
     loginByTelegramDeepLink,
     verifyEmail,
+    completeRegistration,
     verifyLinkEmail,
     submit2FACode,
     clearPending2FA,

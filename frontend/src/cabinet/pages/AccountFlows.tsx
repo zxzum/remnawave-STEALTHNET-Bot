@@ -97,18 +97,25 @@ function Verification({ linkEmail = false }: { linkEmail?: boolean }) {
   const token = params.get("token");
   const [status, setStatus] = useState<"loading" | "ok" | "error">("loading");
   const [message, setMessage] = useState("Проверяем защищённую ссылку…");
+  const [registration, setRegistration] = useState<{ registrationToken: string; email: string } | null>(null);
   useEffect(() => {
     if (!token) { setStatus("error"); setMessage("Ссылка недействительна"); return; }
     const verify = linkEmail ? verifyLinkEmail : verifyEmail;
-    void verify(token).then(() => {
+    void verify(token).then((result) => {
+      if (!linkEmail && result && "registrationToken" in result) setRegistration(result);
       setStatus("ok");
-      setMessage(linkEmail ? "Почта успешно привязана" : "Email подтверждён, аккаунт готов");
+      setMessage(linkEmail ? "Почта успешно привязана" : result && "registrationToken" in result ? "Email подтверждён, создайте пароль" : "Email подтверждён, аккаунт готов");
     }).catch((cause) => {
       setStatus("error");
       setMessage(cause instanceof Error ? cause.message : "Ссылка недействительна или истекла");
     });
   }, [linkEmail, token, verifyEmail, verifyLinkEmail]);
-  return <FlowShell><StatusIcon state={status} /><h1 className="mt-5 text-3xl font-extrabold">{linkEmail ? "Привязка почты" : "Подтверждение email"}</h1><p className={`mt-3 text-sm ${status === "error" ? "text-red-400" : "text-fog-500"}`}>{message}</p>{status === "ok" && <button onClick={() => navigate(linkEmail ? "/cabinet/profile" : "/cabinet/dashboard", { replace: true })} className="btn-primary mt-6 w-full px-6 py-4">Продолжить</button>}</FlowShell>;
+  const continuePath = linkEmail
+    ? "/cabinet/profile"
+    : registration
+      ? `/cabinet/register?registrationToken=${encodeURIComponent(registration.registrationToken)}&email=${encodeURIComponent(registration.email)}`
+      : "/cabinet/dashboard";
+  return <FlowShell><StatusIcon state={status} /><h1 className="mt-5 text-3xl font-extrabold">{linkEmail ? "Привязка почты" : "Подтверждение email"}</h1><p className={`mt-3 text-sm ${status === "error" ? "text-red-400" : "text-fog-500"}`}>{message}</p>{status === "ok" && <button onClick={() => navigate(continuePath, { replace: true })} className="btn-primary mt-6 w-full px-6 py-4">Продолжить</button>}</FlowShell>;
 }
 
 export function VerifyEmail() { return <Verification />; }

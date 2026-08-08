@@ -9,7 +9,6 @@ import {
   KeyRound,
   UserPlus,
   UserRound,
-  Sparkles,
   ShieldCheck,
   Check,
   ChevronRight,
@@ -309,14 +308,15 @@ export function Login() {
 
 /* ---------------- Регистрация (визард) ---------------- */
 
-type Step = "email" | "welcome" | "password" | "twofa" | "done";
+type Step = "email" | "password" | "twofa" | "done";
 
 export function Register() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { register, refreshProfile, state } = useClientAuth();
-  const [step, setStep] = useState<Step>("email");
-  const [email, setEmail] = useState("");
+  const { register, completeRegistration, refreshProfile, state } = useClientAuth();
+  const registrationToken = searchParams.get("registrationToken")?.trim() || "";
+  const [step, setStep] = useState<Step>(registrationToken ? "password" : "email");
+  const [email, setEmail] = useState(searchParams.get("email")?.trim() || "");
   const [agreed, setAgreed] = useState(true);
   const [sent, setSent] = useState(false);
   const [pw1, setPw1] = useState("");
@@ -335,16 +335,43 @@ export function Register() {
       await api.clientCompleteOnboarding(state.token);
       await refreshProfile();
     }
-    navigate("/cabinet/dashboard?bindTelegram=1", { replace: true });
+    navigate("/cabinet/dashboard?registration=success", { replace: true });
   }, [navigate, refreshProfile, state.token]);
   const finishExternal = useCallback(() => navigate("/cabinet/onboarding", { replace: true }), [navigate]);
   const showError = useCallback((message: string) => setError(message), []);
   const telegram = useTelegramDeepLinkAuth(config?.telegramBotUsername ?? null, finishExternal);
   const external = useExternalAuth(config, finishExternal, showError);
+  const skipEmailVerification = Boolean(config?.skipEmailVerification);
+
+  const submitEmail = async () => {
+    if (!emailValid || !agreed || loading) return;
+    setLoading(true);
+    setError("");
+    const utm = Object.fromEntries(
+      ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"]
+        .map((key) => [key, searchParams.get(key)?.trim()] as const)
+        .filter((entry): entry is readonly [string, string] => Boolean(entry[1])),
+    );
+    try {
+      await register({
+        email: email.trim(),
+        preferredLang: config?.defaultLanguage || "ru",
+        preferredCurrency: (config?.defaultCurrency || "usd").toLowerCase(),
+        referralCode: searchParams.get("ref")?.trim() || undefined,
+        ...utm,
+      });
+      setSent(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось отправить письмо");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const continueEmail = () => {
-    if (sent) return;
-    setStep("welcome");
+    if (sent || loading) return;
+    if (skipEmailVerification) setStep("password");
+    else void submitEmail();
   };
 
   useEffect(() => { void api.getPublicConfig().then(setConfig).catch(() => undefined); }, []);
@@ -376,14 +403,16 @@ export function Register() {
         .filter((entry): entry is readonly [string, string] => Boolean(entry[1])),
     );
     try {
-      const result = await register({
-        email: email.trim(),
-        password: pw1,
-        preferredLang: config?.defaultLanguage || "ru",
-        preferredCurrency: (config?.defaultCurrency || "usd").toLowerCase(),
-        referralCode: searchParams.get("ref")?.trim() || undefined,
-        ...utm,
-      });
+      const result = registrationToken
+        ? await completeRegistration(registrationToken, pw1)
+        : await register({
+            email: email.trim(),
+            password: pw1,
+            preferredLang: config?.defaultLanguage || "ru",
+            preferredCurrency: (config?.defaultCurrency || "usd").toLowerCase(),
+            referralCode: searchParams.get("ref")?.trim() || undefined,
+            ...utm,
+          });
       if (result?.requiresVerification) {
         setSent(true);
         setStep("email");
@@ -445,10 +474,14 @@ export function Register() {
                 <motion.div
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
+                  role="alert"
                   className="mt-4 flex items-center gap-3 rounded-2xl border border-mint-400/25 bg-mint-500/10 p-4 text-sm font-semibold text-mint-400"
                 >
                   <Mail className="h-5 w-5 shrink-0" />
-                  На вашу почту отправлена ссылка для подтверждения.
+                  <span className="min-w-0 flex-1 text-left">Ссылка для подтверждения отправлена на {email}.</span>
+                  <button type="button" onClick={() => void submitEmail()} disabled={loading} className="shrink-0 text-xs underline disabled:opacity-50">
+                    {loading ? "Отправляем…" : "Отправить ещё раз"}
+                  </button>
                 </motion.div>
               )}
 
@@ -469,11 +502,11 @@ export function Register() {
               </label>
 
               <button
-                disabled={!emailValid || !agreed || sent}
+                disabled={!emailValid || !agreed || sent || loading}
                 onClick={continueEmail}
                 className="btn-primary mt-5 w-full px-6 py-4 text-base disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {sent ? "Проверьте почту" : "Продолжить"}
+                {sent ? "Проверьте почту" : loading ? "Отправляем…" : "Продолжить"}
               </button>
 
               <Divider />
@@ -490,23 +523,6 @@ export function Register() {
                   Войти
                 </Link>
               </p>
-            </div>
-          )}
-
-          {step === "welcome" && (
-            <div className="text-center">
-              <div className="icon-tile mx-auto h-16 w-16 rounded-2xl">
-                <Sparkles className="h-7 w-7" />
-              </div>
-              <h1 className="mt-5 text-3xl font-extrabold tracking-tight">Добро пожаловать!</h1>
-              <p className="mt-2 text-sm text-fog-500">Аккаунт успешно создан</p>
-              <p className="mt-1 font-bold">{email || "you@example.com"}</p>
-              <p className="mt-4 text-sm leading-relaxed text-fog-500">
-                Давайте настроим ваш аккаунт за пару шагов. Это займёт меньше минуты.
-              </p>
-              <button onClick={() => setStep("password")} className="btn-primary mt-7 w-full px-6 py-4 text-base">
-                Начать <ChevronRight className="h-4 w-4" />
-              </button>
             </div>
           )}
 

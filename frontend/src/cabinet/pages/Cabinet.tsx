@@ -286,6 +286,29 @@ function EmailHintDialog() {
   );
 }
 
+function RegistrationSuccessDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Dialog.Root open={open} onOpenChange={(value) => !value && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-ink-950/70 backdrop-blur-md" />
+        <Dialog.Content className="glass-strong fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-4xl p-6 text-center">
+          <div className="icon-tile mx-auto h-14 w-14 rounded-2xl"><Send className="h-6 w-6" /></div>
+          <Dialog.Title className="mt-4 text-xl font-extrabold">Аккаунт успешно создан</Dialog.Title>
+          <Dialog.Description className="mt-3 text-sm leading-relaxed text-fog-400">
+            Рекомендуем привязать Telegram в настройках профиля, чтобы упростить вход и управление подпиской.
+          </Dialog.Description>
+          <Link to="/cabinet/profile" onClick={onClose} className="btn-primary mt-5 flex w-full items-center justify-center gap-2 px-5 py-3.5 text-sm">
+            <Send className="h-4 w-4" /> Открыть настройки
+          </Link>
+          <button onClick={onClose} className="mt-2 w-full rounded-xl py-2.5 text-sm font-semibold text-fog-500 transition-colors hover:text-fog-100">
+            Позже
+          </button>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 export default function Cabinet() {
   const { availableTrials, reload, subscriptions, tariffGroups, toast } = useApp();
   const { state } = useClientAuth();
@@ -300,6 +323,7 @@ export default function Cabinet() {
   const rest = subscriptions.filter((s) => s.id !== main?.id);
   const bindOpen = params.get("bindTelegram") === "1";
   const trialOpen = params.get("trial") === "1";
+  const registrationOpen = params.toString().includes("registration=success");
   const closeTrial = () => {
     const next = new URLSearchParams(params);
     next.delete("trial");
@@ -316,6 +340,7 @@ export default function Cabinet() {
       }}
     />
   ) : null;
+  const registrationDialog = <RegistrationSuccessDialog open={registrationOpen} onClose={() => setParams({})} />;
 
   if (!main) {
     return (
@@ -332,6 +357,7 @@ export default function Cabinet() {
         {trialDialog}
         <BindTelegramDialog open={bindOpen} onClose={() => setParams({})} />
         <EmailHintDialog />
+        {registrationDialog}
       </div>
     );
   }
@@ -385,6 +411,7 @@ export default function Cabinet() {
 
       <BindTelegramDialog open={bindOpen} onClose={() => setParams({})} />
       <EmailHintDialog />
+      {registrationDialog}
       {trialDialog}
       <PlanDialog plan={renewalPlan} open={renewOpen} onOpenChange={setRenewOpen} />
     </div>
