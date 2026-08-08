@@ -692,6 +692,7 @@ type SubscriptionActivationTarget = {
   extraDevicesMonthlyPrice: number;
   trialId: string | null;
   currentPricePerDay: number | null;
+  trial?: TrialConversionPolicy | null;
 };
 
 type ExtendSubscriptionDependencies = {
@@ -764,6 +765,7 @@ export async function extendSecondarySubscription(
           extraDevicesMonthlyPrice: true,
           trialId: true,
           currentPricePerDay: true,
+          trial: { select: { tariffId: true, convertEnabled: true, convertAllTariffs: true, convertTariffIds: true } },
         },
       }));
   if (!sec) {
@@ -774,6 +776,9 @@ export async function extendSecondarySubscription(
   }
   if (!sec.remnawaveUuid) {
     return { ok: false, error: "Доп. подписка не привязана к Remnawave", status: 400 };
+  }
+  if (sec.trialId && (!sec.trial || !trialAllowsTariff(sec.trial, tariff.id ?? ""))) {
+    return { ok: false, error: "Переход с пробного тарифа на этот тариф запрещён", status: 400 };
   }
 
   const userRes = await (dependencies.getUser ?? remnaGetUser)(sec.remnawaveUuid);
@@ -990,7 +995,6 @@ export async function findConvertibleSubscription(
   const perCategorySingle = !!(tariff?.categoryId && tariff.category?.singleSubscriptionMode);
   // Мульти включены → работаем ТОЛЬКО для категорий с singleSubscriptionMode (старое поведение).
   // Мульти выключены → глобальный single: конвертируем существующую для ЛЮБОГО тарифа.
-  if (multiSubEnabled && !perCategorySingle) return null;
 
   const commonWhere = {
     ownerId: clientId,
@@ -1035,17 +1039,19 @@ export async function findConvertibleSubscription(
   // Мульти выкл (глобальный single) → берём ЛЮБУЮ подписку клиента (без фильтра категории);
   // мульти вкл (категория-single) → только подписки той же категории.
   const secondaryScope = multiSubEnabled ? { tariff: { categoryId: tariff!.categoryId } } : {};
-  candidate =
-    (await prisma.subscription.findFirst({
-      where: { ...commonWhere, tariffId, trialId: null },
-      orderBy: { expireAt: { sort: "desc", nulls: "last" } },
-      select: candidateSelect,
-    })) ??
-    (await prisma.subscription.findFirst({
-      where: { ...commonWhere, ...secondaryScope, trialId: null },
-      orderBy: { expireAt: { sort: "desc", nulls: "last" } },
-      select: candidateSelect,
-    }));
+  if (!candidate) {
+    candidate =
+      (await prisma.subscription.findFirst({
+        where: { ...commonWhere, tariffId, trialId: null },
+        orderBy: { expireAt: { sort: "desc", nulls: "last" } },
+        select: candidateSelect,
+      })) ??
+      (await prisma.subscription.findFirst({
+        where: { ...commonWhere, ...secondaryScope, trialId: null },
+        orderBy: { expireAt: { sort: "desc", nulls: "last" } },
+        select: candidateSelect,
+      }));
+  }
   if (!candidate) return null;
   return {
     id: candidate.id,

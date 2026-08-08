@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 
 process.env.DATABASE_URL ??= "postgresql://postgres:postgres@localhost:5432/stealthnet_test";
 process.env.JWT_SECRET ??= "test-secret-that-is-long-enough-for-validation";
@@ -39,4 +40,15 @@ test("disabled trial conversion is never eligible", () => {
     convertAllTariffs: true,
     convertTariffIds: ["paid-1"],
   }, "trial-tariff"), false);
+});
+
+test("eligible trial is selected before multi-sub category fallback", async () => {
+  const source = await readFile(new URL("./tariff-activation.service.ts", import.meta.url), "utf8");
+  const start = source.indexOf("export async function findConvertibleSubscription");
+  const body = source.slice(start, source.indexOf("export async function", start + 1));
+  const trialQuery = body.indexOf("const trialCandidates");
+  const categoryGuard = body.indexOf("if (!candidate && multiSubEnabled && !perCategorySingle) return null");
+  const fallbackGuard = body.indexOf("if (!candidate) {");
+  assert.ok(trialQuery > 0 && trialQuery < categoryGuard);
+  assert.ok(fallbackGuard > trialQuery);
 });
