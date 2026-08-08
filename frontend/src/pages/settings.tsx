@@ -818,6 +818,10 @@ export function SettingsPage() {
         subscriptionExpiryReminderHours: settings.subscriptionExpiryReminderHours ?? "3, 0.5",
         subscriptionExpiryReminderText: settings.subscriptionExpiryReminderText || null,
         subscriptionExpiryReminderButtonText: settings.subscriptionExpiryReminderButtonText ?? "💳 Продлить подписку",
+        trialExpiryEmailReminderEnabled: settings.trialExpiryEmailReminderEnabled !== false,
+        trialExpiryEmailReminderHours: settings.trialExpiryEmailReminderHours ?? "24",
+        subscriptionExpiryEmailReminderEnabled: settings.subscriptionExpiryEmailReminderEnabled !== false,
+        subscriptionExpiryEmailReminderHours: settings.subscriptionExpiryEmailReminderHours ?? "24",
         serviceName: settings.serviceName,
         logo: settings.logo ?? null,
         logoBot: settings.logoBot ?? null,
@@ -2258,6 +2262,8 @@ export function SettingsPage() {
                           hours: settings.trialExpiryReminderHours ?? "3, 0.5",
                           text: settings.trialExpiryReminderText ?? "",
                           button: settings.trialExpiryReminderButtonText ?? "💳 Выбрать тариф",
+                          emailEnabled: settings.trialExpiryEmailReminderEnabled !== false,
+                          emailHours: settings.trialExpiryEmailReminderHours ?? "24",
                           placeholder: "⏳ <b>Пробный период скоро закончится</b>\n\nТриал «{{name}}» закончится примерно через <b>{{time}}</b>.\nВыберите тариф, чтобы сохранить доступ к VPN.",
                         },
                         {
@@ -2267,6 +2273,8 @@ export function SettingsPage() {
                           hours: settings.subscriptionExpiryReminderHours ?? "3, 0.5",
                           text: settings.subscriptionExpiryReminderText ?? "",
                           button: settings.subscriptionExpiryReminderButtonText ?? "💳 Продлить подписку",
+                          emailEnabled: settings.subscriptionExpiryEmailReminderEnabled !== false,
+                          emailHours: settings.subscriptionExpiryEmailReminderHours ?? "24",
                           placeholder: "⏳ <b>Подписка скоро закончится</b>\n\nТариф «{{name}}» закончится примерно через <b>{{time}}</b>.\nПродлите подписку, чтобы сохранить доступ к VPN.",
                         },
                       ]).map((reminder) => (
@@ -2331,6 +2339,40 @@ export function SettingsPage() {
                             />
                             <p className="text-[11px] text-muted-foreground">
                               Плейсхолдеры: <code>{`{{name}}`}</code> — название, <code>{`{{time}}`}</code> — оставшееся время. Пусто = стандартный текст.
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 space-y-2.5">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-2">
+                                <Mail className="h-4 w-4 text-cyan-400" />
+                                <Label className="text-xs font-medium">Напоминать по email</Label>
+                              </div>
+                              <Switch
+                                checked={reminder.emailEnabled}
+                                onCheckedChange={(checked: boolean) => setSettings((s) => s ? {
+                                  ...s,
+                                  ...(reminder.kind === "trial"
+                                    ? { trialExpiryEmailReminderEnabled: checked === true }
+                                    : { subscriptionExpiryEmailReminderEnabled: checked === true }),
+                                } : s)}
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-[11px] text-muted-foreground">За сколько часов отправить</Label>
+                              <Input
+                                value={reminder.emailHours}
+                                disabled={!reminder.emailEnabled}
+                                onChange={(e) => setSettings((s) => s ? {
+                                  ...s,
+                                  ...(reminder.kind === "trial"
+                                    ? { trialExpiryEmailReminderHours: e.target.value }
+                                    : { subscriptionExpiryEmailReminderHours: e.target.value }),
+                                } : s)}
+                                placeholder="24"
+                              />
+                            </div>
+                            <p className="text-[11px] text-muted-foreground">
+                              По умолчанию: одно письмо за 24 часа. Текст настраивается в разделе «Почта → Шаблоны».
                             </p>
                           </div>
                         </div>

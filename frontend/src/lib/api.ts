@@ -3306,6 +3306,10 @@ export type UpdateSettingsPayload = {
   subscriptionExpiryReminderHours?: string;
   subscriptionExpiryReminderText?: string | null;
   subscriptionExpiryReminderButtonText?: string;
+  trialExpiryEmailReminderEnabled?: boolean;
+  trialExpiryEmailReminderHours?: string;
+  subscriptionExpiryEmailReminderEnabled?: boolean;
+  subscriptionExpiryEmailReminderHours?: string;
   serviceName?: string;
   logo?: string | null;
   logoBot?: string | null;
@@ -3874,6 +3878,10 @@ export interface AdminSettings {
   subscriptionExpiryReminderHours?: string;
   subscriptionExpiryReminderText?: string | null;
   subscriptionExpiryReminderButtonText?: string;
+  trialExpiryEmailReminderEnabled?: boolean;
+  trialExpiryEmailReminderHours?: string;
+  subscriptionExpiryEmailReminderEnabled?: boolean;
+  subscriptionExpiryEmailReminderHours?: string;
   serviceName: string;
   logo?: string | null;
   logoBot?: string | null;

@@ -13,7 +13,9 @@ import {
   notifyTrialExpiry,
   sendTelegramToUser,
 } from "../notification/telegram-notify.service.js";
+import { sendExpiryReminderEmail } from "../notification/expiry-email-notify.service.js";
 import { getSystemConfig } from "../client/client.service.js";
+import { isMailConfigured, mailConfigFromSystem } from "../mail/mail.service.js";
 
 const NAME = "subscription-expiry-and-deletion-maintenance";
 const EXPRESSION = "*/5 * * * *";
@@ -39,6 +41,15 @@ export function expiringSubscriptionKind(subscription: {
 }): "trial" | "paid" | null {
   if (subscription.trialId || (!subscription.tariffId && subscription.owner.trialUsed)) return "trial";
   return subscription.tariffId ? "paid" : null;
+}
+
+export function expiryReminderKey(
+  channel: "telegram" | "email",
+  kind: "trial" | "paid",
+  offset: number,
+  expireAt: Date,
+): string {
+  return `${channel}:${kind}-expiry:${offset}:${expireAt.toISOString()}`;
 }
 
 const ONBOARDING_REMINDER_DELAYS_MS = [15 * 60_000, 6 * 60 * 60_000, 24 * 60 * 60_000];
@@ -115,14 +126,24 @@ export async function notifyExpiringSubscriptions(now = new Date()): Promise<num
   const paidOffsets = config.subscriptionExpiryReminderEnabled
     ? parseReminderHours(config.subscriptionExpiryReminderHours)
     : [];
-  const maxOffset = Math.max(0, ...trialOffsets, ...paidOffsets);
+  const emailConfigured = Boolean(
+    (config.publicAppUrl ?? "").trim()
+    && isMailConfigured(mailConfigFromSystem(config)),
+  );
+  const trialEmailOffsets = emailConfigured && config.trialExpiryEmailReminderEnabled
+    ? parseReminderHours(config.trialExpiryEmailReminderHours, "24")
+    : [];
+  const paidEmailOffsets = emailConfigured && config.subscriptionExpiryEmailReminderEnabled
+    ? parseReminderHours(config.subscriptionExpiryEmailReminderHours, "24")
+    : [];
+  const maxOffset = Math.max(0, ...trialOffsets, ...paidOffsets, ...trialEmailOffsets, ...paidEmailOffsets);
   if (!maxOffset) return 0;
   const subscriptions = await prisma.subscription.findMany({
     where: {
       deletionRequestedAt: null,
       purchasedAsGift: false,
       expireAt: { gt: now, lte: new Date(now.getTime() + maxOffset * 60_000) },
-      owner: { telegramId: { not: null } },
+      owner: { OR: [{ telegramId: { not: null } }, { email: { not: null } }] },
     },
     select: {
       id: true,
@@ -131,40 +152,77 @@ export async function notifyExpiringSubscriptions(now = new Date()): Promise<num
       tariffId: true,
       trial: { select: { name: true } },
       tariff: { select: { name: true } },
-      owner: { select: { telegramId: true, trialUsed: true } },
+      owner: { select: { telegramId: true, email: true, trialUsed: true } },
     },
   });
   let sent = 0;
   for (const subscription of subscriptions) {
-    if (!subscription.expireAt || !subscription.owner.telegramId) continue;
+    if (!subscription.expireAt) continue;
     const kind = expiringSubscriptionKind(subscription);
-    const offset = expiryReminderOffset(subscription.expireAt, now, kind === "trial" ? trialOffsets : paidOffsets);
-    if (!kind || !offset) continue;
-    const key = `${kind}-expiry:${offset}:${subscription.expireAt.toISOString()}`;
-    const claimed = await prisma.subscription.updateMany({
-      where: { id: subscription.id, NOT: { lastNotifiedKey: key } },
-      data: { lastNotifiedKey: key },
-    });
-    if (claimed.count === 0) continue;
-    if (kind === "trial") {
-      await notifyTrialExpiry(
-        subscription.owner.telegramId,
-        subscription.trial?.name ?? subscription.tariff?.name ?? "Пробный период",
-        offset,
-        config.trialExpiryReminderText ?? DEFAULT_TRIAL_EXPIRY_TEXT,
-        config.trialExpiryReminderButtonText,
-      );
-    } else {
-      await notifySubscriptionExpiry(
-        subscription.owner.telegramId,
-        subscription.id,
-        subscription.tariff?.name ?? "Подписка",
-        offset,
-        config.subscriptionExpiryReminderText ?? DEFAULT_SUBSCRIPTION_EXPIRY_TEXT,
-        config.subscriptionExpiryReminderButtonText,
-      );
+    if (!kind) continue;
+
+    const displayName = kind === "trial"
+      ? subscription.trial?.name ?? subscription.tariff?.name ?? "Пробный период"
+      : subscription.tariff?.name ?? "Подписка";
+    const telegramOffset = subscription.owner.telegramId
+      ? expiryReminderOffset(subscription.expireAt, now, kind === "trial" ? trialOffsets : paidOffsets)
+      : null;
+    if (telegramOffset && subscription.owner.telegramId) {
+      const key = expiryReminderKey("telegram", kind, telegramOffset, subscription.expireAt);
+      const claimed = await prisma.subscription.updateMany({
+        where: { id: subscription.id, NOT: { expiryReminderKey: key } },
+        data: { expiryReminderKey: key },
+      });
+      if (claimed.count > 0) {
+        if (kind === "trial") {
+          await notifyTrialExpiry(
+            subscription.owner.telegramId,
+            displayName,
+            telegramOffset,
+            config.trialExpiryReminderText ?? DEFAULT_TRIAL_EXPIRY_TEXT,
+            config.trialExpiryReminderButtonText,
+          );
+        } else {
+          await notifySubscriptionExpiry(
+            subscription.owner.telegramId,
+            subscription.id,
+            displayName,
+            telegramOffset,
+            config.subscriptionExpiryReminderText ?? DEFAULT_SUBSCRIPTION_EXPIRY_TEXT,
+            config.subscriptionExpiryReminderButtonText,
+          );
+        }
+        sent++;
+      }
     }
-    sent++;
+
+    const emailOffset = subscription.owner.email
+      ? expiryReminderOffset(subscription.expireAt, now, kind === "trial" ? trialEmailOffsets : paidEmailOffsets)
+      : null;
+    if (emailOffset && subscription.owner.email) {
+      const key = expiryReminderKey("email", kind, emailOffset, subscription.expireAt);
+      const claimed = await prisma.subscription.updateMany({
+        where: { id: subscription.id, NOT: { expiryEmailReminderKey: key } },
+        data: { expiryEmailReminderKey: key },
+      });
+      if (claimed.count > 0) {
+        const delivered = await sendExpiryReminderEmail(
+          config,
+          kind === "trial" ? "trial" : "subscription",
+          subscription.owner.email,
+          displayName,
+          emailOffset,
+        );
+        if (delivered) {
+          sent++;
+        } else {
+          await prisma.subscription.updateMany({
+            where: { id: subscription.id, expiryEmailReminderKey: key },
+            data: { expiryEmailReminderKey: null },
+          });
+        }
+      }
+    }
   }
   return sent;
 }

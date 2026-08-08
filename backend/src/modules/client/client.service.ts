@@ -165,6 +165,8 @@ const SYSTEM_CONFIG_KEYS = [
   "trial_expiry_reminder_text", "trial_expiry_reminder_button_text",
   "subscription_expiry_reminder_enabled", "subscription_expiry_reminder_hours",
   "subscription_expiry_reminder_text", "subscription_expiry_reminder_button_text",
+  "trial_expiry_email_reminder_enabled", "trial_expiry_email_reminder_hours",
+  "subscription_expiry_email_reminder_enabled", "subscription_expiry_email_reminder_hours",
   // тогглы кнопок на экране «Тарифы» бота (default true)
   "bot_tariffs_show_extra_devices_button",
   "bot_tariffs_show_balance_button",
@@ -809,6 +811,10 @@ async function loadSystemConfigFromDb() {
     subscriptionExpiryReminderHours: (map.subscription_expiry_reminder_hours ?? "").trim() || "3, 0.5",
     subscriptionExpiryReminderText: (map.subscription_expiry_reminder_text ?? "").trim() || null,
     subscriptionExpiryReminderButtonText: (map.subscription_expiry_reminder_button_text ?? "").trim() || "💳 Продлить подписку",
+    trialExpiryEmailReminderEnabled: (map.trial_expiry_email_reminder_enabled ?? "true") !== "false",
+    trialExpiryEmailReminderHours: (map.trial_expiry_email_reminder_hours ?? "").trim() || "24",
+    subscriptionExpiryEmailReminderEnabled: (map.subscription_expiry_email_reminder_enabled ?? "true") !== "false",
+    subscriptionExpiryEmailReminderHours: (map.subscription_expiry_email_reminder_hours ?? "").trim() || "24",
     // тогглы кнопок на экране «Тарифы»: дефолт true, выключение явное.
     botTariffsShowExtraDevicesButton: map.bot_tariffs_show_extra_devices_button !== "false" && map.bot_tariffs_show_extra_devices_button !== "0",
     botTariffsShowBalanceButton: map.bot_tariffs_show_balance_button !== "false" && map.bot_tariffs_show_balance_button !== "0",

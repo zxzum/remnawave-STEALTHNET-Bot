@@ -34,3 +34,27 @@ test("payment notification guide images are packaged", async () => {
     assert.ok((await stat(new URL(`../../assets/guides/${name}`, import.meta.url))).size > 0);
   }
 });
+
+type CronModule = typeof import("./subscription-maintenance.cron.js") & {
+  expiryReminderKey?: (channel: "telegram" | "email", kind: "trial" | "paid", offset: number, expireAt: Date) => string;
+};
+let cron: CronModule | null = null;
+try {
+  cron = await import("./subscription-maintenance.cron.js") as CronModule;
+} catch {
+  // RED: helper is not implemented yet
+}
+
+test("Telegram and email expiry reminders use independent deduplication keys", () => {
+  const expiryKey = cron?.expiryReminderKey;
+  assert.equal(typeof expiryKey, "function");
+  if (!cron) return;
+  if (!expiryKey) return;
+  const expireAt = new Date("2026-07-28T12:00:00.000Z");
+  assert.notEqual(
+    expiryKey("telegram", "paid", 180, expireAt),
+    expiryKey("email", "paid", 180, expireAt),
+  );
+  assert.match(expiryKey("email", "trial", 1440, expireAt), /^email:trial-expiry:1440:/);
+  assert.equal(expiryReminderOffset(expireAt, new Date("2026-07-27T12:00:00.000Z"), parseReminderHours("24")), 1440);
+});

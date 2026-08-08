@@ -1086,6 +1086,8 @@ model Subscription {
   /// T-autorenew (12.05.2026, WolfVPN): метка последнего уведомления (notif_template_id:timestamp)
   /// — чтобы не слать одно и то же уведомление дважды в течение N часов.
   lastNotifiedKey          String?                        @map("last_notified_key")
+  expiryReminderKey        String?                        @map("expiry_reminder_key")
+  expiryEmailReminderKey   String?                        @map("expiry_email_reminder_key")
   /// T-expire-sync (13.05.2026, WolfVPN): дата истечения подписки в Remnawave.
   /// Кешируем в БД для быстрых фильтров (broadcast «Активные/Истёкшие», auto-renew cron).
   /// Синхронизируется при каждом upsert/extend через extractCurrentExpireAt из Remna-ответа.

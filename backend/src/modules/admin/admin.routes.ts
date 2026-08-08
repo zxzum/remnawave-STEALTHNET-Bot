@@ -3413,6 +3413,10 @@ const updateSettingsSchema = z.object({
   subscriptionExpiryReminderHours: z.string().max(500).optional(),
   subscriptionExpiryReminderText: z.string().max(4000).nullable().optional(),
   subscriptionExpiryReminderButtonText: z.string().max(64).optional(),
+  trialExpiryEmailReminderEnabled: z.boolean().optional(),
+  trialExpiryEmailReminderHours: z.string().max(500).optional(),
+  subscriptionExpiryEmailReminderEnabled: z.boolean().optional(),
+  subscriptionExpiryEmailReminderHours: z.string().max(500).optional(),
   subscriptionPageConfig: z.string().max(500000).nullable().optional(),
   supportLink: z.string().max(2000).nullable().optional(),
   agreementLink: z.string().max(2000).nullable().optional(),
@@ -4130,6 +4134,8 @@ adminRouter.patch("/settings", async (req, res) => {
   for (const [key, settingKey] of [
     ["trialExpiryReminderEnabled", "trial_expiry_reminder_enabled"],
     ["subscriptionExpiryReminderEnabled", "subscription_expiry_reminder_enabled"],
+    ["trialExpiryEmailReminderEnabled", "trial_expiry_email_reminder_enabled"],
+    ["subscriptionExpiryEmailReminderEnabled", "subscription_expiry_email_reminder_enabled"],
   ] as const) {
     if (updates[key] !== undefined) {
       const value = updates[key] ? "true" : "false";
@@ -4143,6 +4149,8 @@ adminRouter.patch("/settings", async (req, res) => {
     ["subscriptionExpiryReminderHours", "subscription_expiry_reminder_hours"],
     ["subscriptionExpiryReminderText", "subscription_expiry_reminder_text"],
     ["subscriptionExpiryReminderButtonText", "subscription_expiry_reminder_button_text"],
+    ["trialExpiryEmailReminderHours", "trial_expiry_email_reminder_hours"],
+    ["subscriptionExpiryEmailReminderHours", "subscription_expiry_email_reminder_hours"],
   ] as const) {
     if (updates[key] !== undefined) {
       const value = String(updates[key] ?? "").trim();
