@@ -282,7 +282,10 @@ model PendingEmailLink {
 model PendingEmailRegistration {
   id                String   @id @default(cuid())
   email             String
-  passwordHash      String   @map("password_hash")
+  passwordHash      String?  @map("password_hash")
+  emailVerifiedAt   DateTime? @map("email_verified_at")
+  registrationIp    String?  @map("registration_ip")
+  revokedAt         DateTime? @map("revoked_at")
   preferredLang     String   @default("ru") @map("preferred_lang")
   preferredCurrency String   @default("usd") @map("preferred_currency")
   referralCode      String?  @map("referral_code")
@@ -296,7 +299,8 @@ model PendingEmailRegistration {
   createdAt         DateTime @default(now()) @map("created_at")
 
   @@index([verificationToken])
-  @@index([email])
+  @@index([email, createdAt])
+  @@index([registrationIp, createdAt])
   @@map("pending_email_registrations")
 }
 

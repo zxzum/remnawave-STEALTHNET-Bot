@@ -65,6 +65,7 @@ import { validateEmailForSignup } from "../signup-protection/email-blocklist.js"
 import { configuredAssetUrl } from "./bot-assets.routes.js";
 import { toClientTrafficQuota } from "../squad-traffic/squad-traffic.client.js";
 import { applyTrafficEntitlement } from "../squad-traffic/traffic-entitlement.service.js";
+import { EMAIL_VERIFICATION_IP_WINDOW_MS, getEmailRegistrationRetryAfter } from "./email-registration-policy.js";
 
 /** Извлекает реальный IP клиента (с учётом trust proxy). */
 function getRequestIp(req: Request): string | null {
@@ -207,7 +208,8 @@ clientAuthRouter.post("/register", async (req, res) => {
 
   const data = body.data;
   const email = data.email?.trim().toLowerCase();
-  const hasEmail = Boolean(email && data.password);
+  const hasEmail = Boolean(email);
+  const hasPassword = Boolean(data.password);
   const hasTelegram = data.telegramId;
 
   if (!hasEmail && !hasTelegram) {
@@ -222,11 +224,15 @@ clientAuthRouter.post("/register", async (req, res) => {
   }
 
   // Регистрация по email: создаём ожидание и отправляем письмо с ссылкой
-  if (hasEmail) {
+  if (hasEmail && (!hasTelegram || hasPassword)) {
     const existing = await prisma.client.findUnique({ where: { email } });
     if (existing) return res.status(400).json({ message: "Этот email уже зарегистрирован" });
 
     const config = await getSystemConfig();
+
+    if (config.skipEmailVerification && !hasPassword) {
+      return res.status(400).json({ message: "Укажите email и пароль или войдите через Telegram" });
+    }
 
     // ——— Антибот-защита: блок-лист доменов и паттернов ———
     if (config.signupProtectionEnabled !== false) {
@@ -247,7 +253,7 @@ clientAuthRouter.post("/register", async (req, res) => {
     const clientIp = getRequestIp(req);
     const isFromBot = typeof req.headers["x-telegram-bot-token"] === "string"
       && (req.headers["x-telegram-bot-token"] as string).length > 10;
-    if (clientIp && !isFromBot && config.signupProtectionEnabled !== false) {
+    if (config.skipEmailVerification && clientIp && !isFromBot && config.signupProtectionEnabled !== false) {
       const WINDOW_MS = 60_000; // 60 секунд
       const since = new Date(Date.now() - WINDOW_MS);
       const recentFromIp = await prisma.client.count({
@@ -322,21 +328,42 @@ clientAuthRouter.post("/register", async (req, res) => {
       return res.status(503).json({ message: "Не задан публичный адрес приложения в настройках." });
     }
 
-    const verificationToken = randomBytes(32).toString("hex");
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 ч
-
-    const referralCode = generateReferralCode();
-    let referrerId: string | null = null;
-    if (data.referralCode) {
-      const referrer = await prisma.client.findFirst({ where: { referralCode: data.referralCode } });
-      if (referrer) referrerId = referrer.id;
+    const now = new Date();
+    const latestPending = await prisma.pendingEmailRegistration.findFirst({
+      where: { email: email!, revokedAt: null, expiresAt: { gt: now } },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    });
+    const ipSends = clientIp
+      ? await prisma.pendingEmailRegistration.findMany({
+          where: {
+            registrationIp: clientIp,
+            createdAt: { gte: new Date(now.getTime() - EMAIL_VERIFICATION_IP_WINDOW_MS) },
+          },
+          select: { createdAt: true },
+        })
+      : [];
+    const retryAfter = getEmailRegistrationRetryAfter(
+      now,
+      latestPending?.createdAt ?? null,
+      ipSends.map(({ createdAt }) => createdAt),
+    );
+    if (retryAfter !== null) {
+      res.setHeader("Retry-After", retryAfter);
+      return res.status(429).json({
+        message: `Слишком много запросов. Попробуйте через ${retryAfter} сек.`,
+        retryAfter,
+      });
     }
-    const passwordHash = await hashPassword(data.password!);
 
-    await prisma.pendingEmailRegistration.create({
+    const verificationToken = randomBytes(32).toString("hex");
+    const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 ч
+
+    const pending = await prisma.pendingEmailRegistration.create({
       data: {
         email: email!,
-        passwordHash,
+        passwordHash: null,
+        registrationIp: clientIp,
         preferredLang: data.preferredLang,
         preferredCurrency: data.preferredCurrency,
         referralCode: data.referralCode || null,
@@ -349,8 +376,6 @@ clientAuthRouter.post("/register", async (req, res) => {
         expiresAt,
       },
     });
-    // IP/UA сохраним в Client при подтверждении письма (см. /verify-email)
-    void clientIp;
 
     const verificationLink = `${appUrl}/cabinet/verify-email?token=${verificationToken}`;
     // письмо рендерится из редактируемого шаблона
@@ -365,9 +390,14 @@ clientAuthRouter.post("/register", async (req, res) => {
       : { ok: false as const, error: "email_verification template missing" };
     console.log(`[register] Email send result to ${email}:`, sendResult);
     if (!sendResult.ok) {
-      await prisma.pendingEmailRegistration.deleteMany({ where: { verificationToken } }).catch(() => {});
+      await prisma.pendingEmailRegistration.delete({ where: { id: pending.id } }).catch(() => {});
       return res.status(500).json({ message: "Не удалось отправить письмо подтверждения. Попробуйте позже." });
     }
+
+    await prisma.pendingEmailRegistration.updateMany({
+      where: { email: email!, createdAt: { lt: pending.createdAt }, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
 
     return res.status(201).json({ message: "Проверьте почту, чтобы завершить регистрацию", requiresVerification: true });
   }
@@ -510,6 +540,7 @@ clientAuthRouter.post("/verify-email", async (req, res) => {
     where: { verificationToken: token },
   });
   if (!pending) return res.status(400).json({ message: "Ссылка недействительна или устарела" });
+  if (pending.revokedAt) return res.status(400).json({ message: "Ссылка недействительна или устарела" });
   if (new Date() > pending.expiresAt) {
     await prisma.pendingEmailRegistration.delete({ where: { id: pending.id } }).catch(() => {});
     return res.status(400).json({ message: "Ссылка истекла — зарегистрируйтесь заново." });
@@ -525,52 +556,14 @@ clientAuthRouter.post("/verify-email", async (req, res) => {
     return res.json(auth);
   }
 
-  // Не создаём пользователя в Remna при регистрации — клиент неактивен до триала или оплаты тарифа.
-  const referralCode = generateReferralCode();
-  let referrerId: string | null = null;
-  if (pending.referralCode) {
-    const referrer = await prisma.client.findFirst({ where: { referralCode: pending.referralCode } });
-    if (referrer) referrerId = referrer.id;
+  if (!pending.emailVerifiedAt) {
+    await prisma.pendingEmailRegistration.update({
+      where: { id: pending.id },
+      data: { emailVerifiedAt: new Date() },
+    });
   }
 
-  // Email-регистрация — всегда primary bot (веб-кабинет, без привязки к клону).
-  const primaryBot = await getPrimaryBot();
-  if (!primaryBot) {
-    return res.status(503).json({ message: "Сервис временно недоступен. Обратитесь в поддержку." });
-  }
-
-  const configForAutoRenew = await getSystemConfig();
-  const client = await prisma.client.create({
-    data: asClientUncheckedCreate({
-      email: pending.email,
-      passwordHash: pending.passwordHash,
-      remnawaveUuid: null,
-      referralCode,
-      referrerId,
-      preferredLang: pending.preferredLang,
-      preferredCurrency: pending.preferredCurrency,
-      telegramId: null,
-      telegramUsername: null,
-      utmSource: pending.utmSource,
-      utmMedium: pending.utmMedium,
-      utmCampaign: pending.utmCampaign,
-      utmContent: pending.utmContent,
-      utmTerm: pending.utmTerm,
-      autoRenewEnabled: configForAutoRenew.defaultAutoRenewEnabled ?? false,
-      onboardingCompleted: false,
-      // IP/UA на момент перехода по ссылке из письма (не на момент создания pending —
-      // боты обычно не ходят по ссылкам, а если ходят — это уже другой IP, ещё лучше)
-      registrationIp: getRequestIp(req),
-      registrationUa: (req.headers["user-agent"] as string)?.slice(0, 500) ?? null,
-      registrationSource: "web",
-    }),
-  });
-  notifyAdminsAboutNewClient(client.id).catch(() => {});
-
-  await prisma.pendingEmailRegistration.delete({ where: { id: pending.id } }).catch(() => {});
-
-  const signToken = signClientToken(client.id);
-  return res.status(201).json({ token: signToken, client: toClientShape(client) });
+  return res.json({ registrationToken: pending.verificationToken, email: pending.email });
 });
 
 const loginSchema = z.object({
@@ -599,6 +592,84 @@ clientAuthRouter.post("/login", async (req, res) => {
   if (!full) return res.status(401).json({ message: "Неверный email или пароль" });
   const auth = buildAuthResponse(full);
   return res.json(auth);
+});
+
+const completeRegistrationSchema = z.object({
+  token: z.string().min(1),
+  password: z.string().min(8),
+});
+
+clientAuthRouter.post("/complete-registration", async (req, res) => {
+  const parse = completeRegistrationSchema.safeParse(req.body);
+  if (!parse.success) return res.status(400).json({ message: "Проверьте введённые данные" });
+
+  const { token, password } = parse.data;
+  const pending = await prisma.pendingEmailRegistration.findUnique({
+    where: { verificationToken: token },
+  });
+  if (!pending) return res.status(400).json({ message: "Ссылка недействительна или устарела" });
+  if (pending.revokedAt) return res.status(400).json({ message: "Ссылка недействительна или устарела" });
+  if (new Date() > pending.expiresAt) {
+    await prisma.pendingEmailRegistration.delete({ where: { id: pending.id } }).catch(() => {});
+    return res.status(400).json({ message: "Ссылка истекла — зарегистрируйтесь заново." });
+  }
+  if (!pending.emailVerifiedAt) {
+    return res.status(400).json({ message: "Сначала подтвердите email" });
+  }
+
+  const existingClient = await prisma.client.findUnique({
+    where: { email: pending.email },
+    select: { id: true },
+  });
+  if (existingClient) return res.status(400).json({ message: "Этот email уже зарегистрирован" });
+
+  // Не создаём пользователя в Remna при регистрации — клиент неактивен до триала или оплаты тарифа.
+  const referralCode = generateReferralCode();
+  let referrerId: string | null = null;
+  if (pending.referralCode) {
+    const referrer = await prisma.client.findFirst({ where: { referralCode: pending.referralCode } });
+    if (referrer) referrerId = referrer.id;
+  }
+
+  // Email-регистрация — всегда primary bot (веб-кабинет, без привязки к клону).
+  const primaryBot = await getPrimaryBot();
+  if (!primaryBot) {
+    return res.status(503).json({ message: "Сервис временно недоступен. Обратитесь в поддержку." });
+  }
+
+  const configForAutoRenew = await getSystemConfig();
+  const passwordHash = await hashPassword(password);
+  const client = await prisma.$transaction(async (tx) => {
+    const created = await tx.client.create({
+      data: asClientUncheckedCreate({
+        email: pending.email,
+        passwordHash,
+        remnawaveUuid: null,
+        referralCode,
+        referrerId,
+        preferredLang: pending.preferredLang,
+        preferredCurrency: pending.preferredCurrency,
+        telegramId: null,
+        telegramUsername: null,
+        utmSource: pending.utmSource,
+        utmMedium: pending.utmMedium,
+        utmCampaign: pending.utmCampaign,
+        utmContent: pending.utmContent,
+        utmTerm: pending.utmTerm,
+        autoRenewEnabled: configForAutoRenew.defaultAutoRenewEnabled ?? false,
+        onboardingCompleted: false,
+        registrationIp: pending.registrationIp ?? getRequestIp(req),
+        registrationUa: (req.headers["user-agent"] as string)?.slice(0, 500) ?? null,
+        registrationSource: "web",
+      }),
+    });
+    await tx.pendingEmailRegistration.delete({ where: { id: pending.id } });
+    return created;
+  });
+  notifyAdminsAboutNewClient(client.id).catch(() => {});
+
+  const signToken = signClientToken(client.id);
+  return res.status(201).json({ token: signToken, client: toClientShape(client) });
 });
 
 /** Валидация initData из Telegram Web App (Mini App). https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app */
