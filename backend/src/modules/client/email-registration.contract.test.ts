@@ -32,3 +32,31 @@ test("registration sends no password hash before the email is verified", () => {
   assert.match(registerBlock, /getEmailRegistrationRetryAfter/);
   assert.match(pendingCreateBlock, /passwordHash:\s*null/);
 });
+
+test("registration serializes limit reads with pending-row reservation", () => {
+  const registerStart = routes.indexOf('clientAuthRouter.post("/register"');
+  const verifyStart = routes.indexOf('const verifyEmailSchema', registerStart);
+  const registerBlock = routes.slice(registerStart, verifyStart);
+  const transactionStart = registerBlock.indexOf("prisma.$transaction(async (tx) =>");
+  const transactionBlock = registerBlock.slice(transactionStart, registerBlock.indexOf("const verificationLink", transactionStart));
+  assert.match(transactionBlock, /pg_advisory_xact_lock/);
+  assert.match(transactionBlock, /tx\.pendingEmailRegistration\.findFirst/);
+  assert.match(transactionBlock, /tx\.pendingEmailRegistration\.findMany/);
+  assert.match(transactionBlock, /tx\.pendingEmailRegistration\.create/);
+});
+
+test("completion locks and revalidates the pending row before client creation", () => {
+  const completeStart = routes.indexOf('clientAuthRouter.post("/complete-registration"');
+  const nextRouteStart = routes.indexOf("/** Валидация initData", completeStart);
+  const completeBlock = routes.slice(completeStart, nextRouteStart);
+  const transactionStart = completeBlock.indexOf("prisma.$transaction(async (tx) =>");
+  const transactionBlock = completeBlock.slice(transactionStart);
+  const stateCheckStart = transactionBlock.indexOf("tx.pendingEmailRegistration.findFirst");
+  const clientCreateStart = transactionBlock.indexOf("tx.client.create");
+  assert.match(transactionBlock, /FOR UPDATE/);
+  assert.match(transactionBlock, /emailVerifiedAt:\s*\{\s*not:\s*null/);
+  assert.match(transactionBlock, /revokedAt:\s*null/);
+  assert.match(transactionBlock, /expiresAt:\s*\{\s*gt:/);
+  assert.ok(stateCheckStart >= 0 && stateCheckStart < clientCreateStart);
+  assert.match(transactionBlock, /id: currentPending\.id/);
+});

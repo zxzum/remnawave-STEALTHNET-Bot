@@ -328,56 +328,70 @@ clientAuthRouter.post("/register", async (req, res) => {
       return res.status(503).json({ message: "Не задан публичный адрес приложения в настройках." });
     }
 
-    const now = new Date();
-    const latestPending = await prisma.pendingEmailRegistration.findFirst({
-      where: { email: email!, revokedAt: null, expiresAt: { gt: now } },
-      orderBy: { createdAt: "desc" },
-      select: { createdAt: true },
-    });
-    const ipSends = clientIp
-      ? await prisma.pendingEmailRegistration.findMany({
-          where: {
+    const pendingResult = await prisma.$transaction(async (tx) => {
+      const lockKeys = [`email:${email}`];
+      if (clientIp) lockKeys.push(`ip:${clientIp}`);
+      for (const key of lockKeys.sort()) {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+      }
+
+      const now = new Date();
+      const latestPending = await tx.pendingEmailRegistration.findFirst({
+        where: { email: email!, revokedAt: null, expiresAt: { gt: now } },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      });
+      const ipSends = clientIp
+        ? await tx.pendingEmailRegistration.findMany({
+            where: {
+              registrationIp: clientIp,
+              createdAt: { gte: new Date(now.getTime() - EMAIL_VERIFICATION_IP_WINDOW_MS) },
+            },
+            select: { createdAt: true },
+          })
+        : [];
+      const retryAfter = getEmailRegistrationRetryAfter(
+        now,
+        latestPending?.createdAt ?? null,
+        ipSends.map(({ createdAt }) => createdAt),
+      );
+      if (retryAfter !== null) return { retryAfter } as const;
+
+      const verificationToken = randomBytes(32).toString("hex");
+      const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 ч
+
+      return {
+        pending: await tx.pendingEmailRegistration.create({
+          data: {
+            email: email!,
+            passwordHash: null,
             registrationIp: clientIp,
-            createdAt: { gte: new Date(now.getTime() - EMAIL_VERIFICATION_IP_WINDOW_MS) },
+            preferredLang: data.preferredLang,
+            preferredCurrency: data.preferredCurrency,
+            referralCode: data.referralCode || null,
+            utmSource: data.utm_source ?? null,
+            utmMedium: data.utm_medium ?? null,
+            utmCampaign: data.utm_campaign ?? null,
+            utmContent: data.utm_content ?? null,
+            utmTerm: data.utm_term ?? null,
+            verificationToken,
+            expiresAt,
           },
-          select: { createdAt: true },
-        })
-      : [];
-    const retryAfter = getEmailRegistrationRetryAfter(
-      now,
-      latestPending?.createdAt ?? null,
-      ipSends.map(({ createdAt }) => createdAt),
-    );
-    if (retryAfter !== null) {
+        }),
+      } as const;
+    });
+    if ("retryAfter" in pendingResult) {
+      const retryAfter = pendingResult.retryAfter;
+      if (retryAfter == null) return res.status(500).json({ message: "Внутренняя ошибка" });
       res.setHeader("Retry-After", retryAfter);
       return res.status(429).json({
         message: `Слишком много запросов. Попробуйте через ${retryAfter} сек.`,
         retryAfter,
       });
     }
+    const { pending } = pendingResult;
 
-    const verificationToken = randomBytes(32).toString("hex");
-    const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 ч
-
-    const pending = await prisma.pendingEmailRegistration.create({
-      data: {
-        email: email!,
-        passwordHash: null,
-        registrationIp: clientIp,
-        preferredLang: data.preferredLang,
-        preferredCurrency: data.preferredCurrency,
-        referralCode: data.referralCode || null,
-        utmSource: data.utm_source ?? null,
-        utmMedium: data.utm_medium ?? null,
-        utmCampaign: data.utm_campaign ?? null,
-        utmContent: data.utm_content ?? null,
-        utmTerm: data.utm_term ?? null,
-        verificationToken,
-        expiresAt,
-      },
-    });
-
-    const verificationLink = `${appUrl}/cabinet/verify-email?token=${verificationToken}`;
+    const verificationLink = `${appUrl}/cabinet/verify-email?token=${pending.verificationToken}`;
     // письмо рендерится из редактируемого шаблона
     // (админка → Email-шаблоны), а не из захардкоженного HTML.
     const verificationTpl = await renderEmailTemplate("email_verification", {
@@ -640,32 +654,44 @@ clientAuthRouter.post("/complete-registration", async (req, res) => {
   const configForAutoRenew = await getSystemConfig();
   const passwordHash = await hashPassword(password);
   const client = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "pending_email_registrations" WHERE "id" = ${pending.id} FOR UPDATE`;
+    const currentPending = await tx.pendingEmailRegistration.findFirst({
+      where: {
+        id: pending.id,
+        emailVerifiedAt: { not: null },
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+    });
+    if (!currentPending) return null;
+
     const created = await tx.client.create({
       data: asClientUncheckedCreate({
-        email: pending.email,
+        email: currentPending.email,
         passwordHash,
         remnawaveUuid: null,
         referralCode,
         referrerId,
-        preferredLang: pending.preferredLang,
-        preferredCurrency: pending.preferredCurrency,
+        preferredLang: currentPending.preferredLang,
+        preferredCurrency: currentPending.preferredCurrency,
         telegramId: null,
         telegramUsername: null,
-        utmSource: pending.utmSource,
-        utmMedium: pending.utmMedium,
-        utmCampaign: pending.utmCampaign,
-        utmContent: pending.utmContent,
-        utmTerm: pending.utmTerm,
+        utmSource: currentPending.utmSource,
+        utmMedium: currentPending.utmMedium,
+        utmCampaign: currentPending.utmCampaign,
+        utmContent: currentPending.utmContent,
+        utmTerm: currentPending.utmTerm,
         autoRenewEnabled: configForAutoRenew.defaultAutoRenewEnabled ?? false,
         onboardingCompleted: false,
-        registrationIp: pending.registrationIp ?? getRequestIp(req),
+        registrationIp: currentPending.registrationIp ?? getRequestIp(req),
         registrationUa: (req.headers["user-agent"] as string)?.slice(0, 500) ?? null,
         registrationSource: "web",
       }),
     });
-    await tx.pendingEmailRegistration.delete({ where: { id: pending.id } });
+    await tx.pendingEmailRegistration.delete({ where: { id: currentPending.id } });
     return created;
   });
+  if (!client) return res.status(400).json({ message: "Ссылка недействительна или устарела" });
   notifyAdminsAboutNewClient(client.id).catch(() => {});
 
   const signToken = signClientToken(client.id);
