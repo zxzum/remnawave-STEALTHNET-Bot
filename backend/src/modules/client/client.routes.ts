@@ -4244,6 +4244,48 @@ clientRouter.post("/payments/balance", async (req, res) => {
     return res.status(400).json({ message: `Недостаточно средств. Баланс: ${clientDb.balance.toFixed(2)}, нужно: ${tariffPaySnap.amount.toFixed(2)}` });
   }
 
+  // Payment создаём сразу после debit и до активации: ограничения/ошибки записи
+  // не должны происходить уже после изменения подписки.
+  const orderId = randomUUID();
+  const tariffMeta: Record<string, unknown> = {};
+  if (promoCodeRecord) Object.assign(tariffMeta, { promoCodeId: promoCodeRecord.id, originalPrice: basePriceForTariff });
+  if (tariffPersonalDiscount > 0) {
+    tariffMeta.personalDiscountPercent = tariffPersonalDiscount;
+    if (!tariffMeta.originalPrice) tariffMeta.originalPrice = basePriceForTariff;
+  }
+  if (extendsSecondarySubId) tariffMeta.extendsSecondarySubId = extendsSecondarySubId;
+  if (removeExtrasOnActivate === true) tariffMeta.removeExtrasOnActivate = true;
+  if (asAdditional && !extendsSecondarySubId) tariffMeta.isAdditionalSubscription = true;
+
+  let payment: Awaited<ReturnType<typeof createPayment>>;
+  try {
+    payment = await createPayment({
+      data: asPaymentUncheckedCreate({
+        clientId: clientRaw.id,
+        orderId,
+        amount: tariffPaySnap.amount,
+        currency: tariff.currency.toUpperCase(),
+        status: "PAID",
+        provider: "balance",
+        tariffId,
+        tariffPriceOptionId: selectedOption?.id ?? null,
+        deviceCount: requestedExtras,
+        paidAt: new Date(),
+        metadata: Object.keys(tariffMeta).length > 0 ? JSON.stringify(tariffMeta) : null,
+      }),
+    });
+  } catch (error) {
+    await prisma.client.update({ where: { id: clientRaw.id }, data: { balance: { increment: tariffPaySnap.amount } } }).catch(() => {});
+    const message = error instanceof Error ? error.message : "Не удалось создать запись об оплате";
+    return res.status(500).json({ message });
+  }
+
+  const failBalancePayment = async (status: number, message: string) => {
+    await prisma.payment.update({ where: { id: payment.id }, data: { status: "FAILED" } }).catch(() => {});
+    await prisma.client.update({ where: { id: clientRaw.id }, data: { balance: { increment: tariffPaySnap.amount } } }).catch(() => {});
+    return res.status(status).json({ message });
+  };
+
   // УНИФИЦИРОВАННАЯ покупка балансом.
   //
   // 1. extendsSecondarySubId → явное продление конкретной подписки.
@@ -4265,14 +4307,14 @@ clientRouter.post("/payments/balance", async (req, res) => {
   // хендлера — нужен и в конверт-ветке, и в сообщении/консолидации ниже.
   const multiSubEnabledBal = ((await getSystemConfig().catch(() => null)) as { multiSubscriptionsEnabled?: boolean } | null)?.multiSubscriptionsEnabled ?? true;
 
-  if (extendsSecondarySubId) {
+  try {
+    if (extendsSecondarySubId) {
     const sec = await prisma.subscription.findUnique({
       where: { id: extendsSecondarySubId },
       select: { ownerId: true, giftedToClientId: true, trialId: true },
     });
     if (!sec || (sec.ownerId !== clientRaw.id && sec.giftedToClientId !== clientRaw.id)) {
-      await prisma.client.update({ where: { id: clientRaw.id }, data: { balance: { increment: tariffPaySnap.amount } } }).catch(() => {});
-      return res.status(403).json({ message: "Доп. подписка не принадлежит вам" });
+      return failBalancePayment(403, "Доп. подписка не принадлежит вам");
     }
     const { extendSecondarySubscription } = await import("../tariff/tariff-activation.service.js");
     activateResult = await extendSecondarySubscription(
@@ -4351,10 +4393,12 @@ clientRouter.post("/payments/balance", async (req, res) => {
       if (addResult.ok) createdSubscriptionId = addResult.data.subscriptionId;
     }
   }
+  } catch (error) {
+    console.error("[balance-purchase] activation failed:", error);
+    return failBalancePayment(500, error instanceof Error ? error.message : "Не удалось активировать тариф");
+  }
   if (!activateResult.ok) {
-    // Remna послала — возвращаем бабки.
-    await prisma.client.update({ where: { id: clientRaw.id }, data: { balance: { increment: tariffPaySnap.amount } } }).catch(() => {});
-    return res.status(activateResult.status).json({ message: activateResult.error });
+    return failBalancePayment(activateResult.status, activateResult.error);
   }
   // NB: списание уже сделано атомарно выше — повторного decrement тут НЕ надо.
 
@@ -4362,16 +4406,6 @@ clientRouter.post("/payments/balance", async (req, res) => {
   // (removeExtrasAfter): счётчики и HWID-лимит выставляются атомарно с активацией.
   // Отдельный removeAllExtraDevicesForSub здесь удалён — он обнулял бы и докупленные extras.
 
-  // Создаём запись об оплате
-  const orderId = randomUUID();
-  const tariffMeta: Record<string, unknown> = {};
-  if (promoCodeRecord) Object.assign(tariffMeta, { promoCodeId: promoCodeRecord.id, originalPrice: basePriceForTariff });
-  if (tariffPersonalDiscount > 0) {
-    tariffMeta.personalDiscountPercent = tariffPersonalDiscount;
-    if (!tariffMeta.originalPrice) tariffMeta.originalPrice = basePriceForTariff;
-  }
-  // T7b: пишем маркер продления в metadata (для аудита и для re-activate если webhook).
-  if (extendsSecondarySubId) tariffMeta.extendsSecondarySubId = extendsSecondarySubId;
   // маркер конвертации (single-категория) для отчётности.
   if (isConverted && createdSubscriptionId) {
     tariffMeta.convertedSubscriptionId = createdSubscriptionId;
@@ -4382,25 +4416,12 @@ clientRouter.post("/payments/balance", async (req, res) => {
   // T-fix (11.05.2026): маркер покупки доп. подписки балансом (без gift).
   if (asAdditional && !extendsSecondarySubId) tariffMeta.isAdditionalSubscription = true;
   if (trialToTariff) tariffMeta.trialToTariff = true;
-  const payment = await createPayment({
-    data: asPaymentUncheckedCreate({
-      clientId: clientRaw.id,
-      orderId,
-      amount: tariffPaySnap.amount,
-      currency: tariff.currency.toUpperCase(),
-      status: "PAID",
-      provider: "balance",
-      tariffId,
-      tariffPriceOptionId: selectedOption?.id ?? null,
-      deviceCount: requestedExtras,
-      paidAt: new Date(),
-      metadata: Object.keys(tariffMeta).length > 0 ? JSON.stringify(tariffMeta) : null,
-    }),
-  });
 
   // Записываем использование промокода
   if (promoCodeRecord) {
-    await prisma.promoCodeUsage.create({ data: { promoCodeId: promoCodeRecord.id, clientId: clientRaw.id } });
+    await prisma.promoCodeUsage.create({ data: { promoCodeId: promoCodeRecord.id, clientId: clientRaw.id } }).catch((error) => {
+      console.error("[balance-purchase] promo usage record failed:", error);
+    });
   }
 
   // Реферальные начисления
@@ -4411,7 +4432,13 @@ clientRouter.post("/payments/balance", async (req, res) => {
   // (для notifyTariffActivated и админ-аналитики). Бэк-веб-хуки делают это в activateTariffByPaymentId,
   // но в балансовой ветке мы сами создаём подписку → надо явно прокинуть.
   if (createdSubscriptionId) {
-    await prisma.payment.update({ where: { id: payment.id }, data: { subscriptionId: createdSubscriptionId } }).catch(() => {});
+    await prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        subscriptionId: createdSubscriptionId,
+        metadata: Object.keys(tariffMeta).length > 0 ? JSON.stringify(tariffMeta) : null,
+      },
+    }).catch(() => {});
   }
 
   // T-unify-purchase: красивое уведомление в TG-бот с кнопками — теперь и при оплате балансом.
@@ -4455,10 +4482,11 @@ clientRouter.post("/payments/balance", async (req, res) => {
     : isExtendingSecondary
       ? `🔄 Подписка продлена на ${effectiveDays} дн.! Списано ${tariffPaySnap.amount.toFixed(2)} ${tariff.currency.toUpperCase()} с баланса.`
       : `Тариф «${tariff.name}» активирован! Списано ${tariffPaySnap.amount.toFixed(2)} ${tariff.currency.toUpperCase()} с баланса.`;
+  const after = await prisma.client.findUnique({ where: { id: clientRaw.id }, select: { balance: true } });
   return res.json({
     message: okMessage,
     paymentId: payment.id,
-    newBalance: clientDb.balance - tariffPaySnap.amount,
+    newBalance: after?.balance ?? clientDb.balance - tariffPaySnap.amount,
   });
 });
 
