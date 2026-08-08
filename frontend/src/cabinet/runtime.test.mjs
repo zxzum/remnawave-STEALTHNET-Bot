@@ -302,3 +302,17 @@ test("registration success modal recommends Telegram settings", async () => {
   assert.match(cabinet, /Аккаунт успешно создан/);
   assert.match(cabinet, /настройк/);
 });
+
+test("registration waits for public config before choosing email flow", async () => {
+  const auth = await readFile(new URL("./pages/Auth.tsx", import.meta.url), "utf8");
+  assert.match(auth, /if \(!config\) return;/);
+  assert.match(auth, /disabled=\{!config \|\| !emailValid/);
+});
+
+test("registration resend locks submitted email and shows backend errors", async () => {
+  const auth = await readFile(new URL("./pages/Auth.tsx", import.meta.url), "utf8");
+  assert.match(auth, /submittedEmail/);
+  assert.match(auth, /disabled=\{sent \|\| loading\}/);
+  assert.match(auth, /на \{submittedEmail\}/);
+  assert.match(auth, /error && step === "email"/);
+});

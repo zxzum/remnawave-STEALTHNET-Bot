@@ -317,6 +317,7 @@ export function Register() {
   const registrationToken = searchParams.get("registrationToken")?.trim() || "";
   const [step, setStep] = useState<Step>(registrationToken ? "password" : "email");
   const [email, setEmail] = useState(searchParams.get("email")?.trim() || "");
+  const [submittedEmail, setSubmittedEmail] = useState("");
   const [agreed, setAgreed] = useState(true);
   const [sent, setSent] = useState(false);
   const [pw1, setPw1] = useState("");
@@ -343,8 +344,8 @@ export function Register() {
   const external = useExternalAuth(config, finishExternal, showError);
   const skipEmailVerification = Boolean(config?.skipEmailVerification);
 
-  const submitEmail = async () => {
-    if (!emailValid || !agreed || loading) return;
+  const submitEmail = async (targetEmail = email.trim()) => {
+    if (!config || !/.+@.+\..+/.test(targetEmail) || !agreed || loading) return;
     setLoading(true);
     setError("");
     const utm = Object.fromEntries(
@@ -353,14 +354,19 @@ export function Register() {
         .filter((entry): entry is readonly [string, string] => Boolean(entry[1])),
     );
     try {
-      await register({
-        email: email.trim(),
+      const result = await register({
+        email: targetEmail,
         preferredLang: config?.defaultLanguage || "ru",
         preferredCurrency: (config?.defaultCurrency || "usd").toLowerCase(),
         referralCode: searchParams.get("ref")?.trim() || undefined,
         ...utm,
       });
-      setSent(true);
+      if (result?.requiresVerification) {
+        setSubmittedEmail(targetEmail);
+        setSent(true);
+      } else {
+        setError("Не удалось отправить письмо");
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось отправить письмо");
     } finally {
@@ -369,6 +375,7 @@ export function Register() {
   };
 
   const continueEmail = () => {
+    if (!config) return;
     if (sent || loading) return;
     if (skipEmailVerification) setStep("password");
     else void submitEmail();
@@ -465,6 +472,7 @@ export function Register() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                disabled={sent || loading}
                 placeholder="you@example.com"
                 className="input-glass mt-2"
                 autoFocus
@@ -478,12 +486,14 @@ export function Register() {
                   className="mt-4 flex items-center gap-3 rounded-2xl border border-mint-400/25 bg-mint-500/10 p-4 text-sm font-semibold text-mint-400"
                 >
                   <Mail className="h-5 w-5 shrink-0" />
-                  <span className="min-w-0 flex-1 text-left">Ссылка для подтверждения отправлена на {email}.</span>
-                  <button type="button" onClick={() => void submitEmail()} disabled={loading} className="shrink-0 text-xs underline disabled:opacity-50">
+                  <span className="min-w-0 flex-1 text-left">Ссылка для подтверждения отправлена на {submittedEmail}.</span>
+                  <button type="button" onClick={() => void submitEmail(submittedEmail)} disabled={loading} className="shrink-0 text-xs underline disabled:opacity-50">
                     {loading ? "Отправляем…" : "Отправить ещё раз"}
                   </button>
                 </motion.div>
               )}
+
+              {error && step === "email" && <p className="mt-3 text-center text-sm font-semibold text-red-400">{error}</p>}
 
               <label className="glass-inset mt-4 flex cursor-pointer items-start gap-3 rounded-2xl p-4 text-xs leading-relaxed text-fog-500">
                 <Checkbox.Root
@@ -502,11 +512,11 @@ export function Register() {
               </label>
 
               <button
-                disabled={!emailValid || !agreed || sent || loading}
+                disabled={!config || !emailValid || !agreed || sent || loading}
                 onClick={continueEmail}
                 className="btn-primary mt-5 w-full px-6 py-4 text-base disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {sent ? "Проверьте почту" : loading ? "Отправляем…" : "Продолжить"}
+                {sent ? "Проверьте почту" : !config ? "Загрузка…" : loading ? "Отправляем…" : "Продолжить"}
               </button>
 
               <Divider />
