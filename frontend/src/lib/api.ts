@@ -3344,6 +3344,7 @@ export type UpdateSettingsPayload = {
   notificationTopicPromo?: string | null;
   notificationTopicGifts?: string | null;
   notificationTopicAutoRenew?: string | null;
+  notificationTopicSubscriptionRevoked?: string | null;
   autoBackupEnabled?: boolean;
   autoBackupCron?: string | null;
   plategaMerchantId?: string | null;
@@ -3924,6 +3925,7 @@ export interface AdminSettings {
   notificationTopicPromo?: string | null;
   notificationTopicGifts?: string | null;
   notificationTopicAutoRenew?: string | null;
+  notificationTopicSubscriptionRevoked?: string | null;
   autoBackupEnabled?: boolean;
   autoBackupCron?: string | null;
   plategaMerchantId?: string | null;

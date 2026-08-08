@@ -875,6 +875,7 @@ export function SettingsPage() {
         notificationTopicPromo: settings.notificationTopicPromo ?? null,
         notificationTopicGifts: settings.notificationTopicGifts ?? null,
         notificationTopicAutoRenew: settings.notificationTopicAutoRenew ?? null,
+        notificationTopicSubscriptionRevoked: settings.notificationTopicSubscriptionRevoked ?? null,
         plategaMerchantId: settings.plategaMerchantId ?? null,
         plategaSecret: settings.plategaSecret && settings.plategaSecret !== "********" ? settings.plategaSecret : undefined,
         plategaMethods: settings.plategaMethods != null ? JSON.stringify(settings.plategaMethods) : undefined,
@@ -1403,6 +1404,15 @@ export function SettingsPage() {
                           <Input
                             value={settings.notificationTopicAutoRenew ?? ""}
                             onChange={(e) => setSettings((s) => (s ? { ...s, notificationTopicAutoRenew: e.target.value.trim() || null } : s))}
+                            placeholder={t("admin.settings.topic_id_placeholder")}
+                            className="h-9 text-sm"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("admin.settings.topic_subscription_revoked")}</Label>
+                          <Input
+                            value={settings.notificationTopicSubscriptionRevoked ?? ""}
+                            onChange={(e) => setSettings((s) => (s ? { ...s, notificationTopicSubscriptionRevoked: e.target.value.trim() || null } : s))}
                             placeholder={t("admin.settings.topic_id_placeholder")}
                             className="h-9 text-sm"
                           />
