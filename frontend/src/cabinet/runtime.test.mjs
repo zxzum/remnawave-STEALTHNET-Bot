@@ -316,3 +316,9 @@ test("registration resend locks submitted email and shows backend errors", async
   assert.match(auth, /на \{submittedEmail\}/);
   assert.match(auth, /error && step === "email"/);
 });
+
+test("password registration cannot submit while a request is loading", async () => {
+  const auth = await readFile(new URL("./pages/Auth.tsx", import.meta.url), "utf8");
+  const passwordStep = auth.slice(auth.indexOf('{step === "password"'), auth.indexOf('{step === "twofa"'));
+  assert.match(passwordStep, /disabled=\{pw1\.length < 8 \|\| pw1 !== pw2 \|\| loading\}/);
+});

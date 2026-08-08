@@ -4,12 +4,14 @@ import test from "node:test";
 
 const schema = readFileSync(new URL("../../../prisma/schema.prisma", import.meta.url), "utf8");
 const routes = readFileSync(new URL("./client.routes.ts", import.meta.url), "utf8");
+const completion = readFileSync(new URL("./email-registration-completion.ts", import.meta.url), "utf8");
 
 test("pending registrations can wait for the password and track verification state", () => {
   assert.match(schema, /passwordHash\s+String\?/);
   assert.match(schema, /emailVerifiedAt\s+DateTime\?/);
   assert.match(schema, /registrationIp\s+String\?/);
   assert.match(schema, /revokedAt\s+DateTime\?/);
+  assert.match(schema, /deliveryState\s+String\s+@default\("SENT"\)/);
 });
 
 test("verification does not create a client and completion owns client creation", () => {
@@ -29,7 +31,7 @@ test("registration sends no password hash before the email is verified", () => {
   const pendingCreateEnd = registerBlock.indexOf("});", pendingCreateStart);
   const pendingCreateBlock = registerBlock.slice(pendingCreateStart, pendingCreateEnd);
   assert.match(registerBlock, /pendingEmailRegistration\.create/);
-  assert.match(registerBlock, /getEmailRegistrationRetryAfter/);
+  assert.match(registerBlock, /getEmailRegistrationRateLimit/);
   assert.match(pendingCreateBlock, /passwordHash:\s*null/);
 });
 
@@ -49,14 +51,12 @@ test("completion locks and revalidates the pending row before client creation", 
   const completeStart = routes.indexOf('clientAuthRouter.post("/complete-registration"');
   const nextRouteStart = routes.indexOf("/** Валидация initData", completeStart);
   const completeBlock = routes.slice(completeStart, nextRouteStart);
-  const transactionStart = completeBlock.indexOf("prisma.$transaction(async (tx) =>");
-  const transactionBlock = completeBlock.slice(transactionStart);
-  const stateCheckStart = transactionBlock.indexOf("tx.pendingEmailRegistration.findFirst");
-  const clientCreateStart = transactionBlock.indexOf("tx.client.create");
-  assert.match(transactionBlock, /FOR UPDATE/);
-  assert.match(transactionBlock, /emailVerifiedAt:\s*\{\s*not:\s*null/);
-  assert.match(transactionBlock, /revokedAt:\s*null/);
-  assert.match(transactionBlock, /expiresAt:\s*\{\s*gt:/);
-  assert.ok(stateCheckStart >= 0 && stateCheckStart < clientCreateStart);
-  assert.match(transactionBlock, /id: currentPending\.id/);
+  assert.match(completeBlock, /completeEmailRegistration/);
+  assert.match(completeBlock, /pg_advisory_xact_lock/);
+  assert.match(completion, /withEmailLock/);
+  assert.match(completion, /pending\.emailVerifiedAt === null/);
+  assert.match(completion, /pending\.revokedAt !== null/);
+  assert.match(completion, /pending\.expiresAt <= input\.now/);
+  assert.match(completion, /findClientByEmail/);
+  assert.match(completion, /deletePending\(pending\.id\)/);
 });

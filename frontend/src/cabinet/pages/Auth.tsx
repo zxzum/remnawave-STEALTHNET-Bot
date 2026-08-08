@@ -552,7 +552,7 @@ export function Register() {
               {pw2.length > 0 && pw1 !== pw2 && <p className="mt-2 text-xs font-semibold text-red-400">Пароли не совпадают</p>}
 
               <button
-                disabled={pw1.length < 8 || pw1 !== pw2}
+                disabled={pw1.length < 8 || pw1 !== pw2 || loading}
                 onClick={submitRegistration}
                 className="btn-primary mt-5 w-full px-6 py-4 text-base disabled:cursor-not-allowed disabled:opacity-40"
               >

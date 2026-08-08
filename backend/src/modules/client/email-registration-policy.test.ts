@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   EMAIL_VERIFICATION_IP_MAX,
+  getEmailRegistrationRateLimit,
   getEmailRegistrationRetryAfter,
 } from "./email-registration-policy.js";
 
@@ -23,4 +24,20 @@ test("limits the fifth IP send until the oldest send leaves the hour", async () 
 
 test("allows a request outside both windows", async () => {
   assert.equal(getEmailRegistrationRetryAfter(now, new Date("2026-08-09T11:00:00.000Z"), []), null);
+});
+
+test("ignores future timestamps when enforcing the IP limit", () => {
+  const futureSends = Array.from(
+    { length: EMAIL_VERIFICATION_IP_MAX },
+    (_, index) => new Date(now.getTime() + (index + 1) * 60_000),
+  );
+
+  assert.equal(getEmailRegistrationRetryAfter(now, null, futureSends), null);
+});
+
+test("returns the 429 decision for an active email cooldown", () => {
+  assert.deepEqual(
+    getEmailRegistrationRateLimit(now, new Date("2026-08-09T11:59:30.000Z"), []),
+    { status: 429, retryAfter: 30 },
+  );
 });

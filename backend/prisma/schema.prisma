@@ -286,6 +286,7 @@ model PendingEmailRegistration {
   emailVerifiedAt   DateTime? @map("email_verified_at")
   registrationIp    String?  @map("registration_ip")
   revokedAt         DateTime? @map("revoked_at")
+  deliveryState     String   @default("SENT") @map("delivery_state")
   preferredLang     String   @default("ru") @map("preferred_lang")
   preferredCurrency String   @default("usd") @map("preferred_currency")
   referralCode      String?  @map("referral_code")
