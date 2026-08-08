@@ -11,11 +11,21 @@
  *
  * ВСЁ выполняется одной транзакцией: перенос FK-строк → чистка pending-заявок →
  * удаление поглощаемого клиента (освобождает unique telegramId/email) →
- * обновление полей основного. Каждая подписка несёт собственный remnawaveUuid,
- * поэтому поход в Remnawave при слиянии не нужен.
+ * обновление полей основного. В обычном режиме подписки переносятся без изменения
+ * UUID; при выбранной консолидации итоговый срок синхронизируется с Remnawave.
  */
 
 import { prisma } from "../../db.js";
+import { computeConvertedDays } from "../tariff/tariff-activation.service.js";
+import { deleteSingleSubscription } from "../subscription/single-subscription-lifecycle.service.js";
+import { isRemnaConfigured, remnaUpdateUser } from "../remna/remna.client.js";
+import {
+  buildMergePreview,
+  type MergeAccountSnapshot,
+  type MergeChoice,
+  type MergePreview,
+  type MergeSubscriptionSnapshot,
+} from "./account-merge-policy.js";
 
 export interface MergeAssignFields {
   /** Присвоить основному telegramId (обычно — телеграм поглощаемого). */
@@ -31,12 +41,184 @@ export interface MergeClientsResult {
   balanceAdded: number;
 }
 
+type MergeSubscriptionRow = {
+  id: string;
+  ownerId: string;
+  remnawaveUuid: string | null;
+  tariffId: string | null;
+  trialId: string | null;
+  expireAt: Date | null;
+  currentPricePerDay: number | null;
+  giftStatus: string | null;
+  purchasedAsGift: boolean;
+  tariff: { id: string; name: string; price: number; durationDays: number; currency: string } | null;
+  trial: { name: string } | null;
+};
+
+async function loadMergeAccounts(primaryId: string, absorbedId: string): Promise<{
+  primary: MergeAccountSnapshot;
+  absorbed: MergeAccountSnapshot;
+  subscriptions: MergeSubscriptionRow[];
+}> {
+  const rows = await prisma.client.findMany({
+    where: { id: { in: [primaryId, absorbedId] } },
+    select: {
+      id: true,
+      email: true,
+      balance: true,
+      _count: { select: { payments: true } },
+      ownedSubscriptions: {
+        orderBy: { subscriptionIndex: "asc" },
+        select: {
+          id: true,
+          ownerId: true,
+          remnawaveUuid: true,
+          tariffId: true,
+          trialId: true,
+          expireAt: true,
+          currentPricePerDay: true,
+          giftStatus: true,
+          purchasedAsGift: true,
+          tariff: { select: { id: true, name: true, price: true, durationDays: true, currency: true } },
+          trial: { select: { name: true } },
+        },
+      },
+    },
+  });
+  const primaryRow = rows.find((row) => row.id === primaryId);
+  const absorbedRow = rows.find((row) => row.id === absorbedId);
+  if (!primaryRow || !absorbedRow) throw new Error("Аккаунт для объединения не найден");
+
+  const toSnapshot = (row: typeof primaryRow, owner: "primary" | "absorbed"): MergeAccountSnapshot => ({
+    id: row.id,
+    email: row.email,
+    balance: row.balance,
+    paymentsCount: row._count.payments,
+    subscriptions: row.ownedSubscriptions.map((subscription): MergeSubscriptionSnapshot => ({
+      id: subscription.id,
+      owner,
+      tariffId: subscription.tariffId,
+      tariffName: subscription.tariff?.name ?? null,
+      trialId: subscription.trialId,
+      trialName: subscription.trial?.name ?? null,
+      expireAt: subscription.expireAt,
+      tariffPrice: subscription.tariff?.price ?? null,
+      tariffDurationDays: subscription.tariff?.durationDays ?? null,
+      tariffCurrency: subscription.tariff?.currency ?? null,
+      currentPricePerDay: subscription.currentPricePerDay,
+      giftStatus: subscription.giftStatus,
+      purchasedAsGift: subscription.purchasedAsGift,
+    })),
+  });
+
+  return {
+    primary: toSnapshot(primaryRow, "primary"),
+    absorbed: toSnapshot(absorbedRow, "absorbed"),
+    subscriptions: [...primaryRow.ownedSubscriptions, ...absorbedRow.ownedSubscriptions] as MergeSubscriptionRow[],
+  };
+}
+
+export async function getMergePreview(primaryId: string, absorbedId: string): Promise<MergePreview> {
+  if (primaryId === absorbedId) throw new Error("Нельзя объединить аккаунт сам с собой");
+  const accounts = await loadMergeAccounts(primaryId, absorbedId);
+  return buildMergePreview(accounts.primary, accounts.absorbed);
+}
+
+function subscriptionRemainingMs(subscription: MergeSubscriptionRow, now: Date): number {
+  return subscription.expireAt ? Math.max(0, subscription.expireAt.getTime() - now.getTime()) : 0;
+}
+
+function subscriptionPricePerDay(subscription: MergeSubscriptionRow): number | null {
+  if (subscription.currentPricePerDay != null && subscription.currentPricePerDay > 0) return subscription.currentPricePerDay;
+  if (subscription.tariff && subscription.tariff.durationDays > 0) return subscription.tariff.price / subscription.tariff.durationDays;
+  return null;
+}
+
+/**
+ * Применяет выбранную политику к Remnawave и БД до переноса владельца.
+ * Внешний API не поддерживает транзакции: при сбое операция останавливается,
+ * а pending-код остаётся действительным для повторной попытки.
+ */
+async function prepareSubscriptionsForMerge(primaryId: string, absorbedId: string, choice: MergeChoice): Promise<void> {
+  const accounts = await loadMergeAccounts(primaryId, absorbedId);
+  const all = accounts.subscriptions.filter((subscription) => !subscription.giftStatus && !subscription.purchasedAsGift);
+  const now = new Date();
+  const toDelete = new Set<string>();
+  const updates = new Map<string, { subscription: MergeSubscriptionRow; expireAt: Date }>();
+
+  const trialItems = all.filter((subscription) => subscription.trialId);
+  if (trialItems.length > 1) {
+    const winner = [...trialItems].sort((a, b) => subscriptionRemainingMs(b, now) - subscriptionRemainingMs(a, now))[0];
+    for (const subscription of trialItems) if (subscription.id !== winner.id) toDelete.add(subscription.id);
+  }
+
+  const paid = all.filter((subscription) => !subscription.trialId && subscription.tariffId);
+  if (choice === "smart" || choice === "keep_both") {
+    const byTariff = new Map<string, MergeSubscriptionRow[]>();
+    for (const subscription of paid) {
+      const group = byTariff.get(subscription.tariffId!) ?? [];
+      group.push(subscription);
+      byTariff.set(subscription.tariffId!, group);
+    }
+    for (const items of byTariff.values()) {
+      if (items.length < 2) continue;
+      const winner = [...items].sort((a, b) => subscriptionRemainingMs(b, now) - subscriptionRemainingMs(a, now))[0];
+      const totalMs = items.reduce((sum, subscription) => sum + subscriptionRemainingMs(subscription, now), 0);
+      updates.set(winner.id, { subscription: winner, expireAt: new Date(now.getTime() + totalMs) });
+      for (const subscription of items) if (subscription.id !== winner.id) toDelete.add(subscription.id);
+    }
+  } else if (choice === "to_primary" || choice === "to_absorbed") {
+    const ownerId = choice === "to_primary" ? primaryId : absorbedId;
+    const candidates = paid.filter((subscription) => subscription.ownerId === ownerId);
+    const target = [...candidates].sort((a, b) => subscriptionRemainingMs(b, now) - subscriptionRemainingMs(a, now))[0];
+    if (target) {
+      let convertedDays = 0;
+      const targetPrice = subscriptionPricePerDay(target);
+      for (const source of paid) {
+        if (source.id === target.id) continue;
+        const sourcePrice = subscriptionPricePerDay(source);
+        const sameCurrency = (source.tariff?.currency ?? "").toLowerCase() === (target.tariff?.currency ?? "").toLowerCase();
+        if (sourcePrice == null || targetPrice == null || !sameCurrency) continue;
+        convertedDays += computeConvertedDays({
+          remainingDays: Math.floor(subscriptionRemainingMs(source, now) / 86_400_000),
+          oldPricePerDay: sourcePrice,
+          newPricePerDay: targetPrice,
+        });
+        toDelete.add(source.id);
+      }
+      if (convertedDays > 0) {
+        updates.set(target.id, {
+          subscription: target,
+          expireAt: new Date(now.getTime() + subscriptionRemainingMs(target, now) + convertedDays * 86_400_000),
+        });
+      }
+    }
+  }
+
+  for (const { subscription, expireAt } of updates.values()) {
+    if (subscription.remnawaveUuid && isRemnaConfigured()) {
+      const result = await remnaUpdateUser({ uuid: subscription.remnawaveUuid, expireAt: expireAt.toISOString() });
+      if (result.error) throw new Error(`Не удалось объединить подписку: ${result.error}`);
+    }
+    await prisma.subscription.update({ where: { id: subscription.id }, data: { expireAt } });
+  }
+  for (const subscriptionId of toDelete) {
+    const result = await deleteSingleSubscription(subscriptionId);
+    if (!result.deleted) throw new Error(result.failures[0]?.error || "Не удалось удалить дубликат подписки");
+  }
+}
+
 export async function mergeClients(
   primaryId: string,
   absorbedId: string,
   assign: MergeAssignFields = {},
+  options: { subscriptionMerge?: MergeChoice } = {},
 ): Promise<MergeClientsResult> {
   if (primaryId === absorbedId) throw new Error("Нельзя объединить аккаунт сам с собой");
+
+  if (options.subscriptionMerge) {
+    await prepareSubscriptionsForMerge(primaryId, absorbedId, options.subscriptionMerge);
+  }
 
   return await prisma.$transaction(
     async (tx) => {
