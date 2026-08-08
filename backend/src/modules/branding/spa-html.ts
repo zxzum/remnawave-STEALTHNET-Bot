@@ -18,8 +18,8 @@ import { configuredAssetUrl } from "../client/bot-assets.routes.js";
 
 const DIST_PATH = process.env.FRONTEND_DIST_PATH || "/var/www/stealthnet";
 const INDEX_FILE = path.join(DIST_PATH, "index.html");
-const DEFAULT_BRAND = "STEALTHNET";
-const DEFAULT_DESC = "STEALTHNET — личный кабинет и админка VPN на базе Remnawave";
+const DEFAULT_BRAND = "Лазейка ВПН";
+const DEFAULT_DESC = "Лазейка ВПН — личный кабинет и админка VPN";
 
 interface CachedTemplate {
   raw: string;
@@ -70,10 +70,7 @@ async function resolveBrand(): Promise<BrandValues> {
   if (brandCache && Date.now() - brandCache.at < BRAND_TTL_MS) return brandCache.value;
   const cfg = await getSystemConfig().catch(() => null);
   const brand = (cfg?.serviceName ?? "").trim() || DEFAULT_BRAND;
-  const description =
-    brand === DEFAULT_BRAND
-      ? DEFAULT_DESC
-      : `${brand} — личный кабинет и админка VPN на базе Remnawave`;
+  const description = brand === DEFAULT_BRAND ? DEFAULT_DESC : `${brand} — личный кабинет и админка VPN`;
   const logo = (cfg?.logo ?? "").trim() || null;
   const accentCandidate = (cfg?.stealthAccent ?? "").trim();
   const stealthAccent = /^#[0-9a-f]{6}$/i.test(accentCandidate) ? accentCandidate.toUpperCase() : "#FF2357";

@@ -20,7 +20,7 @@ export default defineConfig({
             manifest: {
                 name: "Лазейка VPN",
                 short_name: "Лазейка VPN",
-                description: "Личный кабинет и админка Лазейка VPN — VPN на базе Remnawave",
+                description: "Лазейка ВПН — личный кабинет и админка VPN",
                 lang: "ru",
                 start_url: "/cabinet",
                 scope: "/",
