@@ -363,6 +363,9 @@ function invalidatePublicReadCaches() {
   subscriptionPageConfigCache = null;
 }
 
+type ClientBalancePayment = { message: string; paymentId: string; newBalance: number };
+const balancePaymentInFlight = new Map<string, Promise<ClientBalancePayment>>();
+
 export const api = {
   async login(email: string, password: string): Promise<LoginResponse | AdminAuthRequires2FA> {
     return request<LoginResponse | AdminAuthRequires2FA>("/auth/login", {
@@ -2271,7 +2274,19 @@ export const api = {
       // мульти-подписки как в боте.
       extendsSecondarySubId?: string; asAdditional?: boolean; asGift?: boolean; removeExtrasOnActivate?: boolean; replaceTrialSubId?: string }
   ): Promise<{ message: string; paymentId: string; newBalance: number }> {
-    return request("/client/payments/balance", { method: "POST", body: JSON.stringify(data), token });
+    const key = token + ":" + JSON.stringify(data);
+    const inFlight = balancePaymentInFlight.get(key);
+    if (inFlight) return inFlight;
+
+    const payment = request<ClientBalancePayment>("/client/payments/balance", {
+      method: "POST",
+      body: JSON.stringify(data),
+      token,
+    });
+    balancePaymentInFlight.set(key, payment);
+    return payment.finally(() => {
+      if (balancePaymentInFlight.get(key) === payment) balancePaymentInFlight.delete(key);
+    });
   },
 
   /** Превью конвертации для режима «одна подписка из категории»:
