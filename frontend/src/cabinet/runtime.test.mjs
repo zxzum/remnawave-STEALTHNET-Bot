@@ -267,3 +267,20 @@ test("ticket messages distinguish client and support authors", async () => {
   assert.match(services, /Поддержка/);
   assert.match(services, /selected\.status\.toLowerCase\(\) !== "closed"/);
 });
+
+test("logs out the browser cabinet after the client account is deleted", async () => {
+  const middleware = await readFile(new URL("../../../backend/src/modules/client/client.middleware.ts", import.meta.url), "utf8");
+  const api = await readFile(new URL("../lib/api.ts", import.meta.url), "utf8");
+  const auth = await readFile(new URL("../contexts/client-auth.tsx", import.meta.url), "utf8");
+  const login = await readFile(new URL("./pages/Auth.tsx", import.meta.url), "utf8");
+
+  assert.match(middleware, /code:\s*["']CLIENT_DELETED["']/);
+  assert.match(api, /export function setClientSessionLostFn/);
+  assert.match(api, /clientSessionLostFn\?\./);
+  assert.match(api, /account-deleted/);
+  assert.match(auth, /inTelegram/);
+  assert.match(auth, /window\.location\.replace\([^)]*reason=\$\{reason\}/);
+  assert.match(auth, /logout\(\)/);
+  assert.match(login, /account-deleted/);
+  assert.match(login, /Аккаунт удалён/);
+});

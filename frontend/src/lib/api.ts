@@ -15,6 +15,12 @@ export function setClientTokenRefreshFn(fn: (() => Promise<string | null>) | nul
   clientTokenRefreshFn = fn;
 }
 
+type ClientSessionLostReason = "account-deleted" | "session-expired";
+let clientSessionLostFn: ((reason: ClientSessionLostReason) => void) | null = null;
+export function setClientSessionLostFn(fn: ((reason: ClientSessionLostReason) => void) | null) {
+  clientSessionLostFn = fn;
+}
+
 // отчёт по массовой операции над клиентом.
 export interface BulkOpItem {
   subscriptionId: string;
@@ -335,6 +341,11 @@ async function request<T>(
     if (newToken) {
       return request<T>(path, { ...options, token: newToken, _retry: true });
     }
+  }
+
+  if (res.status === 401 && token && isClientPath) {
+    const code = (data as { code?: unknown } | null)?.code;
+    clientSessionLostFn?.(code === "CLIENT_DELETED" ? "account-deleted" : "session-expired");
   }
 
   if (!res.ok) {

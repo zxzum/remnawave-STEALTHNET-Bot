@@ -19,8 +19,11 @@ export async function requireClientAuth(req: Request, res: Response, next: NextF
   }
 
   const client = await prisma.client.findUnique({ where: { id: payload.clientId } });
-  if (!client || client.isBlocked) {
-    return res.status(401).json({ message: "Unauthorized" });
+  if (!client) {
+    return res.status(401).json({ message: "Unauthorized", code: "CLIENT_DELETED" });
+  }
+  if (client.isBlocked) {
+    return res.status(401).json({ message: "Unauthorized", code: "CLIENT_BLOCKED" });
   }
 
   (req as Request & { clientId: string; client: typeof client }).clientId = client.id;

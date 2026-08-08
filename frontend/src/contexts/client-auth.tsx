@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { ClientProfile, ClientAuthResponse } from "@/lib/api";
-import { api, setClientTokenRefreshFn } from "@/lib/api";
+import { api, setClientSessionLostFn, setClientTokenRefreshFn } from "@/lib/api";
 
 const STORAGE_TOKEN = "stealthnet_client_token";
 const STORAGE_CLIENT = "stealthnet_client_profile";
@@ -84,6 +84,7 @@ function isAuthResponse(res: any): res is ClientAuthResponse {
 export function ClientAuthProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<ClientAuthState>(() => ({ ...loadState(), miniappAuthLoading: false, miniappAuthAttempted: false, pending2FAToken: null, isNewTelegramUser: false }));
   const miniappAttemptedRef = useRef(false);
+  const sessionLostRef = useRef(false);
 
   // Сразу раскрываем Mini App на весь экран (до авторизации)
   useEffect(() => {
@@ -308,6 +309,23 @@ export function ClientAuthProvider({ children }: { children: React.ReactNode }) 
     setState({ token: null, client: null, miniappAuthLoading: false, miniappAuthAttempted: false, pending2FAToken: null, isNewTelegramUser: false });
     saveState(null, null);
   }, []);
+
+  useEffect(() => {
+    const inTelegram = typeof window !== "undefined" && Boolean(window.Telegram?.WebApp?.initData?.trim());
+    const inCabinetWebsite = typeof window !== "undefined" && window.location.pathname.startsWith("/cabinet");
+    if (inTelegram || !inCabinetWebsite) return;
+
+    setClientSessionLostFn((reason) => {
+      if (sessionLostRef.current) return;
+      sessionLostRef.current = true;
+      logout();
+      window.location.replace(`/cabinet/login?reason=${reason}`);
+    });
+    return () => {
+      sessionLostRef.current = false;
+      setClientSessionLostFn(null);
+    };
+  }, [logout]);
 
   const value: ClientAuthValue = {
     state,

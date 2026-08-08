@@ -209,12 +209,19 @@ function useExternalAuth(config: PublicConfig | null, onSuccess: () => void, onE
 
 export function Login() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { login, submit2FACode, state } = useClientAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const sessionReason = searchParams.get("reason");
+  const sessionMessage = sessionReason === "account-deleted"
+    ? "Аккаунт удалён. Войдите снова или зарегистрируйтесь заново."
+    : sessionReason === "session-expired"
+      ? "Сессия завершена. Войдите снова."
+      : "";
+  const [error, setError] = useState(sessionMessage);
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const valid = /.+@.+\..+/.test(email) && password.length >= 6;
   const goCabinet = useCallback(() => navigate("/cabinet/dashboard", { replace: true }), [navigate]);
