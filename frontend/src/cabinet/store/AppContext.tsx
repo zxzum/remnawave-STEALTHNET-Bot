@@ -212,6 +212,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const url = `https://t.me/${encodeURIComponent(username)}?start=link_${encodeURIComponent(request.code)}`;
       if (window.Telegram?.WebApp?.openLink) window.Telegram.WebApp.openLink(url);
       else window.open(url, "_blank", "noopener,noreferrer");
+
+      let checking = false;
+      let timeoutId: number | undefined;
+      let stopped = false;
+      const stopChecking = () => {
+        if (stopped) return;
+        stopped = true;
+        window.removeEventListener("focus", checkTelegramLink);
+        document.removeEventListener("visibilitychange", checkTelegramLink);
+        if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      };
+      const checkTelegramLink = async () => {
+        if (stopped || checking || document.visibilityState === "hidden") return;
+        checking = true;
+        try {
+          const linkedClient = await refreshProfile();
+          if (linkedClient?.telegramId) {
+            stopChecking();
+            toast({ title: "Telegram привязан", variant: "success" });
+          }
+        } finally {
+          checking = false;
+        }
+      };
+      window.addEventListener("focus", checkTelegramLink);
+      document.addEventListener("visibilitychange", checkTelegramLink);
+      timeoutId = window.setTimeout(stopChecking, 10 * 60 * 1000);
       const expires = new Date(request.expiresAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
       toast({ title: "Подтвердите привязку в Telegram", description: `Код действует до ${expires}`, variant: "info" });
     } catch (cause) {

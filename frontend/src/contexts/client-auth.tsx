@@ -54,7 +54,7 @@ type ClientAuthValue = {
   clearPending2FA: () => void;
   clearNewTelegramUser: () => void;
   logout: () => void;
-  refreshProfile: () => Promise<void>;
+  refreshProfile: () => Promise<ClientProfile | null>;
 };
 
 const ClientAuthContext = createContext<ClientAuthValue | null>(null);
@@ -140,7 +140,7 @@ export function ClientAuthProvider({ children }: { children: React.ReactNode }) 
   }, []);
 
   const refreshProfile = useCallback(async () => {
-    if (!state.token) return;
+    if (!state.token) return null;
     try {
       const client = await api.clientMe(state.token);
       setState((prev) => {
@@ -148,12 +148,14 @@ export function ClientAuthProvider({ children }: { children: React.ReactNode }) 
         saveState(prev.token, client);
         return next;
       });
+      return client;
     } catch {
       // сбрасываем флаг попытки, чтобы эффект обмена initData
       // мог переавторизовать миниаппку (иначе при невалидном токене юзер застрянет).
       miniappAttemptedRef.current = false;
       setState({ token: null, client: null, miniappAuthLoading: false, miniappAuthAttempted: false, pending2FAToken: null, isNewTelegramUser: false });
       saveState(null, null);
+      return null;
     }
   }, [state.token]);
 

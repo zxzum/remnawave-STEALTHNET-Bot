@@ -101,6 +101,15 @@ test("uses one production Telegram-link action in dashboard and profile", async 
   assert.match(profile, /linkTelegram/);
 });
 
+test("refreshes the account after Telegram bot linking", async () => {
+  const store = await readFile(new URL("./store/AppContext.tsx", import.meta.url), "utf8");
+  assert.match(store, /const checkTelegramLink = async/);
+  assert.match(store, /window\.addEventListener\("focus", checkTelegramLink\)/);
+  assert.match(store, /document\.addEventListener\("visibilitychange", checkTelegramLink\)/);
+  assert.match(store, /const linkedClient = await refreshProfile\(\)/);
+  assert.match(store, /if \(linkedClient\?\.telegramId\)/);
+});
+
 test("authentication has no prototype timers or fake 2FA secret", async () => {
   const auth = await readFile(new URL("./pages/Auth.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(auth, /TOTP_KEY|FakeQr|Прототип/);
