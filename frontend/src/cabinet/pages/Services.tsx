@@ -5,6 +5,7 @@ import {
   Box, CalendarDays, Copy, CreditCard, Gift, Headphones, KeyRound,
   Layers3, MessageCircle, Network, PackagePlus, Send, Server, ShieldCheck,
   Smartphone, Ticket, Wallet, Wifi, Zap,
+  Loader2,
 } from "lucide-react";
 import { useClientAuth } from "@/contexts/client-auth";
 import { api, type PublicSellOption, type TicketMessageDto } from "@/lib/api";
@@ -57,8 +58,8 @@ function CheckoutActions({
     setLoading(true);
     try {
       const result = await balancePay();
-      await Promise.all([refreshProfile(), reload()]);
       toast({ title: result.message, variant: "success" });
+      void Promise.all([refreshProfile(), reload()]).catch(() => undefined);
     } catch (cause) {
       toast({ title: "Оплата не прошла", description: cause instanceof Error ? cause.message : undefined, variant: "error" });
     } finally {
@@ -84,9 +85,9 @@ function CheckoutActions({
   };
 
   return <div className="mt-4 flex flex-col gap-2">
-    <button disabled={loading || user.balance < amount} onClick={finishBalance} className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-orange-500 to-orange-600 p-3.5 text-sm font-bold text-white disabled:opacity-40"><Wallet className="h-4 w-4" /><span className="flex-1 text-left">С баланса</span><span>{money(user.balance, currency)}</span></button>
-    {(config?.plategaMethods ?? []).map((method) => <button key={method.id} disabled={loading || !state.token} onClick={() => external("Platega", () => api.clientCreatePlategaPayment(state.token!, { ...payload, paymentMethod: method.id, description }))} className="btn-primary px-4 py-3 text-sm"><CreditCard className="h-4 w-4" /> Platega · {method.label}</button>)}
-    {config?.cryptopayEnabled && <button disabled={loading || !state.token} onClick={() => external("Crypto Bot", () => api.cryptopayCreatePayment(state.token!, payload))} className="btn-ghost px-4 py-3 text-sm"><Zap className="h-4 w-4" /> Crypto Bot</button>}
+    <button disabled={loading || user.balance < amount} onClick={finishBalance} className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-orange-500 to-orange-600 p-3.5 text-sm font-bold text-white disabled:opacity-40">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wallet className="h-4 w-4" />}<span className="flex-1 text-left">{loading ? "Оплата…" : "С баланса"}</span><span>{money(user.balance, currency)}</span></button>
+    {(config?.plategaMethods ?? []).map((method) => <button key={method.id} disabled={loading || !state.token} onClick={() => external("Platega", () => api.clientCreatePlategaPayment(state.token!, { ...payload, paymentMethod: method.id, description }))} className="btn-primary px-4 py-3 text-sm">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />} {loading ? "Оплата…" : `Platega · ${method.label}`}</button>)}
+    {config?.cryptopayEnabled && <button disabled={loading || !state.token} onClick={() => external("Crypto Bot", () => api.cryptopayCreatePayment(state.token!, payload))} className="btn-ghost px-4 py-3 text-sm">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />} {loading ? "Оплата…" : "Crypto Bot"}</button>}
   </div>;
 }
 

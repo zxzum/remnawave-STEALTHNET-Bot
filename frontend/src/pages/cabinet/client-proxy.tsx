@@ -144,9 +144,9 @@ export function ClientProxyPage() {
       const res = await api.clientPayByBalance(token, { proxyTariffId: tariff.id });
       setPayModal(null);
       alert(res.message);
-      await refreshProfile();
-      const r = await api.getProxySlots(token);
-      setSlots(r.slots ?? []);
+      void Promise.all([refreshProfile(), api.getProxySlots(token)])
+        .then(([, r]) => setSlots(r.slots ?? []))
+        .catch(() => undefined);
     } catch (e) {
       setPayError(e instanceof Error ? e.message : "Ошибка оплаты");
     } finally {

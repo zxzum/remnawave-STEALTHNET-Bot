@@ -511,9 +511,9 @@ function ClassicTariffsPage() {
       setPromoResult(null);
       setBuyMode({ kind: "new" });
       toast.success("Оплата прошла ✨", res.message);
-      await refreshProfile();
-      loadUserSubs(); // T-unify-cabinet: подписок стало больше — обновляем список для след. покупки
       navigate("/cabinet/dashboard?payment=success");
+      void refreshProfile().catch(() => undefined);
+      void loadUserSubs(); // T-unify-cabinet: подписок стало больше — обновляем список для след. покупки
     } catch (e) {
       setPayError(e instanceof Error ? e.message : t("cabinet.tariffs.error_payment"));
     } finally {

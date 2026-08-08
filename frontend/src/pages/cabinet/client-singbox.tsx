@@ -140,9 +140,9 @@ export function ClientSingboxPage() {
       const res = await api.clientPayByBalance(token, { singboxTariffId: tariff.id });
       setPayModal(null);
       alert(res.message);
-      await refreshProfile();
-      const r = await api.getSingboxSlots(token);
-      setSlots(r.slots ?? []);
+      void Promise.all([refreshProfile(), api.getSingboxSlots(token)])
+        .then(([, r]) => setSlots(r.slots ?? []))
+        .catch(() => undefined);
     } catch (e) {
       setPayError(e instanceof Error ? e.message : "Ошибка оплаты");
     } finally {

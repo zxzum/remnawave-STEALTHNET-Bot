@@ -82,9 +82,9 @@ export function ClientCustomBuildPage() {
         trafficGb: cb.trafficMode === "per_gb" ? trafficGb : undefined,
         promoCode: promoCode.trim() || undefined,
       });
-      await refreshProfile();
       setPayModalOpen(false);
       setPromoCode("");
+      void refreshProfile().catch(() => undefined);
     } catch (e) {
       setPayError(e instanceof Error ? e.message : "Ошибка оплаты с баланса");
     } finally {

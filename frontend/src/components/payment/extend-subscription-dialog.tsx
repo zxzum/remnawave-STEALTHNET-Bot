@@ -167,10 +167,10 @@ export function ExtendSubscriptionDialog({
     try {
       if (providerId === "balance") {
         await api.clientPayByBalance(token, payBase);
-        await refreshProfile();
         toast.success("Подписка продлена 🎉", `${sub?.label ?? "Подписка"} продлена на ${formatRuDays(days)}.`);
         onPaidByBalance?.();
         onClose();
+        void refreshProfile().catch(() => undefined);
         return;
       }
       let url: string | null = null;
@@ -380,9 +380,9 @@ export function ExtendSubscriptionDialog({
                   className="w-full h-14 justify-start gap-3 rounded-2xl border-white/10 bg-white/[0.03] hover:bg-white/[0.07] px-5"
                 >
                   <span className="p-1.5 rounded-xl bg-primary/10">
-                    <CreditCard className="h-4 w-4 text-primary" />
+                    {payLoading ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : <CreditCard className="h-4 w-4 text-primary" />}
                   </span>
-                  <span className="font-bold text-sm">{p.label}</span>
+                  <span className="font-bold text-sm">{payLoading ? "Оплата…" : p.label}</span>
                 </Button>
               ))}
               {providers.length === 0 && !client && (

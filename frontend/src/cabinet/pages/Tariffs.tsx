@@ -20,6 +20,7 @@ import {
   RefreshCw,
   Tag,
   Wallet,
+  Loader2,
   Zap,
   Sparkles,
   Flame,
@@ -220,10 +221,10 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
     try {
       const result = await api.clientPayByBalance(state.token, purchasePayload);
       toast({ title: "Оплата прошла", description: result.message, variant: "success" });
-      await Promise.all([refreshProfile(), reload()]);
       onOpenChange(false);
       reset();
       navigate("/cabinet/dashboard?payment=success");
+      void Promise.all([refreshProfile(), reload()]).catch(() => undefined);
     } catch (cause) {
       toast({ title: "Не удалось оплатить", description: cause instanceof Error ? cause.message : undefined, variant: "error" });
     } finally {
@@ -616,8 +617,8 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                         onClick={payBalance}
                         className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-orange-500 to-orange-600 p-4 text-left font-bold text-white shadow-[0_0_28px_-8px_rgba(249,115,22,0.7)] transition-filter hover:brightness-110"
                       >
-                        <Wallet className="h-5 w-5" />
-                        <span className="flex-1">Оплатить с баланса</span>
+                        {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wallet className="h-5 w-5" />}
+                        <span className="flex-1">{paying ? "Оплата…" : "Оплатить с баланса"}</span>
                         <span className="rounded-lg bg-black/25 px-2.5 py-1 text-sm">
                           {user.balance.toLocaleString("ru-RU")} ₽
                         </span>
@@ -646,7 +647,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                           className="btn-primary flex-col gap-0.5 rounded-2xl px-3 py-3.5 text-sm"
                         >
                           <span className="flex items-center gap-1.5 font-bold">
-                            <QrCode className="h-4 w-4" /> СБП
+                            {paying ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />} {paying ? "Оплата…" : "СБП"}
                           </span>
                           <span className="text-[10px] font-medium opacity-75">по QR-коду</span>
                         </motion.button>}
@@ -657,7 +658,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                           className="btn-primary flex-col gap-0.5 rounded-2xl px-3 py-3.5 text-sm"
                         >
                           <span className="flex items-center gap-1.5 font-bold">
-                            <CreditCard className="h-4 w-4" /> Карта
+                            {paying ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />} {paying ? "Оплата…" : "Карта"}
                           </span>
                           <span className="text-[10px] font-medium opacity-75">RUB · любой банк</span>
                         </motion.button>}
@@ -667,7 +668,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                         onClick={() => payPlatega(cryptoMethod.id)}
                         className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-xl py-1.5 text-xs font-semibold text-fog-400 transition-colors hover:text-accent-400"
                       >
-                        <Bitcoin className="h-3.5 w-3.5" /> Оплатить криптой через Platega
+                        {paying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bitcoin className="h-3.5 w-3.5" />} {paying ? "Оплата…" : "Оплатить криптой через Platega"}
                       </button>}
                       {otherPlategaMethods.length > 0 && <div className="mt-2.5 grid grid-cols-1 gap-2">
                         {otherPlategaMethods.map((method) => (
@@ -677,7 +678,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                             onClick={() => payPlatega(method.id)}
                             className="rounded-xl border border-accent-400/20 bg-accent-500/8 px-3 py-2 text-sm font-semibold transition-colors hover:bg-accent-500/15"
                           >
-                            {method.label}
+                            {paying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} {paying ? "Оплата…" : method.label}
                           </button>
                         ))}
                       </div>}
@@ -689,10 +690,10 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                       className="glass group flex items-center gap-3 rounded-2xl p-4 text-left transition-all hover:border-amber-glow/30"
                     >
                       <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-amber-glow/25 bg-amber-glow/10 text-amber-glow">
-                        <Zap className="h-5 w-5" />
+                        {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <Zap className="h-5 w-5" />}
                       </div>
                       <div className="flex-1">
-                        <p className="font-bold">Crypto Bot</p>
+                        <p className="font-bold">{paying ? "Оплата…" : "Crypto Bot"}</p>
                         <p className="text-xs text-fog-500">USDT · TON · BTC</p>
                       </div>
                     </button>}
