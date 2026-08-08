@@ -84,6 +84,12 @@ import {
 } from "../remna/remna.client.js";
 import { getSystemConfig, invalidateSystemConfigCache } from "../client/client.service.js";
 import {
+  ensureTelegramNotificationTopics,
+  getTelegramTopicResetKeys,
+  MAIN_TELEGRAM_NOTIFICATION_TOPICS,
+  MANAGERS_TELEGRAM_NOTIFICATION_TOPIC,
+} from "../notification/telegram-topics.js";
+import {
   disableClient as bulkDisableClient,
   enableClient as bulkEnableClient,
   disableAllSubscriptionsInRemna,
@@ -3349,6 +3355,7 @@ const updateSettingsSchema = z.object({
   notificationTopicPromo: z.string().max(50).nullable().optional(),
   notificationTopicGifts: z.string().max(50).nullable().optional(),
   notificationTopicAutoRenew: z.string().max(50).nullable().optional(),
+  notificationTopicSubscriptionRevoked: z.string().max(50).nullable().optional(),
   notificationTopicBackups: z.string().max(50).nullable().optional(),
   autoBackupEnabled: z.boolean().optional(),
   autoBackupCron: z.string().max(50).nullable().optional(),
@@ -3654,6 +3661,15 @@ adminRouter.patch("/settings", async (req, res) => {
     return res.status(400).json({ message: "Invalid input", errors: body.error.flatten() });
   }
   const updates = body.data;
+  const previousNotificationGroups =
+    updates.notificationTelegramGroupId !== undefined || updates.notificationManagersGroupId !== undefined
+      ? await prisma.systemSetting.findMany({
+          where: { key: { in: ["notification_telegram_group_id", "notification_managers_group_id"] } },
+          select: { key: true, value: true },
+        })
+      : [];
+  const previousMainGroupId = previousNotificationGroups.find((setting) => setting.key === "notification_telegram_group_id")?.value.trim() ?? "";
+  const previousManagersGroupId = previousNotificationGroups.find((setting) => setting.key === "notification_managers_group_id")?.value.trim() ?? "";
   if (updates.activeLanguages != null) {
     await prisma.systemSetting.upsert({
       where: { key: "active_languages" },
@@ -3870,6 +3886,7 @@ adminRouter.patch("/settings", async (req, res) => {
     ["notificationTopicPromo", "notification_topic_promo"],
     ["notificationTopicGifts", "notification_topic_gifts"],
     ["notificationTopicAutoRenew", "notification_topic_auto_renew"],
+    ["notificationTopicSubscriptionRevoked", "notification_topic_subscription_revoked"],
     ["notificationManagersTopicTickets", "notification_managers_topic_tickets"],
     ["notificationTopicBackups", "notification_topic_backups"],
   ];
@@ -3878,6 +3895,22 @@ adminRouter.patch("/settings", async (req, res) => {
       const val = (String(updates[key] ?? "")).trim() || "";
       await prisma.systemSetting.upsert({ where: { key: dbKey }, create: { key: dbKey, value: val }, update: { value: val } });
     }
+  }
+  const nextMainGroupId = updates.notificationTelegramGroupId !== undefined
+    ? (updates.notificationTelegramGroupId ?? "").trim()
+    : previousMainGroupId;
+  const nextManagersGroupId = updates.notificationManagersGroupId !== undefined
+    ? (updates.notificationManagersGroupId ?? "").trim()
+    : previousManagersGroupId;
+  for (const key of getTelegramTopicResetKeys(
+    updates.notificationTelegramGroupId !== undefined && previousMainGroupId !== nextMainGroupId,
+    updates.notificationManagersGroupId !== undefined && previousManagersGroupId !== nextManagersGroupId,
+  )) {
+    await prisma.systemSetting.upsert({
+      where: { key },
+      create: { key, value: "" },
+      update: { value: "" },
+    });
   }
   if (updates.autoBackupEnabled !== undefined) {
     const val = updates.autoBackupEnabled ? "true" : "false";
@@ -4670,11 +4703,41 @@ adminRouter.patch("/settings", async (req, res) => {
       update: { value: val },
     });
   }
-  // invalidate cache до возврата свежего config'а.
   invalidateSystemConfigCache();
-  invalidateBrandCache();
   const config = await getSystemConfig();
-  return res.json(config);
+  if ((config.notificationTelegramGroupId || config.notificationManagersGroupId) && config.telegramBotToken) {
+    const topicSettingKeys = [
+      ...MAIN_TELEGRAM_NOTIFICATION_TOPICS.map((topic) => topic.settingKey),
+      MANAGERS_TELEGRAM_NOTIFICATION_TOPIC.settingKey,
+    ];
+    const topicSettings = await prisma.systemSetting.findMany({
+      where: { key: { in: topicSettingKeys } },
+      select: { key: true, value: true },
+    });
+    const topicIds = Object.fromEntries(topicSettings.map((setting) => [setting.key, setting.value]));
+    try {
+      await ensureTelegramNotificationTopics({
+        botToken: config.telegramBotToken,
+        groupId: config.notificationTelegramGroupId,
+        managersGroupId: config.notificationManagersGroupId,
+        topicIds,
+        setTopicId: async (settingKey, topicId) => {
+          await prisma.systemSetting.upsert({
+            where: { key: settingKey },
+            create: { key: settingKey, value: topicId },
+            update: { value: topicId },
+          });
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Не удалось создать Telegram-топики";
+      return res.status(400).json({ message });
+    }
+    invalidateSystemConfigCache();
+  }
+  // invalidate cache до возврата свежего config'а.
+  invalidateBrandCache();
+  return res.json(await getSystemConfig());
 });
 
 adminRouter.post("/nalog/test", asyncRoute(async (_req, res) => {

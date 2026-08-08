@@ -135,7 +135,7 @@ export async function sendTelegramToUser(
   await sendTelegramToUserChecked(telegramId, text, messageThreadId, replyMarkup, opts);
 }
 
-function getTopicIdForEvent(config: Record<string, unknown>, eventType: AdminNotificationEventType): number | null {
+export function getTopicIdForEvent(config: Record<string, unknown>, eventType: AdminNotificationEventType): number | null {
   let raw: string | null = null;
   switch (eventType) {
     case "new_client":
@@ -165,6 +165,9 @@ function getTopicIdForEvent(config: Record<string, unknown>, eventType: AdminNot
       break;
     case "auto_renew_failed":
       raw = (config.notificationTopicAutoRenew as string) ?? null;
+      break;
+    case "subscription_revoked":
+      raw = (config.notificationTopicSubscriptionRevoked as string) ?? null;
       break;
   }
   if (!raw?.trim()) return null;

@@ -116,6 +116,7 @@ const SYSTEM_CONFIG_KEYS = [
   "notification_topic_promo",
   "notification_topic_gifts",
   "notification_topic_auto_renew",
+  "notification_topic_subscription_revoked",
   "platega_merchant_id", "platega_secret", "platega_methods", "payment_providers_config",
   // Webhook secret для проверки HMAC-подписи от Platega (security fix против форджинга платежей).
   "platega_webhook_secret",
@@ -648,6 +649,7 @@ async function loadSystemConfigFromDb() {
     notificationTopicPromo: (map.notification_topic_promo ?? "").trim() || null,
     notificationTopicGifts: (map.notification_topic_gifts ?? "").trim() || null,
     notificationTopicAutoRenew: (map.notification_topic_auto_renew ?? "").trim() || null,
+    notificationTopicSubscriptionRevoked: (map.notification_topic_subscription_revoked ?? "").trim() || null,
     notificationTopicBackups: (map.notification_topic_backups ?? "").trim() || null,
     autoBackupEnabled: map.auto_backup_enabled === "true" || map.auto_backup_enabled === "1",
     autoBackupCron: (map.auto_backup_cron ?? "").trim() || null,

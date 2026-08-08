@@ -50,7 +50,7 @@ export function getTelegramTopicResetKeys(mainGroupChanged: boolean, managersGro
 }
 
 async function defaultTelegramTopicRequest(url: string, init: RequestInit): Promise<Response> {
-  return proxyFetch(url, init, await getProxyUrl("telegram"));
+  return proxyFetch(url, init as RequestInit & { signal?: AbortSignal }, await getProxyUrl("telegram"));
 }
 
 async function createTelegramForumTopic(
@@ -66,7 +66,7 @@ async function createTelegramForumTopic(
   });
   const data = (await response.json().catch(() => null)) as TelegramCreateTopicResponse | null;
   const topicId = data?.result?.message_thread_id;
-  if (!data?.ok || !Number.isInteger(topicId) || topicId <= 0) {
+  if (!data?.ok || typeof topicId !== "number" || !Number.isInteger(topicId) || topicId <= 0) {
     throw new Error(`Не удалось создать топик «${name}»: ${data?.description ?? `HTTP ${response.status}`}`);
   }
   return String(topicId);

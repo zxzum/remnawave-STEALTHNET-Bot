@@ -10,6 +10,7 @@ const {
   ensureTelegramNotificationTopics,
   getTelegramTopicResetKeys,
 } = await import("./telegram-topics.js");
+const { getTopicIdForEvent } = await import("./telegram-notify.service.js");
 
 test("defines all main and managers topic names", () => {
   assert.deepEqual(MAIN_TELEGRAM_NOTIFICATION_TOPICS.map((topic) => topic.name), [
@@ -72,4 +73,8 @@ test("resets main or managers IDs only for the group that changed", () => {
     MAIN_TELEGRAM_NOTIFICATION_TOPICS.map((topic) => topic.settingKey),
   );
   assert.deepEqual(getTelegramTopicResetKeys(false, true), ["notification_managers_topic_tickets"]);
+});
+
+test("maps revoked subscription notifications to their dedicated setting", () => {
+  assert.equal(getTopicIdForEvent({ notificationTopicSubscriptionRevoked: "77" }, "subscription_revoked"), 77);
 });
