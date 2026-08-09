@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClientAuth } from "@/contexts/client-auth";
 import { api, type ClientPayment, type ClientReferralStats, type ClientTrialOption, type PublicConfig } from "@/lib/api";
 import {
@@ -39,10 +39,12 @@ interface AppState {
   loading: boolean;
   error: string | null;
   canLinkTelegram: boolean;
+  canUnlinkTelegram: boolean;
   toasts: Toast[];
   reload: () => Promise<void>;
   disconnectDevice: (subId: string, deviceId: string) => Promise<void>;
   linkTelegram: () => Promise<void>;
+  unlinkTelegram: () => Promise<void>;
   toast: (toast: Omit<Toast, "id">) => void;
   dismissToast: (id: number) => void;
   copy: (text: string, label?: string) => Promise<void>;
@@ -122,6 +124,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const telegramLinkPromiseRef = useRef<Promise<void> | null>(null);
+  const telegramLinkActiveRef = useRef(false);
+  const stopTelegramLinkRef = useRef<(() => void) | null>(null);
 
   const dismissToast = useCallback((id: number) => {
     setToasts((current) => current.filter((toast) => toast.id !== id));
@@ -185,6 +190,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     void reload();
   }, [reload, state.token]);
 
+  useEffect(() => () => {
+    stopTelegramLinkRef.current?.();
+  }, []);
+
   const disconnectDevice = useCallback(async (subId: string, deviceId: string) => {
     if (!state.token) return;
     const subscription = subscriptions.find((item) => item.id === subId);
@@ -196,54 +205,95 @@ export function AppProvider({ children }: { children: ReactNode }) {
     toast({ title: "Устройство отключено", description: "Слот освобождён для нового устройства", variant: "info" });
   }, [state.token, subscriptions, toast]);
 
-  const linkTelegram = useCallback(async () => {
+  const linkTelegram = useCallback(() => {
+    if (!state.token) return Promise.resolve();
+    if (telegramLinkActiveRef.current) return telegramLinkPromiseRef.current ?? Promise.resolve();
+    telegramLinkActiveRef.current = true;
+
+    const telegramWebApp = window.Telegram?.WebApp;
+    const initData = telegramWebApp?.initData?.trim();
+    const popup = !initData && !telegramWebApp?.openLink
+      ? window.open("about:blank", "_blank", "noopener,noreferrer")
+      : null;
+
+    let browserSessionStarted = false;
+    const promise = (async () => {
+      try {
+        const request = await api.clientLinkTelegramRequest(state.token!);
+        if (initData) {
+          await api.clientLinkTelegram(state.token!, { initData });
+          await refreshProfile();
+          toast({ title: "Telegram привязан", variant: "success" });
+          return;
+        }
+
+        const username = request.botUsername?.replace(/^@/, "");
+        if (!username) throw new Error("Telegram-бот для привязки не настроен");
+        const url = `https://t.me/${encodeURIComponent(username)}?start=link_${encodeURIComponent(request.code)}`;
+        if (telegramWebApp?.openLink) telegramWebApp.openLink(url);
+        else if (popup && !popup.closed) popup.location.href = url;
+        else window.location.assign(url);
+
+        let checking = false;
+        let timeoutId: number | undefined;
+        let stopped = false;
+        const checkTelegramLink = async () => {
+          if (stopped || checking || document.visibilityState === "hidden") return;
+          checking = true;
+          try {
+            const linkedClient = await refreshProfile();
+            if (linkedClient?.telegramId) {
+              stopChecking();
+              toast({ title: "Telegram привязан", variant: "success" });
+            }
+          } catch {
+            // Возврат из Telegram может совпасть с кратким отсутствием сети.
+            // Следующий focus/pageshow повторит проверку.
+          } finally {
+            checking = false;
+          }
+        };
+        const stopChecking = () => {
+          if (stopped) return;
+          stopped = true;
+          telegramLinkActiveRef.current = false;
+          window.removeEventListener("focus", checkTelegramLink);
+          window.removeEventListener("pageshow", checkTelegramLink);
+          document.removeEventListener("visibilitychange", checkTelegramLink);
+          if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+          if (stopTelegramLinkRef.current === stopChecking) stopTelegramLinkRef.current = null;
+        };
+        stopTelegramLinkRef.current = stopChecking;
+        window.addEventListener("focus", checkTelegramLink);
+        window.addEventListener("pageshow", checkTelegramLink);
+        document.addEventListener("visibilitychange", checkTelegramLink);
+        timeoutId = window.setTimeout(stopChecking, 10 * 60 * 1000);
+        browserSessionStarted = true;
+        const expires = new Date(request.expiresAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+        toast({ title: "Подтвердите привязку в Telegram", description: `Код действует до ${expires}`, variant: "info" });
+      } catch (cause) {
+        stopTelegramLinkRef.current?.();
+        if (popup && !popup.closed) popup.close();
+        const message = cause instanceof Error ? cause.message : "Не удалось привязать Telegram";
+        toast({ title: "Ошибка привязки", description: message, variant: "error" });
+      } finally {
+        if (!browserSessionStarted) telegramLinkActiveRef.current = false;
+        telegramLinkPromiseRef.current = null;
+      }
+    })();
+    telegramLinkPromiseRef.current = promise;
+    return promise;
+  }, [refreshProfile, state.token, toast]);
+
+  const unlinkTelegram = useCallback(async () => {
     if (!state.token) return;
     try {
-      const request = await api.clientLinkTelegramRequest(state.token);
-      const initData = window.Telegram?.WebApp?.initData?.trim();
-      if (initData) {
-        await api.clientLinkTelegram(state.token, { initData });
-        await refreshProfile();
-        toast({ title: "Telegram привязан", variant: "success" });
-        return;
-      }
-      const username = request.botUsername?.replace(/^@/, "");
-      if (!username) throw new Error("Telegram-бот для привязки не настроен");
-      const url = `https://t.me/${encodeURIComponent(username)}?start=link_${encodeURIComponent(request.code)}`;
-      if (window.Telegram?.WebApp?.openLink) window.Telegram.WebApp.openLink(url);
-      else window.open(url, "_blank", "noopener,noreferrer");
-
-      let checking = false;
-      let timeoutId: number | undefined;
-      let stopped = false;
-      const stopChecking = () => {
-        if (stopped) return;
-        stopped = true;
-        window.removeEventListener("focus", checkTelegramLink);
-        document.removeEventListener("visibilitychange", checkTelegramLink);
-        if (timeoutId !== undefined) window.clearTimeout(timeoutId);
-      };
-      const checkTelegramLink = async () => {
-        if (stopped || checking || document.visibilityState === "hidden") return;
-        checking = true;
-        try {
-          const linkedClient = await refreshProfile();
-          if (linkedClient?.telegramId) {
-            stopChecking();
-            toast({ title: "Telegram привязан", variant: "success" });
-          }
-        } finally {
-          checking = false;
-        }
-      };
-      window.addEventListener("focus", checkTelegramLink);
-      document.addEventListener("visibilitychange", checkTelegramLink);
-      timeoutId = window.setTimeout(stopChecking, 10 * 60 * 1000);
-      const expires = new Date(request.expiresAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
-      toast({ title: "Подтвердите привязку в Telegram", description: `Код действует до ${expires}`, variant: "info" });
+      await api.clientUnlinkTelegram(state.token);
+      await refreshProfile();
+      toast({ title: "Telegram отвязан", variant: "success" });
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : "Не удалось привязать Telegram";
-      toast({ title: "Ошибка привязки", description: message, variant: "error" });
+      const message = cause instanceof Error ? cause.message : "Не удалось отвязать Telegram";
+      toast({ title: "Ошибка отвязки", description: message, variant: "error" });
     }
   }, [refreshProfile, state.token, toast]);
 
@@ -262,14 +312,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loading,
     error,
     canLinkTelegram: shouldOfferTelegramLink(state.client),
+    canUnlinkTelegram: Boolean(state.client?.telegramId),
     toasts,
     reload,
     disconnectDevice,
     linkTelegram,
+    unlinkTelegram,
     toast,
     dismissToast,
     copy,
-  }), [user, subscriptions, transactions, referral, clientApps, tariffGroups, availableTrials, config, loading, error, state.client, reload, disconnectDevice, linkTelegram, toast, dismissToast, copy]);
+  }), [user, subscriptions, transactions, referral, clientApps, tariffGroups, availableTrials, config, loading, error, state.client, reload, disconnectDevice, linkTelegram, unlinkTelegram, toast, dismissToast, copy]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

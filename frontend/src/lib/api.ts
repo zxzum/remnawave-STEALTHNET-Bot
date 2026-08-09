@@ -2640,6 +2640,10 @@ export const api = {
     });
   },
 
+  async clientUnlinkTelegram(token: string): Promise<{ message: string }> {
+    return request("/client/unlink-telegram", { method: "POST", token });
+  },
+
   /** Запросить привязку email (отправить письмо со ссылкой) */
   async clientLinkEmailRequest(token: string, data: { email: string }): Promise<{ message: string }> {
     return request("/client/link-email-request", { method: "POST", body: JSON.stringify(data), token });

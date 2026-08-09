@@ -31,6 +31,7 @@ import {
   Headphones,
   Save,
   LogOut,
+  Unlink,
 } from "lucide-react";
 import { cn } from "../lib/cn";
 import { useApp } from "../store/AppContext";
@@ -284,8 +285,9 @@ function TopUp() {
 /* ---------------- Данные аккаунта ---------------- */
 
 function AccountData() {
-  const { referral, user, canLinkTelegram, linkTelegram } = useApp();
+  const { referral, user, canLinkTelegram, linkTelegram, canUnlinkTelegram, unlinkTelegram } = useApp();
   const [linking, setLinking] = useState(false);
+  const [unlinking, setUnlinking] = useState(false);
   const rows = [
     { icon: Hash, label: "ID аккаунта", value: user.telegramId },
     { icon: Mail, label: "Email", value: user.email },
@@ -319,6 +321,23 @@ function AccountData() {
           className="btn-ghost mt-4 w-full px-5 py-3 text-sm disabled:cursor-wait disabled:opacity-60"
         >
           <Send className="h-4 w-4" /> {linking ? "Открываем Telegram…" : "Привязать Telegram"}
+        </button>
+      )}
+      {canUnlinkTelegram && (
+        <button
+          disabled={unlinking}
+          onClick={async () => {
+            if (!window.confirm("Отвязать Telegram от аккаунта?")) return;
+            setUnlinking(true);
+            try {
+              await unlinkTelegram();
+            } finally {
+              setUnlinking(false);
+            }
+          }}
+          className="btn-ghost mt-2 w-full px-5 py-3 text-sm text-rose-300 disabled:cursor-wait disabled:opacity-60"
+        >
+          <Unlink className="h-4 w-4" /> {unlinking ? "Отвязываем…" : "Отвязать Telegram"}
         </button>
       )}
       <div className="mt-4 flex flex-col gap-2">
