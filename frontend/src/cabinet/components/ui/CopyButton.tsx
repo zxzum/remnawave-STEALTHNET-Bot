@@ -115,6 +115,7 @@ export function CopyIconButton({ text, label, className }: { text: string; label
 
   return (
     <motion.button
+      type="button"
       whileTap={{ scale: 0.85 }}
       onClick={handle}
       aria-label={label ?? "Скопировать"}

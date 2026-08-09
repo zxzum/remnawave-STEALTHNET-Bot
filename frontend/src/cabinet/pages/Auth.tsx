@@ -460,7 +460,7 @@ export function Register() {
           transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
         >
           {step === "email" && (
-            <div>
+            <form onSubmit={(event) => { event.preventDefault(); continueEmail(); }}>
               <div className="icon-tile mx-auto h-16 w-16 rounded-2xl">
                 <UserPlus className="h-7 w-7" />
               </div>
@@ -512,8 +512,8 @@ export function Register() {
               </label>
 
               <button
+                type="submit"
                 disabled={!config || !emailValid || !agreed || sent || loading}
-                onClick={continueEmail}
                 className="btn-primary mt-5 w-full px-6 py-4 text-base disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {sent ? "Проверьте почту" : !config ? "Загрузка…" : loading ? "Отправляем…" : "Продолжить"}
@@ -521,11 +521,11 @@ export function Register() {
 
               <Divider />
 
-              <button disabled={!config?.telegramBotUsername || telegram.pending} onClick={telegram.start} className="btn-ghost w-full px-6 py-4 text-sm disabled:opacity-40">
+              <button type="button" disabled={!config?.telegramBotUsername || telegram.pending} onClick={telegram.start} className="btn-ghost w-full px-6 py-4 text-sm disabled:opacity-40">
                 <Send className="h-4 w-4" /> {telegram.pending ? "Ожидаем подтверждение…" : "Зарегистрироваться через Telegram"}
               </button>
-              {config?.googleLoginEnabled && <button onClick={() => external.redirect("google")} className="btn-ghost mt-2 w-full px-6 py-4 text-sm">Продолжить через Google</button>}
-              {config?.appleLoginEnabled && <button onClick={() => external.redirect("apple")} className="btn-ghost mt-2 w-full px-6 py-4 text-sm">Продолжить через Apple</button>}
+              {config?.googleLoginEnabled && <button type="button" onClick={() => external.redirect("google")} className="btn-ghost mt-2 w-full px-6 py-4 text-sm">Продолжить через Google</button>}
+              {config?.appleLoginEnabled && <button type="button" onClick={() => external.redirect("apple")} className="btn-ghost mt-2 w-full px-6 py-4 text-sm">Продолжить через Apple</button>}
 
               <p className="mt-6 text-center text-sm text-fog-500">
                 Уже есть аккаунт?{" "}
@@ -533,11 +533,11 @@ export function Register() {
                   Войти
                 </Link>
               </p>
-            </div>
+            </form>
           )}
 
           {step === "password" && (
-            <div>
+            <form onSubmit={(event) => { event.preventDefault(); void submitRegistration(); }}>
               <StepDots current={0} total={2} />
               <div className="icon-tile mx-auto h-16 w-16 rounded-2xl">
                 <KeyRound className="h-7 w-7" />
@@ -552,18 +552,18 @@ export function Register() {
               {pw2.length > 0 && pw1 !== pw2 && <p className="mt-2 text-xs font-semibold text-red-400">Пароли не совпадают</p>}
 
               <button
+                type="submit"
                 disabled={pw1.length < 8 || pw1 !== pw2 || loading}
-                onClick={submitRegistration}
                 className="btn-primary mt-5 w-full px-6 py-4 text-base disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {loading ? "Создаём аккаунт…" : <>Далее <ChevronRight className="h-4 w-4" /></>}
               </button>
               {error && <p className="mt-3 text-center text-sm font-semibold text-red-400">{error}</p>}
-            </div>
+            </form>
           )}
 
           {step === "twofa" && (
-            <div>
+            <form onSubmit={(event) => { event.preventDefault(); void confirm2FA(); }}>
               <StepDots current={1} total={2} />
               <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl border border-orange-400/25 bg-orange-500/12 text-orange-400">
                 <ShieldCheck className="h-7 w-7" />
@@ -598,20 +598,21 @@ export function Register() {
               />
 
               <button
+                type="submit"
                 disabled={code.length !== 6 || loading || !twoFA}
-                onClick={confirm2FA}
                 className="btn-primary mt-4 w-full px-6 py-4 text-base disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Подтвердить и завершить
               </button>
               {error && <p className="mt-3 text-center text-sm font-semibold text-red-400">{error}</p>}
               <button
+                type="button"
                 onClick={goCabinet}
                 className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-2xl border border-amber-glow/25 bg-amber-glow/10 px-6 py-3.5 text-sm font-bold text-amber-glow transition-all hover:bg-amber-glow/20 active:scale-95"
               >
                 Пропустить, перейти в кабинет <ChevronRight className="h-4 w-4" />
               </button>
-            </div>
+            </form>
           )}
 
           {step === "done" && (
