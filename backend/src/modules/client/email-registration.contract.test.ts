@@ -47,6 +47,12 @@ test("registration serializes limit reads with pending-row reservation", () => {
   assert.match(transactionBlock, /tx\.pendingEmailRegistration\.create/);
 });
 
+test("advisory transaction locks use executeRaw for void results", () => {
+  const advisoryLockCalls = routes.match(/tx\.\$(?:queryRaw|executeRaw)`SELECT pg_advisory_xact_lock/g) ?? [];
+  assert.equal(advisoryLockCalls.length, 3);
+  assert.ok(advisoryLockCalls.every((call) => call.startsWith("tx.$executeRaw`")));
+});
+
 test("completion locks and revalidates the pending row before client creation", () => {
   const completeStart = routes.indexOf('clientAuthRouter.post("/complete-registration"');
   const nextRouteStart = routes.indexOf("/** Валидация initData", completeStart);

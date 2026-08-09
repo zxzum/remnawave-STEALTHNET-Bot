@@ -341,7 +341,7 @@ clientAuthRouter.post("/register", async (req, res) => {
       const lockKeys = [`email:${email}`];
       if (clientIp) lockKeys.push(`ip:${clientIp}`);
       for (const key of lockKeys.sort()) {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
       }
 
       const now = new Date();
@@ -416,7 +416,7 @@ clientAuthRouter.post("/register", async (req, res) => {
     try {
       const finalization = await prisma.$transaction(async (tx) => finalizeEmailRegistrationDelivery({
         withEmailLock: async (lockedEmail, work) => {
-          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`email:${lockedEmail}`}))`;
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`email:${lockedEmail}`}))`;
           return work();
         },
         findPendingState: (id) => tx.pendingEmailRegistration.findUnique({
@@ -690,7 +690,7 @@ clientAuthRouter.post("/complete-registration", async (req, res) => {
   try {
     completionResult = await prisma.$transaction(async (tx) => completeEmailRegistration({
       withEmailLock: async (email, work) => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`email:${email}`}))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`email:${email}`}))`;
         return work();
       },
       findPending: (id) => tx.pendingEmailRegistration.findUnique({
