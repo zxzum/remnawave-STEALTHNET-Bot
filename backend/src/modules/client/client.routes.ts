@@ -26,6 +26,7 @@ import {
   notifyAdminsAboutNewClient,
   notifyAdminsAboutNewTicket,
   notifyAdminsAboutError,
+  sendTelegramToUser,
 } from "../notification/telegram-notify.service.js";
 import { formatBotErrorNotification } from "../notification/telegram-error-notification.js";
 import { requireClientAuth } from "./client.middleware.js";
@@ -1775,6 +1776,40 @@ clientRouter.post("/link-telegram-request", async (req, res) => {
   return res.json({ code, expiresAt: expiresAt.toISOString(), botUsername });
 });
 
+async function notifyTelegramLinkSuccess(clientId: string, telegramId: string): Promise<void> {
+  const config = await getSystemConfig().catch(() => null);
+  const appUrl = (config?.publicAppUrl ?? "").replace(/\/+$/, "");
+  if (!appUrl) return;
+  await sendTelegramToUser(
+    telegramId,
+    "✅ Telegram привязан к аккаунту Лазейка ВПН.",
+    null,
+    { inline_keyboard: [[{ text: "🏠 Открыть главный экран", web_app: { url: `${appUrl}/cabinet` } }]] },
+    { clientIdForBotToken: clientId },
+  ).catch((error) => console.warn("[link-telegram] success notification failed:", error));
+}
+
+clientRouter.post("/unlink-telegram", async (req, res) => {
+  const clientId = (req as unknown as { client: { id: string } }).client.id;
+  const client = await prisma.client.findUnique({
+    where: { id: clientId },
+    select: { id: true, telegramId: true, email: true, passwordHash: true, googleId: true, appleId: true },
+  });
+  if (!client) return res.status(404).json({ message: "Аккаунт не найден" });
+  if (!client.telegramId) return res.status(400).json({ message: "Telegram не привязан" });
+  if (isBotOnlyAccount(client)) {
+    return res.status(400).json({ message: "Нельзя отвязать Telegram: это единственный способ входа. Сначала добавьте email или пароль." });
+  }
+  await prisma.$transaction([
+    prisma.client.update({
+      where: { id: client.id },
+      data: { telegramId: null, telegramUsername: null, telegramUnreachable: false },
+    }),
+    prisma.pendingTelegramLink.deleteMany({ where: { clientId: client.id } }),
+  ]);
+  return res.json({ message: "Telegram отвязан" });
+});
+
 /** Привязать Telegram из Mini App (initData от Telegram WebApp) */
 const linkTelegramSchema = z.object({
   initData: z.string().min(1),
@@ -1844,6 +1879,7 @@ clientRouter.post("/link-telegram", async (req, res) => {
   });
   if (!updated) return res.status(500).json({ message: "Не удалось привязать Telegram" });
   if (updated.telegramId !== telegramId) return res.status(500).json({ message: "Telegram не записался в аккаунт. Повторите попытку." });
+  await notifyTelegramLinkSuccess(updated.id, telegramId);
   return res.json({ client: toClientShape(updated) });
 });
 
@@ -1885,6 +1921,7 @@ clientRouter.post("/link-telegram-confirm", async (req, res) => {
     select: { id: true, email: true, telegramId: true, telegramUsername: true, preferredLang: true, preferredCurrency: true, balance: true, referralCode: true, remnawaveUuid: true, trialUsed: true, isBlocked: true, autoRenewEnabled: true, autoRenewTariffId: true, yoomoneyAccessToken: true, createdAt: true, onboardingCompleted: true, passwordHash: true },
   });
   if (!updated || updated.telegramId !== telegramId) return res.status(500).json({ message: "Telegram не записался в аккаунт. Повторите попытку." });
+  await notifyTelegramLinkSuccess(updated.id, telegramId);
   return res.json({ client: toClientShape(updated) });
 });
 
