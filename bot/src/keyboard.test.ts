@@ -57,6 +57,7 @@ function callbacks(markup: ReturnType<typeof mainMenu>): (string | null)[][] {
 test("главное меню содержит только согласованные смысловые ряды", () => {
   assert.deepEqual(labels(buildMain(true)), [
     ["🔐 Войти в кабинет"],
+    ["🎁 Попробовать бесплатно"],
     ["📋 Мои подписки"],
     ["🔗 Реферальная система"],
     ["🆘 Поддержка"],
@@ -77,7 +78,7 @@ test("использованный или недоступный пробник 
 test("главное меню использует цветовую иерархию кнопок", () => {
   assert.deepEqual(
     buildMain(true).inline_keyboard.map((row) => row.map((button) => ("style" in button ? button.style : undefined))),
-    [["primary"], [undefined], [undefined], [undefined], [undefined]],
+    [["primary"], ["primary"], [undefined], [undefined], [undefined], [undefined]],
   );
 });
 

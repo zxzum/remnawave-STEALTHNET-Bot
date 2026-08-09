@@ -287,6 +287,7 @@ export function mainMenu(opts: MenuOptions): InlineMarkup {
   const byId = new Map(buttons.map((button) => [button.id, button]));
   const layout = [
     ["cabinet"],
+    ["trial"],
     ["my_subs"],
     ["referral"],
     ["support"],

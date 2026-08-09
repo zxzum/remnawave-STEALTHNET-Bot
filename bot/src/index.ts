@@ -18,6 +18,7 @@ import {
   selectPrimarySubscriptionItem,
   shouldPreserveSubscriptionLink,
 } from "./subscription-access.js";
+import { shouldShowBotWelcome } from "./onboarding-policy.js";
 import {
   mainMenu,
   botSectionsMenu,
@@ -699,7 +700,9 @@ async function handleTelegramLink(ctx: Context, code: string, lang: string): Pro
     });
     return;
   }
-  await ctx.reply(_t("link.success", lang));
+  await ctx.reply(_t("link.success", lang), {
+    reply_markup: { inline_keyboard: [[{ text: "🏠 Главное меню", callback_data: "menu:main" }]] },
+  });
 }
 
 const DEFAULT_BOT_WELCOME_TEXT = [
@@ -816,6 +819,7 @@ async function showFirstWelcome(ctx: Context, userId: number, config: ConfigSnap
   const markup: InlineMarkup = {
     inline_keyboard: [
       [FIRST_WELCOME_TRIAL_BUTTON],
+      [{ text: "🏠 Главное меню", callback_data: "menu:main" }],
     ],
   };
   const caption = text.length > TELEGRAM_CAPTION_MAX ? `${text.slice(0, TELEGRAM_CAPTION_MAX - 3)}...` : text;
@@ -2359,6 +2363,7 @@ composer.command("start", async (ctx) => {
 
     if (auth.isNewClient && !isSetupPayload) {
       await showFirstWelcome(ctx, from.id, config);
+      await api.completeOnboarding(auth.token).catch(() => {});
       return;
     }
 
@@ -2392,13 +2397,19 @@ composer.command("start", async (ctx) => {
     // Используем тот же welcome-экран, что и для нового клиента.
     // Если showOnce=true — только при первом /start (когда client.onboardingCompleted=false).
     const welcomeEnabled = Boolean((config as { botWelcomeEnabled?: boolean })?.botWelcomeEnabled);
-    if (welcomeEnabled) {
-      const showOnce = Boolean((config as { botWelcomeShowOnce?: boolean })?.botWelcomeShowOnce);
-      const alreadySeen = showOnce && client?.onboardingCompleted === true;
-      if (!alreadySeen) {
-        await showFirstWelcome(ctx, from.id, config);
-        return;
-      }
+    const showOnce = Boolean((config as { botWelcomeShowOnce?: boolean })?.botWelcomeShowOnce);
+    if (shouldShowBotWelcome({
+      enabled: welcomeEnabled,
+      showOnce,
+      onboardingCompleted: client?.onboardingCompleted === true,
+      trialUsed: client?.trialUsed === true,
+    })) {
+      await showFirstWelcome(ctx, from.id, config);
+      await api.completeOnboarding(auth.token).catch(() => {});
+      return;
+    }
+    if (client?.trialUsed && client.onboardingCompleted !== true) {
+      await api.completeOnboarding(auth.token).catch(() => {});
     }
 
     const [subRes, proxyRes, singboxRes, allSubsRes] = await Promise.all([
@@ -2958,7 +2969,9 @@ composer.on("callback_query:data", async (ctx) => {
         });
         return;
       }
-      await ctx.editMessageText(`✅ ${result.message || _t("link.success", getUserLang(userId))}`);
+      await ctx.editMessageText(`✅ ${result.message || _t("link.success", getUserLang(userId))}`, {
+        reply_markup: { inline_keyboard: [[{ text: "🏠 Главное меню", callback_data: "menu:main" }]] },
+      });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : _t("error_generic", getUserLang(userId));
       await ctx.editMessageText(`❌ ${msg}`).catch(() => ctx.reply(`❌ ${msg}`));
