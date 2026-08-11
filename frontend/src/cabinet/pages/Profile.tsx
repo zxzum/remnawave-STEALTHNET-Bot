@@ -29,6 +29,7 @@ import {
   PackagePlus,
   Gift,
   Headphones,
+  Users,
   Save,
   LogOut,
   Unlink,
@@ -710,10 +711,74 @@ function ServiceLinks() {
     config?.showProxyEnabled && { to: "/cabinet/proxy", label: "Прокси", icon: Globe },
     config?.showSingboxEnabled && { to: "/cabinet/singbox", label: "Sing-box", icon: ShieldCheck },
     config?.giftSubscriptionsEnabled && { to: "/cabinet/gifts", label: "Подарки", icon: Gift },
-    config?.ticketsEnabled && { to: "/cabinet/tickets", label: "Поддержка", icon: Headphones },
   ].filter((item): item is { to: string; label: string; icon: typeof Globe } => Boolean(item));
   if (links.length === 0) return null;
   return <section className="glass rounded-4xl p-5 sm:p-6"><h2 className="mb-4 font-extrabold">Сервисы</h2><div className="grid grid-cols-2 gap-2">{links.map(({ to, label, icon: Icon }) => <Link key={to} to={to} className="glass-inset flex items-center gap-2 rounded-2xl p-3 text-sm font-bold transition-colors hover:border-accent-400/30"><Icon className="h-4 w-4 text-accent-400" />{label}</Link>)}</div></section>;
+}
+
+function ReferralPromo() {
+  const { referral, user } = useApp();
+
+  return (
+    <section className="glass rounded-4xl border border-violet-glow/30 bg-gradient-to-br from-violet-glow/15 via-transparent to-accent-500/10 p-5 shadow-[0_20px_60px_-32px_rgba(139,92,246,0.8)] sm:p-6">
+      <div className="flex items-start gap-3">
+        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl border border-violet-glow/30 bg-violet-glow/15 text-violet-glow shadow-[0_0_24px_-8px_rgba(139,92,246,0.9)]">
+          <Users className="h-6 w-6" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-lg font-extrabold tracking-tight">Реферальная программа</h2>
+          <p className="mt-1 text-sm leading-relaxed text-fog-400">Приглашайте друзей и получайте бонусы с их оплат.</p>
+        </div>
+      </div>
+
+      <div className="mt-5 grid grid-cols-3 divide-x divide-white/10 rounded-2xl border border-white/10 bg-white/[0.04] py-3">
+        <div className="px-2 text-center">
+          <p className="text-xl font-extrabold text-violet-glow">{referral.percent}%</p>
+          <p className="mt-1 text-xs font-semibold text-fog-500">Процент</p>
+        </div>
+        <div className="px-2 text-center">
+          <p className="text-xl font-extrabold">{referral.invited}</p>
+          <p className="mt-1 text-xs font-semibold text-fog-500">Приглашено</p>
+        </div>
+        <div className="min-w-0 px-2 text-center">
+          <p className="truncate text-xl font-extrabold text-mint-400">{formatCurrency(referral.earned, user.currency)}</p>
+          <p className="mt-1 text-xs font-semibold text-fog-500">Заработано</p>
+        </div>
+      </div>
+
+      <Link to="/cabinet/referral" className="mt-4 flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-violet-glow px-5 py-3 text-sm font-extrabold text-white shadow-[0_12px_28px_-14px_rgba(139,92,246,0.95)] transition hover:bg-violet-glow/90">
+        Открыть рефералку
+        <ArrowUpRight className="h-4 w-4" />
+      </Link>
+    </section>
+  );
+}
+
+function SupportButton() {
+  const { config } = useApp();
+  const botUsername = config?.telegramBotUsername?.replace(/^@/, "").trim();
+  const botUrl = botUsername ? `https://t.me/${botUsername}` : null;
+
+  if (!botUrl) return null;
+
+  return (
+    <a
+      href={botUrl}
+      target="_blank"
+      rel="noreferrer"
+      aria-label="Открыть поддержку в Telegram"
+      className="glass group flex min-h-20 w-full items-center gap-4 rounded-4xl border border-[#2AABEE]/35 bg-gradient-to-r from-[#229ED9]/20 via-[#229ED9]/10 to-transparent p-5 shadow-[0_20px_60px_-34px_rgba(34,158,217,0.9)] transition hover:border-[#2AABEE]/60 hover:from-[#229ED9]/30 sm:p-6"
+    >
+      <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-[#229ED9] text-white shadow-[0_10px_28px_-10px_rgba(34,158,217,0.95)]">
+        <Headphones className="h-6 w-6" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-lg font-extrabold tracking-tight">Поддержка в Telegram</p>
+        <p className="mt-1 text-sm text-fog-400">Открыть чат с ботом поддержки</p>
+      </div>
+      <ArrowUpRight className="h-5 w-5 shrink-0 text-[#2AABEE] transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+    </a>
+  );
 }
 
 function Preferences() {
@@ -762,7 +827,15 @@ export default function Profile() {
   const { user } = useApp();
   const { logout } = useClientAuth();
   const navigate = useNavigate();
+  const [isDesktopLayout, setIsDesktopLayout] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1024);
   const isMiniapp = typeof window !== "undefined" && Boolean((window as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp?.initData);
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 1024px)");
+    const updateLayout = () => setIsDesktopLayout(media.matches);
+    updateLayout();
+    media.addEventListener("change", updateLayout);
+    return () => media.removeEventListener("change", updateLayout);
+  }, []);
   return (
     <div className="flex flex-col gap-5">
       <header className="flex items-center gap-4 lg:hidden">
@@ -780,19 +853,37 @@ export default function Profile() {
         <p className="mt-1 text-fog-500">Баланс, данные аккаунта и безопасность</p>
       </div>
 
-      <div className="flex flex-col gap-5 lg:grid lg:grid-cols-2 lg:items-start">
-        <div className="contents lg:flex lg:flex-col lg:gap-5">
+      {isDesktopLayout ? (
+        <div className="flex flex-col gap-5">
+          <div className="grid grid-cols-2 items-start gap-5">
+            <div className="flex flex-col gap-5">
+              <BankCard />
+              <TopUp />
+              <ReferralPromo />
+              <PaymentsHistory />
+              <ServiceLinks />
+            </div>
+            <div className="flex flex-col gap-5">
+              <AccountData />
+              <Preferences />
+              <SupportButton />
+              <Security />
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-5">
           <BankCard />
           <TopUp />
+          <ReferralPromo />
+          <SupportButton />
           <AccountData />
           <Preferences />
-          <ServiceLinks />
-        </div>
-        <div className="contents lg:flex lg:flex-col lg:gap-5">
           <Security />
           <PaymentsHistory />
+          <ServiceLinks />
         </div>
-      </div>
+      )}
       {!isMiniapp && <button
         type="button"
         onClick={async () => { await logout(); navigate("/cabinet/login", { replace: true }); }}

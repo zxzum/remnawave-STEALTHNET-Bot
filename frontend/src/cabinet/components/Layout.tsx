@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useState } from "react";
 import { NavLink, useLocation, useNavigate, useOutlet } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Home, KeyRound, Package, Users, UserRound, LogOut, Wallet } from "lucide-react";
+import { Home, KeyRound, Package, UserRound, LogOut, Wallet } from "lucide-react";
 import { useClientAuth } from "@/contexts/client-auth";
 import { FloatingChat } from "@/components/floating-chat";
 import { cn } from "../lib/cn";
@@ -13,7 +13,6 @@ const navItems = [
   { to: "/cabinet/dashboard", label: "Кабинет", icon: Home, end: true },
   { to: "/cabinet/subscribe", label: "Мои ключи", icon: KeyRound },
   { to: "/cabinet/tariffs", label: "Тарифы", icon: Package },
-  { to: "/cabinet/referral", label: "Рефералы", icon: Users },
 ];
 
 export function Background() {
@@ -167,10 +166,10 @@ function BottomNav() {
   const activeIndex = Math.max(0, items.findIndex(({ to }) => location.pathname === to));
   return (
     <nav className="fixed inset-x-3 bottom-3 z-40 max-[420px]:inset-x-2 lg:hidden" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-      <div className="bottom-nav-glass glass-strong mx-auto max-w-md rounded-4xl p-2">
-        <div className="relative grid grid-cols-5">
+      <div className="bottom-nav-glass glass-strong mx-auto max-w-md rounded-4xl border border-violet-glow/50 bg-ink-950/80 p-3 shadow-[0_18px_50px_-14px_rgba(0,0,0,0.92),0_0_28px_-10px_rgba(139,92,246,0.65)] ring-1 ring-white/10">
+        <div className="relative grid grid-cols-4">
           <motion.span
-            className="pointer-events-none absolute inset-y-0 left-0 w-1/5 rounded-3xl border border-violet-glow/20 bg-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_0_18px_-6px_rgba(167,139,250,0.8)]"
+            className="pointer-events-none absolute inset-y-0 left-0 w-1/4 rounded-3xl border border-accent-400/60 bg-gradient-to-br from-accent-500/30 via-violet-glow/20 to-violet-glow/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_26px_-4px_rgba(167,139,250,0.95)]"
             animate={{ x: `${activeIndex * 100}%` }}
             transition={{ type: "spring", stiffness: 420, damping: 34 }}
           />
@@ -181,12 +180,12 @@ function BottomNav() {
             end={to === "/cabinet/dashboard"}
             className={({ isActive }) =>
               cn(
-                "relative flex flex-1 flex-col items-center gap-1 rounded-3xl py-2 text-[10px] font-semibold transition-colors",
-                isActive ? "text-accent-400" : "text-fog-500",
+                "relative flex flex-1 flex-col items-center gap-1 rounded-3xl py-2.5 text-xs font-semibold transition-colors",
+                isActive ? "text-accent-400 drop-shadow-[0_0_10px_rgba(196,181,253,0.75)]" : "text-fog-100",
               )
             }
           >
-            <Icon className="relative z-10 h-5 w-5" strokeWidth={2.2} />
+            <Icon className="relative z-10 h-6 w-6" strokeWidth={2.2} />
             <span className="relative z-10">{label}</span>
           </NavLink>
         ))}
