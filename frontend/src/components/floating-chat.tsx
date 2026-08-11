@@ -101,16 +101,13 @@ function TelegramSupportCta({ href }: { href: string }) {
       target="_blank"
       rel="noopener noreferrer"
       aria-label="Написать в Telegram"
-      className="group mx-4 mb-3 flex items-center gap-3 rounded-2xl border border-[#2AABEE]/35 bg-gradient-to-r from-[#229ED9]/20 via-violet-glow/15 to-transparent px-3.5 py-3 text-left shadow-[0_16px_36px_-24px_rgba(34,158,217,0.95)] transition hover:border-[#2AABEE]/65 hover:from-[#229ED9]/30"
+      className="group mx-4 mb-2 flex min-h-10 items-center gap-2.5 rounded-xl border border-[#2AABEE]/30 bg-gradient-to-r from-[#229ED9]/18 via-violet-glow/12 to-transparent px-3 py-2 text-left shadow-[0_10px_26px_-20px_rgba(34,158,217,0.9)] transition hover:border-[#2AABEE]/60 hover:from-[#229ED9]/28"
     >
-      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#229ED9] text-white shadow-[0_10px_24px_-10px_rgba(34,158,217,0.95)]">
-        <Send className="h-4 w-4" />
+      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[#229ED9]/90 text-white shadow-[0_8px_18px_-10px_rgba(34,158,217,0.9)]">
+        <Send className="h-3.5 w-3.5" />
       </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-sm font-extrabold tracking-tight text-foreground">Написать в Telegram</span>
-        <span className="mt-0.5 block truncate text-[11px] font-medium text-fog-400">Поддержка Лазейки ВПН</span>
-      </span>
-      <ArrowUpRight className="h-4 w-4 shrink-0 text-[#2AABEE] transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+      <span className="min-w-0 flex-1 truncate text-xs font-extrabold tracking-tight text-foreground">Написать в Telegram</span>
+      <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-[#2AABEE] transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
     </a>
   );
 }
@@ -384,7 +381,7 @@ function SupportTab({ headerProps, onRefreshUnread }: { headerProps: any, onRefr
     return (
       <div className="flex flex-col flex-1 min-h-0 w-full">
         {/* Scrollable Area */}
-        <div className="flex-1 overflow-y-auto min-h-0 bg-gradient-to-b from-transparent to-black/5 scroll-smooth custom-scrollbar flex flex-col">
+        <div className="flex-1 overflow-y-auto min-h-0 bg-gradient-to-b from-violet-900/12 via-transparent to-sky-900/10 scroll-smooth custom-scrollbar flex flex-col">
           <ChatHeader {...headerProps} />
           
           {/* Header */}
@@ -441,7 +438,7 @@ function SupportTab({ headerProps, onRefreshUnread }: { headerProps: any, onRefr
 
         {/* Input area */}
         {detail?.status === "open" && (
-          <div className="p-3 sm:p-4 border-t border-black/5 dark:border-white/5 bg-background/80 sm:bg-background/50 backdrop-blur-xl shrink-0 pb-[max(env(safe-area-inset-bottom),16px)] sm:pb-4">
+          <div className="p-3 sm:p-4 border-t border-violet-glow/20 bg-violet-950/35 sm:bg-card/55 backdrop-blur-xl shrink-0 pb-[max(env(safe-area-inset-bottom),16px)] sm:pb-4">
             {replyFiles.length > 0 && (
               <div className="mb-2 flex flex-wrap gap-1.5">
                 {replyFiles.map((f, i) => (
@@ -851,7 +848,7 @@ export function FloatingChat() {
                   ? "sm:w-[calc(100vw-48px)] sm:h-[calc(100dvh-120px)]"
                   : "sm:w-[450px] sm:h-[650px] sm:max-h-[85vh]",
                 "sm:rounded-3xl border-0 sm:border border-violet-glow/25",
-                "bg-ink-950/95 backdrop-blur-3xl sm:bg-ink-950/90 sm:backdrop-blur-2xl sm:shadow-[0_30px_90px_-22px_rgba(5,3,18,0.95)]",
+                "bg-gradient-to-br from-violet-900/80 via-card/90 to-indigo-950/85 backdrop-blur-3xl sm:bg-violet-950/80 sm:backdrop-blur-2xl sm:shadow-[0_30px_90px_-22px_rgba(5,3,18,0.95)]",
                 "flex flex-col overflow-hidden transition-all duration-500 ease-in-out"
               )}
             >
@@ -859,7 +856,7 @@ export function FloatingChat() {
                 <div className="flex flex-col flex-1 min-h-0 w-full">
                   {/* AI Messages */}
                   <div 
-                    className="flex-1 overflow-y-auto min-h-0 bg-gradient-to-b from-transparent to-black/5 scroll-smooth custom-scrollbar flex flex-col relative"
+                    className="flex-1 overflow-y-auto min-h-0 bg-gradient-to-b from-violet-900/12 via-transparent to-sky-900/10 scroll-smooth custom-scrollbar flex flex-col relative"
                     onScroll={handleScroll}
                   >
                     <ChatHeader {...headerProps} />
@@ -928,7 +925,7 @@ export function FloatingChat() {
                   </div>
 
                   {/* AI Input Area */}
-                  <div className="p-3 sm:p-4 border-t border-black/5 dark:border-white/5 bg-background/80 sm:bg-background/50 backdrop-blur-xl shrink-0 pb-[max(env(safe-area-inset-bottom),16px)] sm:pb-4">
+                  <div className="p-3 sm:p-4 border-t border-violet-glow/20 bg-violet-950/35 sm:bg-card/55 backdrop-blur-xl shrink-0 pb-[max(env(safe-area-inset-bottom),16px)] sm:pb-4">
                     <div className="relative flex items-end gap-2 bg-black/5 dark:bg-black/20 p-1.5 rounded-2xl border border-black/5 dark:border-white/10 focus-within:border-primary/50 focus-within:ring-1 focus-within:ring-primary/50 transition-all">
                       <textarea
                         className={cn(
