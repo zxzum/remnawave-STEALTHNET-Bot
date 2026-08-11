@@ -756,16 +756,13 @@ function ReferralPromo() {
 
 function SupportButton() {
   const { config } = useApp();
-  const botUsername = config?.telegramBotUsername?.replace(/^@/, "").trim();
-  const botUrl = botUsername ? `https://t.me/${botUsername}` : null;
-
-  if (!botUrl) return null;
+  const supportUrl = config?.supportLink?.trim() || "https://t.me/lazeika_support_bot";
 
   return (
     <a
-      href={botUrl}
+      href={supportUrl}
       target="_blank"
-      rel="noreferrer"
+      rel="noopener noreferrer"
       aria-label="Открыть поддержку в Telegram"
       className="glass group flex min-h-20 w-full items-center gap-4 rounded-4xl border border-[#2AABEE]/35 bg-gradient-to-r from-[#229ED9]/20 via-[#229ED9]/10 to-transparent p-5 shadow-[0_20px_60px_-34px_rgba(34,158,217,0.9)] transition hover:border-[#2AABEE]/60 hover:from-[#229ED9]/30 sm:p-6"
     >

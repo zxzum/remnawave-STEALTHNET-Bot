@@ -5498,6 +5498,7 @@ export interface PublicConfig {
   publicAppUrl?: string | null;
   telegramBotUsername?: string | null;
   telegramBotId?: string | null;
+  supportLink?: string | null;
   plategaMethods?: { id: number; label: string }[];
   yoomoneyEnabled?: boolean;
   yookassaEnabled?: boolean;

@@ -8,6 +8,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const layout = readFileSync(resolve(root, "frontend/src/pages/cabinet/cabinet-layout.tsx"), "utf8");
 const clientLayout = readFileSync(resolve(root, "frontend/src/cabinet/components/Layout.tsx"), "utf8");
 const profile = readFileSync(resolve(root, "frontend/src/cabinet/pages/Profile.tsx"), "utf8");
+const floatingChat = readFileSync(resolve(root, "frontend/src/components/floating-chat.tsx"), "utf8");
 const navSource = layout.match(/function useNavItems\(\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
 const mobileSource = layout.match(/function MobileCabinetShell\(\) \{([\s\S]*?)\n\}\n\nfunction useIsMobile/)?.[1] ?? "";
 
@@ -29,8 +30,19 @@ test("mobile navigation prioritizes four core cabinet routes", () => {
 test("profile contains a top referral block and Telegram support button", () => {
   assert.match(profile, /<ReferralPromo \/>/);
   assert.match(profile, /<SupportButton \/>/);
-  assert.match(profile, /config\?\.telegramBotUsername\?\.replace\(\/\^@\/\, \"\"\)/);
-  assert.match(profile, /https:\/\/t\.me\/\$\{botUsername\}/);
+  assert.match(profile, /config\?\.supportLink\?\.trim\(\) \|\| \"https:\/\/t\.me\/lazeika_support_bot\"/);
+  assert.doesNotMatch(profile, /telegramBotUsername\?\.replace/);
+});
+
+test("floating chat exposes Telegram support in both modes and clears mobile navigation", () => {
+  assert.match(floatingChat, /function TelegramSupportCta/);
+  assert.match(floatingChat, /Написать в Telegram/);
+  assert.match(floatingChat, /config\?\.supportLink\?\.trim\(\)/);
+  assert.match(floatingChat, /<TelegramSupportCta href=\{supportUrl\} \/>/);
+  assert.ok((floatingChat.match(/<ChatHeader/g) ?? []).length >= 3);
+  assert.match(floatingChat, /fixed bottom-32 right-4 z-\[100\] lg:bottom-6 lg:right-6/);
+  assert.match(floatingChat, /motion-safe:animate-ping/);
+  assert.match(floatingChat, /aria-label=\{isOpen \? "Закрыть чат" : "Открыть чат"\}/);
 });
 
 test("the active client cabinet bottom navigation has four core items", () => {

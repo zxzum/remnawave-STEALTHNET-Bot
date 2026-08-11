@@ -9,7 +9,7 @@ import { useLanguageSync } from "@/i18n/use-language-sync";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { GlassSelect } from "@/components/ui/glass-select";
-import { LayoutDashboard, Package, User, LogOut, Shield, Users, Sun, Moon, PlusCircle, Globe, KeyRound, MessageSquare, Palette, Monitor, Check, Loader2, Settings, Layers, MoreHorizontal, ChevronDown, Wallet, Gift } from "lucide-react";
+import { LayoutDashboard, Package, User, LogOut, Shield, Users, Sun, Moon, PlusCircle, Globe, KeyRound, MessageSquare, Palette, Monitor, Check, Loader2, Settings, Layers, ChevronDown, Wallet, Gift } from "lucide-react";
 import { useTheme, ACCENT_PALETTES, type ThemeMode, type ThemeAccent } from "@/contexts/theme";
 import { cn } from "@/lib/utils";
 import { FloatingChat } from "@/components/floating-chat";
@@ -151,15 +151,15 @@ function useNavItems() {
   const { t } = useTranslation();
   return useMemo(() => [
     { to: "/cabinet/dashboard", label: t("cabinet.nav.home"), icon: LayoutDashboard },
+    { to: "/cabinet/singbox", label: t("cabinet.nav.access"), icon: KeyRound },
     { to: "/cabinet/tariffs", label: t("cabinet.nav.tariffs"), icon: Package },
+    { to: "/cabinet/profile", label: t("cabinet.nav.profile"), icon: User },
     { to: "/cabinet/custom-build", label: t("cabinet.nav.custom_build"), icon: Layers },
     { to: "/cabinet/extra-options", label: t("cabinet.nav.options"), icon: PlusCircle },
     { to: "/cabinet/proxy", label: t("cabinet.nav.proxy"), icon: Globe },
-    { to: "/cabinet/singbox", label: t("cabinet.nav.access"), icon: KeyRound },
     { to: "/cabinet/referral", label: t("cabinet.nav.referrals"), icon: Users },
     { to: "/cabinet/tickets", label: t("cabinet.nav.tickets"), icon: MessageSquare },
     { to: "/cabinet/gifts", label: "Подарки", icon: Gift },
-    { to: "/cabinet/profile", label: t("cabinet.nav.profile"), icon: User },
   ], [t]);
 }
 
@@ -430,7 +430,6 @@ function MobileCabinetShell() {
   const [logoError, setLogoError] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const visibleItems = navItems.slice(0, MAX_VISIBLE_NAV);
-  const hasMore = navItems.length > MAX_VISIBLE_NAV;
 
   // Tour integration: open overflow menu programmatically
   useEffect(() => {
@@ -483,8 +482,8 @@ function MobileCabinetShell() {
         <Outlet />
       </main>
 
-      <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-card/60 backdrop-blur-xl pb-[env(safe-area-inset-bottom)] transition-all duration-300">
-        <div className="flex items-center justify-around w-full h-[4.5rem] px-2 gap-0">
+      <nav className="fixed inset-x-0 bottom-0 z-50 px-3 pb-[calc(env(safe-area-inset-bottom,0px)+0.5rem)] transition-all duration-300">
+        <div className="mx-auto flex h-[5rem] max-w-md items-center gap-1 rounded-[1.5rem] border border-white/15 bg-card/90 px-2 shadow-[0_12px_40px_-14px_rgba(0,0,0,0.8)] backdrop-blur-xl">
           {visibleItems.map(({ to, label, icon: Icon }) => {
             const active = location.pathname === to;
             return (
@@ -493,29 +492,15 @@ function MobileCabinetShell() {
                 to={to}
                 data-tour={ROUTE_TOUR_MAP[to]}
                 className={cn(
-                  "flex flex-col items-center justify-center gap-0.5 py-1 px-1 h-14 flex-1 min-w-0 max-w-[5rem] rounded-xl transition-all duration-300",
-                  active ? "bg-primary/20 text-primary shadow-sm scale-105" : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground hover:scale-105"
+                  "flex h-16 min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-2xl px-1.5 py-1.5 transition-all duration-300",
+                  active ? "bg-primary/25 text-primary shadow-[0_0_24px_-10px_hsl(var(--primary))] scale-[1.02]" : "text-foreground/70 hover:bg-foreground/5 hover:text-foreground"
                 )}
               >
-                <Icon className={cn("h-5 w-5 shrink-0 transition-transform duration-300", active && "scale-110 drop-shadow-md")} />
-                <span className="text-[10px] font-medium leading-none tracking-tight truncate w-full text-center">{label}</span>
+                <Icon className={cn("h-6 w-6 shrink-0 transition-transform duration-300", active && "scale-110 drop-shadow-md")} />
+                <span className="text-xs font-semibold leading-tight tracking-tight truncate w-full text-center">{label}</span>
               </Link>
             );
           })}
-          {hasMore && (
-            <button
-              type="button"
-              onClick={() => setMoreMenuOpen(true)}
-              className={cn(
-                "flex flex-col items-center justify-center gap-0.5 py-1 px-1 h-14 flex-1 min-w-0 max-w-[5rem] rounded-xl transition-all duration-300",
-                "text-muted-foreground hover:bg-foreground/5 hover:text-foreground hover:scale-105"
-              )}
-              aria-label={t("cabinet.nav.more")}
-            >
-              <MoreHorizontal className="h-5 w-5 shrink-0" />
-              <span className="text-[10px] font-medium leading-none tracking-tight">{t("cabinet.nav.more")}</span>
-            </button>
-          )}
         </div>
       </nav>
 

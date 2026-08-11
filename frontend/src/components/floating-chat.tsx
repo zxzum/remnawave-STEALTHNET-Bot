@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { MessageCircle, X, Send, User, Sparkles, Headset, ArrowLeft, MessageSquarePlus, CircleDot, CircleCheck, Inbox, Loader2, Maximize2, Minimize2, Paperclip, X as XIcon } from "lucide-react";
+import { MessageCircle, X, Send, User, Sparkles, Headset, ArrowLeft, MessageSquarePlus, CircleDot, CircleCheck, Inbox, Loader2, Maximize2, Minimize2, Paperclip, ArrowUpRight, X as XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useClientAuth } from "@/contexts/client-auth";
@@ -11,6 +11,7 @@ import { api, type TicketAttachmentDto } from "@/lib/api";
 const TICKET_MAX_FILES = 5;
 const TICKET_MAX_FILE_MB = 10;
 const TICKET_MAX_FILE_BYTES = TICKET_MAX_FILE_MB * 1024 * 1024;
+const DEFAULT_SUPPORT_URL = "https://t.me/lazeika_support_bot";
 
 function TicketAttachments({ items }: { items: TicketAttachmentDto[] }) {
   if (!items || items.length === 0) return null;
@@ -93,18 +94,39 @@ function AiMessageContent({ text }: { text: string }) {
   );
 }
 
+function TelegramSupportCta({ href }: { href: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label="Написать в Telegram"
+      className="group mx-4 mb-3 flex items-center gap-3 rounded-2xl border border-[#2AABEE]/35 bg-gradient-to-r from-[#229ED9]/20 via-violet-glow/15 to-transparent px-3.5 py-3 text-left shadow-[0_16px_36px_-24px_rgba(34,158,217,0.95)] transition hover:border-[#2AABEE]/65 hover:from-[#229ED9]/30"
+    >
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#229ED9] text-white shadow-[0_10px_24px_-10px_rgba(34,158,217,0.95)]">
+        <Send className="h-4 w-4" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-extrabold tracking-tight text-foreground">Написать в Telegram</span>
+        <span className="mt-0.5 block truncate text-[11px] font-medium text-fog-400">Поддержка Лазейки ВПН</span>
+      </span>
+      <ArrowUpRight className="h-4 w-4 shrink-0 text-[#2AABEE] transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+    </a>
+  );
+}
+
 const ChatSwitcher = ({ activeChat, setActiveChat, aiUnread, supportUnread, isFloating = false, showAiTab = true }: any) => {
   if (!showAiTab) {
     return (
       <div className={cn(
         "relative flex p-1 w-full sm:w-auto sm:min-w-[200px]",
         isFloating
-          ? "bg-black/20 dark:bg-white/10 backdrop-blur-md rounded-2xl border border-white/10 shadow-lg pointer-events-auto"
-          : "bg-black/20 backdrop-blur-sm border border-white/5 rounded-xl"
+          ? "bg-ink-950/70 backdrop-blur-md rounded-2xl border border-violet-glow/30 shadow-[0_14px_36px_-20px_rgba(167,139,250,0.9)] pointer-events-auto"
+          : "bg-ink-950/60 backdrop-blur-sm border border-violet-glow/20 rounded-xl"
       )}>
         <button
           onClick={() => setActiveChat("support")}
-          className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-semibold text-primary-foreground bg-primary relative z-10"
+          className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-semibold text-primary-foreground bg-gradient-to-r from-accent-500 to-violet-glow relative z-10 shadow-[0_8px_22px_-12px_rgba(167,139,250,0.95)]"
         >
           <Headset className="w-4 h-4" /> Поддержка
           {supportUnread > 0 && (
@@ -120,8 +142,8 @@ const ChatSwitcher = ({ activeChat, setActiveChat, aiUnread, supportUnread, isFl
   <div className={cn(
     "relative flex p-1 w-full sm:w-auto sm:min-w-[320px]",
     isFloating 
-      ? "bg-black/20 dark:bg-white/10 backdrop-blur-md rounded-2xl border border-white/10 shadow-lg pointer-events-auto" 
-      : "bg-black/20 backdrop-blur-sm border border-white/5 rounded-xl"
+      ? "bg-ink-950/70 backdrop-blur-md rounded-2xl border border-violet-glow/30 shadow-[0_14px_36px_-20px_rgba(167,139,250,0.9)] pointer-events-auto"
+      : "bg-ink-950/60 backdrop-blur-sm border border-violet-glow/20 rounded-xl"
   )}>
     <button
       onClick={() => setActiveChat("ai")}
@@ -153,7 +175,7 @@ const ChatSwitcher = ({ activeChat, setActiveChat, aiUnread, supportUnread, isFl
     </button>
     {/* Sliding Background */}
     <div
-      className="absolute top-1 bottom-1 bg-primary shadow-md rounded-lg transition-all duration-300 ease-out z-0 w-[calc(50%-4px)] sm:w-[160px]"
+      className="absolute top-1 bottom-1 rounded-lg bg-gradient-to-r from-accent-500 to-violet-glow shadow-[0_8px_22px_-10px_rgba(167,139,250,0.95)] transition-all duration-300 ease-out z-0 w-[calc(50%-4px)] sm:w-[160px]"
       style={{
         transform: activeChat === "ai" ? "translateX(0)" : "translateX(100%)",
         left: "4px",
@@ -163,13 +185,13 @@ const ChatSwitcher = ({ activeChat, setActiveChat, aiUnread, supportUnread, isFl
   );
 };
 
-const ChatHeader = ({ activeChat, setActiveChat, isExpanded, setIsExpanded, setIsOpen, aiUnread, supportUnread, showAiTab = true }: any) => (
+const ChatHeader = ({ activeChat, setActiveChat, isExpanded, setIsExpanded, setIsOpen, aiUnread, supportUnread, supportUrl, showAiTab = true }: any) => (
   <>
-    <div className="px-4 py-3 sm:py-4 border-b border-white/5 bg-black/5 dark:bg-white/5 shrink-0 relative overflow-hidden pt-[max(env(safe-area-inset-top),16px)] sm:pt-4">
-      <div className="absolute inset-0 bg-gradient-to-br from-primary/10 to-transparent pointer-events-none" />
+    <div className="px-4 py-3 sm:py-4 border-b border-violet-glow/25 bg-gradient-to-br from-violet-glow/18 via-ink-950/20 to-transparent shrink-0 relative overflow-hidden pt-[max(env(safe-area-inset-top),16px)] sm:pt-4">
+      <div className="absolute inset-0 bg-[radial-gradient(70%_100%_at_0%_0%,rgba(167,139,250,0.16),transparent_70%)] pointer-events-none" />
       <div className="relative flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/20 text-primary shadow-inner">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-accent-400/30 bg-accent-500/15 text-accent-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_10px_24px_-16px_rgba(167,139,250,0.9)]">
             {activeChat === "ai" ? <Sparkles className="h-5 w-5" /> : <Headset className="h-5 w-5" />}
           </div>
           <div>
@@ -202,9 +224,11 @@ const ChatHeader = ({ activeChat, setActiveChat, isExpanded, setIsExpanded, setI
       </div>
     </div>
 
+    <TelegramSupportCta href={supportUrl} />
+
     {/* Chat Switcher */}
     {showAiTab && (
-      <div className="flex sm:justify-center px-4 py-3 sm:py-4 shrink-0 bg-black/5 dark:bg-white/5 border-b border-white/5">
+      <div className="flex sm:justify-center px-4 py-3 sm:py-4 shrink-0 bg-ink-950/25 border-b border-violet-glow/20">
         <ChatSwitcher activeChat={activeChat} setActiveChat={setActiveChat} aiUnread={aiUnread} supportUnread={supportUnread} showAiTab={showAiTab} />
       </div>
     )}
@@ -651,6 +675,7 @@ export function FloatingChat() {
   const config = useCabinetConfig();
   const token = state.token ?? null;
   const serviceName = config?.serviceName?.trim() || "Сервис";
+  const supportUrl = config?.supportLink?.trim() || DEFAULT_SUPPORT_URL;
   const aiChatEnabled = config?.aiChatEnabled !== false;
   const [isOpen, setIsOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -804,11 +829,11 @@ export function FloatingChat() {
     }
   };
 
-  const headerProps = { activeChat, setActiveChat, isExpanded, setIsExpanded, setIsOpen, aiUnread, supportUnread, showAiTab: aiChatEnabled };
+  const headerProps = { activeChat, setActiveChat, isExpanded, setIsExpanded, setIsOpen, aiUnread, supportUnread, supportUrl, showAiTab: aiChatEnabled };
 
   return (
     <>
-      <div className={cn("fixed bottom-24 right-4 sm:bottom-6 sm:right-6 z-[100]", hasOpenDialog && !isOpen && "pointer-events-none opacity-0")}>
+      <div className={cn("fixed bottom-32 right-4 z-[100] lg:bottom-6 lg:right-6", hasOpenDialog && !isOpen && "pointer-events-none opacity-0")}>
         <AnimatePresence>
           {isOpen && (
             <motion.div
@@ -825,8 +850,8 @@ export function FloatingChat() {
                 isExpanded
                   ? "sm:w-[calc(100vw-48px)] sm:h-[calc(100dvh-120px)]"
                   : "sm:w-[450px] sm:h-[650px] sm:max-h-[85vh]",
-                "sm:rounded-3xl border-0 sm:border border-white/10",
-                "bg-background/80 backdrop-blur-3xl sm:bg-background/60 sm:backdrop-blur-2xl sm:shadow-2xl sm:shadow-black/50",
+                "sm:rounded-3xl border-0 sm:border border-violet-glow/25",
+                "bg-ink-950/95 backdrop-blur-3xl sm:bg-ink-950/90 sm:backdrop-blur-2xl sm:shadow-[0_30px_90px_-22px_rgba(5,3,18,0.95)]",
                 "flex flex-col overflow-hidden transition-all duration-500 ease-in-out"
               )}
             >
@@ -947,11 +972,19 @@ export function FloatingChat() {
             whileTap={{ scale: 0.95 }}
             onClick={() => setIsOpen((v) => !v)}
             className={cn(
-              "relative flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full z-10",
-              "bg-card/60 backdrop-blur-2xl border border-border/50 text-foreground transition-colors hover:bg-card/80",
-              !isOpen ? "shadow-[0_8px_32px_rgba(0,0,0,0.12)]" : "shadow-lg"
+              "relative z-10 flex h-14 w-14 items-center justify-center overflow-visible rounded-full border border-violet-200/60 bg-gradient-to-br from-violet-500 via-accent-500 to-sky-500 text-white transition-all duration-300 sm:h-16 sm:w-16",
+              !isOpen
+                ? "shadow-[0_18px_38px_-10px_rgba(139,92,246,0.95),0_0_28px_-8px_rgba(56,189,248,0.9)] hover:brightness-110"
+                : "shadow-[0_12px_30px_-12px_rgba(139,92,246,0.9)]"
             )}
+            aria-label={isOpen ? "Закрыть чат" : "Открыть чат"}
           >
+            {!isOpen && (
+              <>
+                <span aria-hidden="true" className="pointer-events-none absolute -inset-1 rounded-full border border-violet-200/55 opacity-80 motion-safe:animate-ping [animation-duration:2.6s]" />
+                <span aria-hidden="true" className="pointer-events-none absolute -inset-2 rounded-full border border-sky-200/35 opacity-70 motion-safe:animate-ping [animation-delay:1.3s] [animation-duration:2.6s]" />
+              </>
+            )}
             <AnimatePresence mode="wait">
               {isOpen ? (
                 <motion.span
@@ -960,6 +993,7 @@ export function FloatingChat() {
                   animate={{ rotate: 0, opacity: 1 }}
                   exit={{ rotate: 90, opacity: 0 }}
                   transition={{ duration: 0.15 }}
+                  className="relative z-10"
                 >
                   <X className="h-7 w-7" />
                 </motion.span>
@@ -970,6 +1004,7 @@ export function FloatingChat() {
                   animate={{ rotate: 0, opacity: 1 }}
                   exit={{ rotate: -90, opacity: 0 }}
                   transition={{ duration: 0.15 }}
+                  className="relative z-10"
                 >
                   <MessageCircle className="h-7 w-7" />
                 </motion.span>
