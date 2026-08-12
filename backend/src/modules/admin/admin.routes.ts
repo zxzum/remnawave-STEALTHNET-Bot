@@ -141,6 +141,7 @@ import {
 import { runRule, runAllRules, getEligibleClientIds } from "../auto-broadcast/auto-broadcast.service.js";
 import { testNalogConnection } from "../nalog/nalog.service.js";
 import { adminCreateGiftCode } from "../gift/gift.service.js";
+import { lockTrialAfterSubscription } from "../trial/trial-purchase-lock.service.js";
 import { languageRouter } from "./language.routes.js";
 import { adminGramadsRouter } from "./gramads.routes.js";
 
@@ -2733,6 +2734,8 @@ adminRouter.post("/clients/:id/grant-tariff", async (req, res) => {
     return res.status(502).json({ ok: false, message: "Ошибка применения лимита трафика" });
   }
 
+  await lockTrialAfterSubscription(clientId);
+
   // T-unify: привязываем Payment к созданной Subscription (для аналитики + auto-renew).
   if (paymentId) {
     await prisma.payment.update({
@@ -2879,6 +2882,8 @@ adminRouter.post("/subscriptions/:subId/grant-extend", asyncRoute(async (req, re
     return res.status(result.status >= 400 ? result.status : 500).json({ ok: false, message: result.error });
   }
 
+  await lockTrialAfterSubscription(sub.ownerId);
+
   await logAdmin(req, "subscription.grant_extend", { type: "subscription", id: sub.id }, {
     tariffId: tariff.id,
     days: effectiveDays,
@@ -2958,6 +2963,7 @@ adminRouter.post("/subscriptions/:subId/convert-trial", asyncRoute(async (req, r
   }, selectedOption, undefined, false, true); // convertMode=true: бесплатный переход с trial
 
   if (!result.ok) return res.status(result.status >= 400 ? result.status : 500).json({ ok: false, message: result.error });
+  await lockTrialAfterSubscription(sub.ownerId);
   await logAdmin(req, "subscription.convert_trial", { type: "subscription", id: sub.id }, {
     tariffId: tariff.id,
     days: effectiveDays,
@@ -3048,6 +3054,8 @@ adminRouter.post("/clients/:id/attach-remna-subscription", asyncRoute(async (req
       expireAt,
     },
   });
+
+  await lockTrialAfterSubscription(clientId);
 
   // Best-effort: привязываем TG/email клиента к Remna-юзеру (как при покупке).
   if (client.telegramId?.trim() || client.email?.trim()) {

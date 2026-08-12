@@ -1,7 +1,11 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { deleteSingleSubscription } from "../modules/subscription/single-subscription-lifecycle.service.js";
-import { paidSubscriptionWhere, paidVpnPaymentWhere } from "../modules/trial/trial-purchase-lock.service.js";
+import {
+  adminGrantPaymentWhere,
+  paidSubscriptionWhere,
+  paidVpnPaymentWhere,
+} from "../modules/trial/trial-purchase-lock.service.js";
 
 type ClientRow = { id: string; trialUsed: boolean };
 type TrialRow = { id: string; ownerId: string };
@@ -29,7 +33,7 @@ export type TrialPurchaseCleanupDependencies = {
 
 const paidClientWhere = {
   OR: [
-    { payments: { some: paidVpnPaymentWhere } },
+    { payments: { some: { OR: [paidVpnPaymentWhere, adminGrantPaymentWhere] } } },
     { ownedSubscriptions: { some: paidSubscriptionWhere } },
   ],
 } satisfies Prisma.ClientWhereInput;
@@ -58,8 +62,7 @@ const realDependencies: TrialPurchaseCleanupDependencies = {
       deletionRequestedAt: null,
       owner: {
         OR: [
-          // trialUsed is also set by trial activation; paid history is required here.
-          { payments: { some: paidVpnPaymentWhere } },
+          { payments: { some: { OR: [paidVpnPaymentWhere, adminGrantPaymentWhere] } } },
           { ownedSubscriptions: { some: paidSubscriptionWhere } },
         ],
       },

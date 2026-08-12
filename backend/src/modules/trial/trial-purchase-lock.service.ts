@@ -20,6 +20,18 @@ export function isPaidVpnPurchase(payment: PaidVpnPayment & Record<string, unkno
   return payment.status === "PAID" && isVpnSubscriptionPurchase(payment);
 }
 
+export function isAdminGrantPayment(payment: Pick<PaidVpnPayment, "status" | "metadata" | "provider">): boolean {
+  if (payment.status !== "PAID") return false;
+  if (payment.provider === "admin_grant") return true;
+  if (!payment.metadata?.trim()) return false;
+  try {
+    const metadata = JSON.parse(payment.metadata) as Record<string, unknown>;
+    return metadata.kind === "admin_grant";
+  } catch {
+    return false;
+  }
+}
+
 export function isVpnSubscriptionPurchase(payment: Pick<PaidVpnPayment, "tariffId" | "metadata" | "provider">): boolean {
   if (payment.provider === "admin_grant") return false;
   if (!payment.metadata?.trim()) return payment.tariffId != null;
@@ -64,6 +76,18 @@ export const paidVpnPaymentWhere = {
   ],
 } satisfies Prisma.PaymentWhereInput;
 
+export const adminGrantPaymentWhere = {
+  status: "PAID",
+  OR: [
+    { provider: "admin_grant" },
+    { metadata: { contains: '\"kind\":\"admin_grant\"' } },
+  ],
+} satisfies Prisma.PaymentWhereInput;
+
+const trialLockPaymentWhere = {
+  OR: [paidVpnPaymentWhere, adminGrantPaymentWhere],
+} satisfies Prisma.PaymentWhereInput;
+
 const paidSubscriptionWhere = {
   trialId: null,
   tariffId: { not: null },
@@ -82,17 +106,26 @@ export async function hasPaidSubscription(clientId: string): Promise<boolean> {
 
 export async function isClientTrialBlocked(clientId: string, trialUsed: boolean): Promise<boolean> {
   if (trialUsed) return true;
-  const [client, paidSubscription, paidPurchase] = await Promise.all([
+  const [client, paidSubscription, paidPurchase, adminGrant] = await Promise.all([
     prisma.client.findUnique({ where: { id: clientId }, select: { trialUsed: true } }),
     hasPaidSubscription(clientId),
     hasPaidVpnPurchase(clientId),
+    hasTrialLockingPayment(clientId),
   ]);
-  return isTrialBlocked(Boolean(client?.trialUsed), paidSubscription || paidPurchase);
+  return isTrialBlocked(Boolean(client?.trialUsed), paidSubscription || paidPurchase || adminGrant);
 }
 
 export async function hasPaidVpnPurchase(clientId: string): Promise<boolean> {
   const payment = await prisma.payment.findFirst({
     where: { clientId, ...paidVpnPaymentWhere },
+    select: { id: true },
+  });
+  return payment != null;
+}
+
+async function hasTrialLockingPayment(clientId: string): Promise<boolean> {
+  const payment = await prisma.payment.findFirst({
+    where: { clientId, OR: [paidVpnPaymentWhere, adminGrantPaymentWhere] },
     select: { id: true },
   });
   return payment != null;
@@ -105,6 +138,23 @@ export async function markTrialUsedForPaidPurchase(clientId: string): Promise<vo
   });
 }
 
+/** Любая выданная подписка также закрывает trial и убирает отдельные trial-подписки. */
+export async function lockTrialAfterSubscription(clientId: string): Promise<void> {
+  try {
+    await markTrialUsedForPaidPurchase(clientId);
+  } catch (error) {
+    console.error("[trial-lock] failed to mark admin-granted client", clientId, error);
+  }
+  try {
+    const cleanup = await deleteSeparateTrialSubscriptions(clientId);
+    if (cleanup.failed > 0) {
+      console.error("[trial-lock] admin subscription cleanup is incomplete", clientId, cleanup);
+    }
+  } catch (error) {
+    console.error("[trial-lock] admin subscription cleanup failed", clientId, error);
+  }
+}
+
 export async function restoreTrialAfterLegacyFailure(clientId: string): Promise<void> {
   await prisma.client.updateMany({
     where: {
@@ -112,7 +162,7 @@ export async function restoreTrialAfterLegacyFailure(clientId: string): Promise<
       trialUsed: true,
       payments: {
         none: {
-          ...paidVpnPaymentWhere,
+          ...trialLockPaymentWhere,
         },
       },
       ownedSubscriptions: { none: paidSubscriptionWhere },
