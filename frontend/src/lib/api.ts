@@ -3366,7 +3366,6 @@ export type UpdateSettingsPayload = {
   logo?: string | null;
   logoBot?: string | null;
   favicon?: string | null;
-  cabinetDesign?: "classic" | "stealth";
   remnaClientUrl?: string | null;
   smtpHost?: string | null;
   smtpPort?: number;
@@ -3424,7 +3423,6 @@ export type UpdateSettingsPayload = {
   botWelcomeText?: string | null;
   botWelcomeImage?: string | null;
   botWelcomeShowOnce?: boolean;
-  cabinetDesignApplyInBrowser?: boolean;
   overpayApiUrl?: string | null;
   overpayProjectId?: string | null;
   overpayLogin?: string | null;
@@ -3495,8 +3493,6 @@ export type UpdateSettingsPayload = {
   skipEmailVerification?: boolean;
   onboardingEmailRequired?: boolean;
   onboarding2faEnabled?: boolean;
-  stealthAccent?: string | null;
-  stealthHeroImage?: string | null;
   multiSubscriptionsEnabled?: boolean;
   signupProtectionEnabled?: boolean;
   emailDomainBlocklist?: string;
@@ -3939,7 +3935,6 @@ export interface AdminSettings {
   logo?: string | null;
   logoBot?: string | null;
   favicon?: string | null;
-  cabinetDesign?: "classic" | "stealth";
   remnaClientUrl?: string | null;
   smtpHost?: string | null;
   smtpPort?: number;
@@ -4002,7 +3997,6 @@ export interface AdminSettings {
   botWelcomeText?: string | null;
   botWelcomeImage?: string | null;
   botWelcomeShowOnce?: boolean;
-  cabinetDesignApplyInBrowser?: boolean;
   overpayApiUrl?: string | null;
   overpayProjectId?: string | null;
   overpayLogin?: string | null;
@@ -4098,8 +4092,6 @@ export interface AdminSettings {
   skipEmailVerification?: boolean;
   onboardingEmailRequired?: boolean;
   onboarding2faEnabled?: boolean;
-  stealthAccent?: string | null;
-  stealthHeroImage?: string | null;
   multiSubscriptionsEnabled?: boolean;
   /** заявки на вывод реф. баланса: вкл/выкл. */
   withdrawalsEnabled?: boolean;
@@ -5492,8 +5484,6 @@ export interface PublicConfig {
   serviceName: string;
   logo?: string | null;
   favicon?: string | null;
-  cabinetDesign?: "classic" | "stealth";
-  cabinetDesignApplyInBrowser?: boolean;
   remnaClientUrl?: string | null;
   publicAppUrl?: string | null;
   telegramBotUsername?: string | null;
@@ -5521,8 +5511,6 @@ export interface PublicConfig {
   skipEmailVerification?: boolean;
   onboardingEmailRequired?: boolean;
   onboarding2faEnabled?: boolean;
-  stealthAccent?: string | null;
-  stealthHeroImage?: string | null;
   multiSubscriptionsEnabled?: boolean;
   /** заявки на вывод реф. баланса: вкл/выкл + мин. сумма. */
   withdrawalsEnabled?: boolean;

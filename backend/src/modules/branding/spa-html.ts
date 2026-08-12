@@ -56,10 +56,6 @@ interface BrandValues {
   description: string;
   logo: string | null;
   favicon: string | null;
-  stealthHeroImage: string | null;
-  stealthAccent: string;
-  cabinetDesign: "classic" | "stealth";
-  cabinetDesignApplyInBrowser: boolean;
   publicAppUrl: string | null;
 }
 
@@ -72,8 +68,6 @@ async function resolveBrand(): Promise<BrandValues> {
   const brand = (cfg?.serviceName ?? "").trim() || DEFAULT_BRAND;
   const description = brand === DEFAULT_BRAND ? DEFAULT_DESC : `${brand} — личный кабинет и админка VPN`;
   const logo = (cfg?.logo ?? "").trim() || null;
-  const accentCandidate = (cfg?.stealthAccent ?? "").trim();
-  const stealthAccent = /^#[0-9a-f]{6}$/i.test(accentCandidate) ? accentCandidate.toUpperCase() : "#FF2357";
   brandCache = {
     at: Date.now(),
     value: {
@@ -81,10 +75,6 @@ async function resolveBrand(): Promise<BrandValues> {
       description,
       logo,
       favicon: (cfg?.favicon ?? "").trim() || null,
-      stealthHeroImage: (cfg?.stealthHeroImage ?? "").trim() || null,
-      stealthAccent,
-      cabinetDesign: cfg?.cabinetDesign === "stealth" ? "stealth" : "classic",
-      cabinetDesignApplyInBrowser: cfg?.cabinetDesignApplyInBrowser ?? false,
       publicAppUrl: (cfg?.publicAppUrl ?? "").trim() || null,
     },
   };
@@ -110,11 +100,6 @@ function safeInlineJson(value: unknown): string {
     .replace(/\u2029/g, "\\u2029");
 }
 
-function accentRgb(hex: string): string {
-  const n = Number.parseInt(hex.slice(1), 16);
-  return `${(n >> 16) & 255} ${(n >> 8) & 255} ${n & 255}`;
-}
-
 function renderHtml(tpl: string, b: BrandValues, origin: string): string {
   // Заменяем все вхождения "STEALTHNET" в шаблоне (это бренд-плейсхолдер
   // в meta/title/manifest-name и т. п. — никаких ложных срабатываний быть
@@ -132,16 +117,9 @@ function renderHtml(tpl: string, b: BrandValues, origin: string): string {
     serviceName: b.brand,
     logo: logoUrl,
     favicon: configuredAssetUrl(b.favicon, "favicon", origin),
-    cabinetDesign: b.cabinetDesign,
-    cabinetDesignApplyInBrowser: b.cabinetDesignApplyInBrowser,
     publicAppUrl: b.publicAppUrl,
-    stealthAccent: b.stealthAccent,
-    stealthHeroImage: configuredAssetUrl(b.stealthHeroImage, "stealth-hero", origin),
   };
-  const criticalBootstrap = [
-    `<style id="stealth-critical-theme">:root{--stealth-accent:${accentRgb(b.stealthAccent)}}</style>`,
-    `<script>window.__STEALTH_BOOTSTRAP__=${safeInlineJson(bootstrap)};</script>`,
-  ].join("\n    ");
+  const criticalBootstrap = `<script>window.__STEALTH_BOOTSTRAP__=${safeInlineJson(bootstrap)};</script>`;
   out = out.replace(/<\/head>/i, `    ${criticalBootstrap}\n  </head>`);
 
   // Дополняем head OG/Twitter тегами, если их ещё нет — для красивого превью

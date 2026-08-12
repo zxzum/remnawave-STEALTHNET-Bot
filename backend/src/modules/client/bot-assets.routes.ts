@@ -17,12 +17,11 @@ import { getSystemConfig } from "./client.service.js";
 
 export const botAssetsRouter = Router();
 
-type PublicBrandAssetKey = "logo" | "favicon" | "stealth-hero";
+type PublicBrandAssetKey = "logo" | "favicon";
 
-const ASSET_CONFIG_KEYS: Record<PublicBrandAssetKey, "logo" | "favicon" | "stealthHeroImage"> = {
+const ASSET_CONFIG_KEYS: Record<PublicBrandAssetKey, "logo" | "favicon"> = {
   logo: "logo",
   favicon: "favicon",
-  "stealth-hero": "stealthHeroImage",
 };
 
 /**
