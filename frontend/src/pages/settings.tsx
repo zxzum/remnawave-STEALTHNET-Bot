@@ -50,7 +50,7 @@ const ALLOWED_CURRENCIES = ["usd", "rub"];
 
 const DEFAULT_PLATEGA_METHODS: { id: number; enabled: boolean; label: string }[] = [
   { id: 2, enabled: true, label: "СБП" },
-  { id: 11, enabled: false, label: "Карты" },
+  { id: 10, enabled: false, label: "Карты" },
   { id: 12, enabled: false, label: "Международный" },
   { id: 13, enabled: false, label: "Криптовалюта" },
 ];
