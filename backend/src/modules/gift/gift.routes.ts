@@ -27,6 +27,7 @@ import { paymentSnapshotProduct } from "../bot/bot.service.js";
 import { requireClientAuth } from "../client/client.middleware.js";
 import { prisma, createPayment } from "../../db.js";
 import { randomUUID } from "crypto";
+import { deleteSeparateTrialSubscriptions, markTrialUsedForPaidPurchase } from "../trial/trial-purchase-lock.service.js";
 
 // ─── Public Router (no auth) ─────────────────────────────────────────────────
 
@@ -197,9 +198,15 @@ giftRouter.post("/buy", async (req: Request, res: Response) => {
       status: "PAID",
       provider: "balance",
       paidAt: new Date(),
-      metadata: JSON.stringify({ isAdditionalSubscription: true }),
+      metadata: JSON.stringify({ isAdditionalSubscription: true, purchasedAsGift: true }),
     },
   });
+
+  // Покупатель подарка тоже уже совершил платную VPN-покупку.
+  await markTrialUsedForPaidPurchase(clientId).catch((error) => {
+    console.error("[trial-lock] failed to mark gift buyer", clientId, error);
+  });
+  await deleteSeparateTrialSubscriptions(clientId);
 
   const { distributeReferralRewards } = await import("../referral/referral.service.js");
   await distributeReferralRewards(payment.id).catch(() => {});

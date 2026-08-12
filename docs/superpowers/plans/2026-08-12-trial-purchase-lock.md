@@ -6,7 +6,7 @@ Make any paid VPN purchase permanently consume the client's trial entitlement, r
 
 ## Scope and invariants
 
-- A successful payment with `tariffId` is a paid VPN purchase. Top-ups, extra options, proxy slots, and sing-box slots do not set `Client.trialUsed`.
+- A successful payment for an ordinary tariff or `customBuild` is a paid VPN purchase. Top-ups, extra options, proxy slots, sing-box slots, and admin grants do not set `Client.trialUsed`.
 - The flag is set idempotently before paid tariff activation. It is never cleared by paid-purchase cleanup.
 - Trial cleanup only targets non-gift subscriptions with `trialId != null`; every deletion goes through `deleteSingleSubscription`, so failed Remnawave calls remain in the existing retry queue.
 - Both legacy and table-driven trial endpoints re-check the paid/trial lock on the server. No new recurring scan or cron is added.

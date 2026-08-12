@@ -25,6 +25,7 @@ import { notifyBalanceToppedUp, notifyTariffActivated, notifyProxySlotsCreated, 
 import { createNalogReceipt } from "../nalog/nalog.service.js";
 import { recordPromoCodeUsageFromPayment } from "../payment/promo-code-usage.util.js";
 import { auditPaymentClientBotAlignment } from "../payment/payment-webhook-audit.util.js";
+import { isVpnSubscriptionPurchase } from "../trial/trial-purchase-lock.service.js";
 
 function hasExtraOptionInMetadata(metadata: string | null): boolean {
   if (!metadata?.trim()) return false;
@@ -202,7 +203,7 @@ yookassaWebhooksRouter.post("/yookassa", async (req, res) => {
     return res.status(200).send("OK");
   }
 
-  const isTopUp = !payment.tariffId && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
+  const isTopUp = !isVpnSubscriptionPurchase(payment) && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
 
   if (isTopUp) {
     await prisma.client.update({

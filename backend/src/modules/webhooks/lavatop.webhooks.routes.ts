@@ -39,6 +39,7 @@ import {
 } from "../notification/telegram-notify.service.js";
 import { recordPromoCodeUsageFromPayment } from "../payment/promo-code-usage.util.js";
 import { auditPaymentClientBotAlignment } from "../payment/payment-webhook-audit.util.js";
+import { isVpnSubscriptionPurchase } from "../trial/trial-purchase-lock.service.js";
 
 function hasExtraOptionInMetadata(metadata: string | null): boolean {
   if (!metadata?.trim()) return false;
@@ -58,6 +59,7 @@ async function activatePayment(paymentId: string) {
     where: { id: paymentId },
     select: {
       id: true,
+      status: true,
       clientId: true,
       amount: true,
       currency: true,
@@ -70,11 +72,7 @@ async function activatePayment(paymentId: string) {
   if (!payment) return;
 
   const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
-  const isTopUp =
-    !payment.tariffId &&
-    !payment.proxyTariffId &&
-    !payment.singboxTariffId &&
-    !isExtraOption;
+  const isTopUp = !isVpnSubscriptionPurchase(payment) && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
 
   if (isExtraOption) {
     await markPaymentPaid(payment.id);
@@ -256,7 +254,7 @@ lavatopWebhooksRouter.post("/", async (req: Request, res: Response) => {
 
   const payment = await prisma.payment.findFirst({
     where: { orderId, provider: "lavatop" },
-    select: { id: true, status: true, clientId: true, amount: true, currency: true, tariffId: true, proxyTariffId: true, singboxTariffId: true, metadata: true },
+    select: { id: true, status: true, provider: true, clientId: true, amount: true, currency: true, tariffId: true, proxyTariffId: true, singboxTariffId: true, metadata: true },
   });
 
   if (!payment) {

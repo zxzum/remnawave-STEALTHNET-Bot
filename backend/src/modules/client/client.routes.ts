@@ -66,6 +66,12 @@ import { validateEmailForSignup } from "../signup-protection/email-blocklist.js"
 import { configuredAssetUrl } from "./bot-assets.routes.js";
 import { toClientTrafficQuota } from "../squad-traffic/squad-traffic.client.js";
 import { applyTrafficEntitlement } from "../squad-traffic/traffic-entitlement.service.js";
+import {
+  deleteSeparateTrialSubscriptions,
+  isClientTrialBlocked,
+  markTrialUsedForPaidPurchase,
+  restoreTrialAfterLegacyFailure,
+} from "../trial/trial-purchase-lock.service.js";
 import { EMAIL_VERIFICATION_IP_WINDOW_MS, getEmailRegistrationRateLimit } from "./email-registration-policy.js";
 import {
   EMAIL_DELIVERY_STATE_SENT,
@@ -2328,7 +2334,7 @@ clientRouter.get("/withdrawals", async (req, res) => {
 
 clientRouter.post("/trial", async (req, res) => {
   const client = (req as unknown as { client: { id: string; remnawaveUuid: string | null; trialUsed: boolean; email: string | null; telegramId: string | null; telegramUsername?: string | null } }).client;
-  if (client.trialUsed) {
+  if (await isClientTrialBlocked(client.id, client.trialUsed)) {
     return res.status(400).json({ message: "Бесплатный тест уже использован" });
   }
   const config = await getSystemConfig();
@@ -2423,7 +2429,7 @@ clientRouter.post("/trial", async (req, res) => {
     if (updateRes.error) {
       // Remna кинула — откатываем флаг, пусть юзер ретраит. Иначе мы у него
       // отняли триал, а активации не сделали — на ровном месте обидится.
-      await prisma.client.update({ where: { id: client.id }, data: { trialUsed: false } }).catch(() => {});
+      await restoreTrialAfterLegacyFailure(client.id).catch(() => {});
       return res.status(updateRes.status >= 400 ? updateRes.status : 500).json({ message: updateRes.error });
     }
 
@@ -2491,7 +2497,7 @@ clientRouter.post("/trial", async (req, res) => {
 
     if (!existingUuid) {
       // Remna create обосрался — откатываем флаг, юзер ретраит.
-      await prisma.client.update({ where: { id: client.id }, data: { trialUsed: false } }).catch(() => {});
+      await restoreTrialAfterLegacyFailure(client.id).catch(() => {});
       return res.status(502).json({ message: "Ошибка создания пользователя" });
     }
 
@@ -2555,7 +2561,11 @@ clientRouter.get("/trials/available", async (req, res) => {
   // hasAnyEnabled — флаг для бота, чтобы при пустом items.length знать:
   //   нет триалов вообще (используй legacy single-trial flow) или
   //   все использованы (скрывай кнопку «Получить пробную»).
+  const client = (req as unknown as { client?: { trialUsed?: boolean } }).client;
   if (allEnabled.length === 0) return res.json({ items: [], hasAnyEnabled: false });
+  if (await isClientTrialBlocked(clientId, Boolean(client?.trialUsed))) {
+    return res.json({ items: [], hasAnyEnabled: true });
+  }
   const used = await prisma.clientTrialUsage.findMany({
     where: { clientId },
     select: { trialId: true },
@@ -2593,6 +2603,10 @@ clientRouter.get("/trials/available", async (req, res) => {
 clientRouter.post("/trials/:id/activate", async (req, res) => {
   const trialId = req.params.id;
   const clientId = (req as unknown as { clientId: string }).clientId;
+  const client = (req as unknown as { client?: { trialUsed?: boolean } }).client;
+  if (await isClientTrialBlocked(clientId, Boolean(client?.trialUsed))) {
+    return res.status(400).json({ message: "Пробный период недоступен — у вас уже была платная подписка." });
+  }
   if (!isRemnaConfigured()) return res.status(503).json({ message: "Сервис временно недоступен" });
 
   const trial = await prisma.trial.findUnique({
@@ -2621,6 +2635,10 @@ clientRouter.post("/trials/:id/activate", async (req, res) => {
     }
   }
 
+  if (await isClientTrialBlocked(clientId, false)) {
+    return res.status(400).json({ message: "Пробный период недоступен — у вас уже была платная подписка." });
+  }
+
   // Создаём secondary subscription. Источник параметров —
   // ЛИБО тариф триала (как раньше), ЛИБО сам standalone-триал (сквады/лимиты
   // заданы прямо в триале, tariffId=null — такой «псевдо-тариф» в каталоге не виден).
@@ -2635,6 +2653,11 @@ clientRouter.post("/trials/:id/activate", async (req, res) => {
       return res.status(503).json({ message: "Триал настроен некорректно (нет сквадов)" });
     }
   }
+  try {
+    await prisma.clientTrialUsage.create({ data: { clientId, trialId: trial.id } });
+  } catch {
+    return res.status(409).json({ message: "Этот пробный период уже активируется или был активирован" });
+  }
   const { createAdditionalSubscription } = await import("../gift/gift.service.js");
   const subResult = await createAdditionalSubscription(clientId, {
     id: trial.tariffId ?? undefined,
@@ -2648,6 +2671,7 @@ clientRouter.post("/trials/:id/activate", async (req, res) => {
     trafficResetMode: trial.tariff?.trafficResetMode ?? undefined,
   }, { skipConfigCheck: true, extraDevices: 0 });
   if (!subResult.ok) {
+    await prisma.clientTrialUsage.deleteMany({ where: { clientId, trialId: trial.id, subscriptionId: null } }).catch(() => {});
     return res.status(subResult.status).json({ message: subResult.error });
   }
 
@@ -2656,6 +2680,14 @@ clientRouter.post("/trials/:id/activate", async (req, res) => {
     where: { id: subResult.data.subscriptionId },
     data: { trialId: trial.id },
   });
+  if (await isClientTrialBlocked(clientId, false)) {
+    const { deleteSingleSubscription } = await import("../subscription/single-subscription-lifecycle.service.js");
+    await deleteSingleSubscription(subResult.data.subscriptionId).catch(() => {});
+    await prisma.clientTrialUsage.deleteMany({
+      where: { clientId, trialId: trial.id, subscriptionId: subResult.data.subscriptionId },
+    }).catch(() => {});
+    return res.status(409).json({ message: "Пробный период недоступен — у вас уже была платная подписка." });
+  }
   await applyTrafficEntitlement(subResult.data.subscriptionId, {
     tariffId: trial.tariffId,
     mode: trial.trafficLimitMode,
@@ -2678,18 +2710,10 @@ clientRouter.post("/trials/:id/activate", async (req, res) => {
     }
   }
 
-  // Лог использования (атомарный insert через UNIQUE).
-  try {
-    await prisma.clientTrialUsage.create({
-      data: {
-        clientId,
-        trialId: trial.id,
-        subscriptionId: subResult.data.subscriptionId,
-      },
-    });
-  } catch {
-    // Гонка: одновременно 2 запроса. Один прошёл, второй получит 409 при повторе.
-  }
+  await prisma.clientTrialUsage.updateMany({
+    where: { clientId, trialId: trial.id, subscriptionId: null },
+    data: { subscriptionId: subResult.data.subscriptionId },
+  });
 
   // подгружаем subscriptionUrl + remnawaveUuid из созданной подписки
   // чтобы бот мог сразу показать кнопку «📲 Инструкции по установке» с прямой ссылкой.
@@ -4547,6 +4571,13 @@ clientRouter.post("/payments/balance", async (req, res) => {
     return res.status(status).json({ message });
   };
 
+  try {
+    await markTrialUsedForPaidPurchase(clientRaw.id);
+  } catch (error) {
+    console.error("[trial-lock] failed to mark balance purchase", clientRaw.id, error);
+    return failBalancePayment(500, "Не удалось зафиксировать использованный пробный период");
+  }
+
   // УНИФИЦИРОВАННАЯ покупка балансом.
   //
   // 1. extendsSecondarySubId → явное продление конкретной подписки.
@@ -4661,6 +4692,7 @@ clientRouter.post("/payments/balance", async (req, res) => {
   if (!activateResult.ok) {
     return failBalancePayment(activateResult.status, activateResult.error);
   }
+  await deleteSeparateTrialSubscriptions(clientRaw.id);
   // NB: списание уже сделано атомарно выше — повторного decrement тут НЕ надо.
 
   // «продлить без устройств» теперь обрабатывается ВНУТРИ extendSecondarySubscription
