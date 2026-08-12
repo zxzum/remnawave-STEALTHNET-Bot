@@ -1011,7 +1011,7 @@ function parseCategoryEmojis(raw: string | undefined): CategoryEmojis {
 export type PlategaMethodConfig = { id: number; enabled: boolean; label: string };
 const DEFAULT_PLATEGA_METHODS: PlategaMethodConfig[] = [
   { id: 2, enabled: true, label: "СБП" },
-  { id: 11, enabled: false, label: "Карты" },
+  { id: 10, enabled: false, label: "Карты" },
   { id: 12, enabled: false, label: "Международный" },
   { id: 13, enabled: false, label: "Криптовалюта" },
 ];
@@ -1051,7 +1051,7 @@ function parsePaymentProviders(raw: string | undefined): PaymentProviderConfig[]
   }
 }
 
-function parsePlategaMethods(raw: string | undefined): PlategaMethodConfig[] {
+export function parsePlategaMethods(raw: string | undefined): PlategaMethodConfig[] {
   if (!raw || !raw.trim()) return DEFAULT_PLATEGA_METHODS;
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -1062,8 +1062,9 @@ function parsePlategaMethods(raw: string | undefined): PlategaMethodConfig[] {
       // Backward-compat: исправляем legacy опечатку СПБ → СБП (Система Быстрых Платежей).
       // СПБ в этом контексте — ошибка; стандартное название — СБП.
       if (label.trim() === "СПБ") label = "СБП";
+      const id = typeof x.id === "number" ? x.id : Number(x.id) || 2;
       return {
-        id: typeof x.id === "number" ? x.id : Number(x.id) || 2,
+        id: id === 11 && label.trim().toLowerCase() === "карты" ? 10 : id,
         enabled: Boolean(x.enabled),
         label,
       };
