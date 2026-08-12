@@ -24,6 +24,7 @@ const PAGE_SIZE = 100;
 
 type RemnaUser = {
   uuid?: string;
+  id?: number | string;
   telegramId?: number | null;
   email?: string | null;
   username?: string;
@@ -91,7 +92,7 @@ export async function syncFromRemna(): Promise<{
     if (users.length === 0) hasMore = false;
     else {
       for (const u of users) {
-        const uuid = u.uuid;
+        const uuid = u.uuid ?? (u.id != null ? String(u.id) : undefined);
         if (!uuid) {
           result.skipped++;
           continue;

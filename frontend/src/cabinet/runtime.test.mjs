@@ -32,7 +32,10 @@ test("provides cabinet state to public authentication screens", async () => {
 
 test("shows an initial skeleton and a retryable load error", async () => {
   const layout = await readFile(new URL("./components/Layout.tsx", import.meta.url), "utf8");
-  assert.match(layout, /loading \? <InitialSkeleton/);
+  assert.match(layout, /loading \? <InitialSkeleton pathname=\{location\.pathname\}/);
+  for (const page of ["dashboard", "subscribe", "tariffs", "profile", "referral"]) {
+    assert.match(layout, new RegExp(`data-skeleton-page=["']${page}["']`));
+  }
   assert.match(layout, /error \? <LoadError/);
   assert.match(layout, /onRetry=\{reload\}/);
 });

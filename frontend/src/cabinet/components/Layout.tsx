@@ -195,14 +195,90 @@ function BottomNav() {
   );
 }
 
-function InitialSkeleton() {
+function InitialSkeleton({ pathname }: { pathname: string }) {
+  const page = pathname.split("/").pop();
+  const header = (
+    <div className="space-y-2">
+      <div className="h-9 w-48 max-w-2/3 rounded-xl bg-white/8" />
+      <div className="h-5 w-80 max-w-full rounded-lg bg-white/6" />
+    </div>
+  );
+
   return (
     <div className="animate-pulse space-y-5" aria-label="Загрузка кабинета" aria-busy="true">
-      <div className="h-9 w-48 rounded-xl bg-white/8" />
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {[0, 1, 2].map((item) => <div key={item} className="glass h-36 rounded-3xl" />)}
-      </div>
-      <div className="glass h-72 rounded-4xl" />
+      {header}
+
+      {page === "dashboard" && (
+        <div data-skeleton-page="dashboard" className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+          <div className="glass h-[36rem] rounded-4xl" />
+          <div className="space-y-3">
+            {[0, 1, 2, 3].map((item) => <div key={item} className="glass h-16 rounded-2xl" />)}
+            <div className="h-5 w-40 rounded-lg bg-white/6" />
+            <div className="glass h-28 rounded-3xl" />
+          </div>
+        </div>
+      )}
+
+      {page === "subscribe" && (
+        <div data-skeleton-page="subscribe" className="space-y-5">
+          <div className="glass h-16 rounded-2xl" />
+          <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+            <div className="space-y-5">
+              <div className="glass h-72 rounded-4xl" />
+              <div className="grid gap-3 sm:grid-cols-2">
+                {[0, 1, 2, 3].map((item) => <div key={item} className="glass h-24 rounded-3xl" />)}
+              </div>
+              <div className="glass h-24 rounded-3xl" />
+            </div>
+            <div className="space-y-3">
+              {[0, 1, 2, 3, 4].map((item) => <div key={item} className="glass h-24 rounded-3xl" />)}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {page === "tariffs" && (
+        <div data-skeleton-page="tariffs" className="space-y-4">
+          <div className="glass rounded-4xl p-5 sm:p-6">
+            <div className="h-12 w-72 max-w-full rounded-xl bg-white/7" />
+            <div className="mt-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {[0, 1, 2].map((item) => <div key={item} className="glass h-[26rem] rounded-3xl" />)}
+            </div>
+          </div>
+          <div className="glass h-24 rounded-4xl" />
+        </div>
+      )}
+
+      {page === "profile" && (
+        <div data-skeleton-page="profile" className="grid items-start gap-5 lg:grid-cols-2">
+          <div className="space-y-5">
+            <div className="glass h-72 rounded-4xl" />
+            <div className="glass h-80 rounded-4xl" />
+            <div className="glass h-44 rounded-4xl" />
+          </div>
+          <div className="space-y-5">
+            <div className="glass h-96 rounded-4xl" />
+            <div className="glass h-64 rounded-4xl" />
+          </div>
+        </div>
+      )}
+
+      {page === "referral" && (
+        <div data-skeleton-page="referral" className="grid items-start gap-5 lg:grid-cols-2">
+          <div className="hidden gap-4 sm:grid sm:grid-cols-3 lg:col-span-2">
+            {[0, 1, 2].map((item) => <div key={item} className="glass h-52 rounded-3xl" />)}
+          </div>
+          <div className="glass h-80 rounded-4xl" />
+          <div className="glass h-80 rounded-4xl" />
+          <div className="glass grid h-32 grid-cols-3 rounded-3xl sm:hidden" />
+          <div className="glass h-80 rounded-4xl" />
+          <div className="glass h-80 rounded-4xl" />
+        </div>
+      )}
+
+      {(!page || !["dashboard", "subscribe", "tariffs", "profile", "referral"].includes(page)) && (
+        <div className="glass h-72 rounded-4xl" />
+      )}
     </div>
   );
 }
@@ -263,7 +339,7 @@ export function Layout() {
           animate={{ opacity: isLeaving ? 0 : 1 }}
           transition={{ duration: 0.2, ease: "easeOut" }}
         >
-          {loading ? <InitialSkeleton /> : error ? <LoadError message={error} onRetry={reload} /> : displayedOutlet}
+          {loading ? <InitialSkeleton pathname={location.pathname} /> : error ? <LoadError message={error} onRetry={reload} /> : displayedOutlet}
         </motion.div>
       </main>
     </div>
