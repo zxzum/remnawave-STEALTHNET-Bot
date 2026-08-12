@@ -171,8 +171,12 @@ Copy the supplied CSS rules into `lazeyka-landing.css`, scope root selectors and
 
 ```tsx
 import "./lazeyka-landing.css";
+```
 
-return <div className="lazeyka-landing" id="top">…</div>;
+Set the root element rendered by `LandingPage` to the following opening tag and keep every supplied section inside it:
+
+```tsx
+<div className="lazeyka-landing" id="top">
 ```
 
 Keep the existing `prefers-reduced-motion`, mobile menu, focus-visible, breakpoint, artwork masking, and layout rules. Do not change global theme or cabinet styles.
