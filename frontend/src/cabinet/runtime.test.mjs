@@ -17,7 +17,7 @@ test("uses production cabinet routes and the real client logout", async () => {
   assert.match(layout, /to: "\/cabinet\/dashboard"/);
   assert.match(layout, /to: "\/cabinet\/subscribe"/);
   assert.match(layout, /to: "\/cabinet\/tariffs"/);
-  assert.match(layout, /to: "\/cabinet\/referral"/);
+  assert.doesNotMatch(layout, /to: "\/cabinet\/referral"/);
   assert.match(layout, /to="\/cabinet\/profile"/);
 });
 
@@ -187,6 +187,7 @@ test("the client runtime is eager and does not bundle archived cabinet designs",
   assert.match(app, /from "@\/cabinet\/components\/Layout"/);
   assert.doesNotMatch(app, /import\("@\/pages\/cabinet\//);
   assert.doesNotMatch(app, /ClientDashboardPage|ClientTariffsPage|CabinetLayout/);
+  assert.doesNotMatch(app, /Загрузка кабинета…|animate-spin rounded-full border-2 border-primary border-t-transparent/);
 });
 
 test("admin settings no longer expose the archived design selector", async () => {

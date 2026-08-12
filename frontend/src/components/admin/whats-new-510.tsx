@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Sparkles, RefreshCw, Gift, Gem, Wrench, ShieldCheck, Bot,
+  Sparkles, RefreshCw, Gift, Wrench, ShieldCheck, Bot,
   ChevronRight, ChevronLeft, X, Rocket, PartyPopper,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -48,18 +48,6 @@ const SLIDES: Slide[] = [
       "Конвертация в платный с сохранением дней и остатка трафика",
       "Тогглы: разрешить конвертацию, «в любой тариф» или список",
       "Покупка заменяет триал — с выбором, какой именно",
-    ],
-  },
-  {
-    icon: Gem,
-    accent: "text-fuchsia-400",
-    glow: "bg-fuchsia-500/30",
-    title: "Stealth-кабинет: glass-редизайн",
-    items: [
-      "Полная мультиподписочность — паритет с классик-кабинетом",
-      "Глубокий glassmorphism + framer-motion анимации",
-      "Левитирующая стеклянная нижняя панель",
-      "Триалы, модалка оплаты и автосписание прямо в миниаппке",
     ],
   },
   {

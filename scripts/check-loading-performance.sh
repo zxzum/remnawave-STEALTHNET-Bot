@@ -31,17 +31,12 @@ if grep -q 'data:image' "$TMP_DIR/dashboard.html"; then
 fi
 
 grep -q '__STEALTH_BOOTSTRAP__' "$TMP_DIR/dashboard.html" || {
-  echo "FAIL: dashboard HTML is missing the synchronous Stealth bootstrap" >&2
+  echo "FAIL: dashboard HTML is missing the synchronous public bootstrap" >&2
   exit 1
 }
 
 grep -Eq 'menuFor === n\.uuid.*z-\[100\]' "$ROOT/frontend/src/pages/remna-nodes.tsx" || {
   echo "FAIL: open node menu does not elevate the outer card stacking context" >&2
-  exit 1
-}
-
-grep -q 'loading && !pageConfig' "$ROOT/frontend/src/pages/cabinet/stealth/stealth-subscribe.tsx" || {
-  echo "FAIL: subscription empty state is not guarded by loading completion" >&2
   exit 1
 }
 

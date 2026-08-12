@@ -5,28 +5,9 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const layout = readFileSync(resolve(root, "frontend/src/pages/cabinet/cabinet-layout.tsx"), "utf8");
 const clientLayout = readFileSync(resolve(root, "frontend/src/cabinet/components/Layout.tsx"), "utf8");
 const profile = readFileSync(resolve(root, "frontend/src/cabinet/pages/Profile.tsx"), "utf8");
 const floatingChat = readFileSync(resolve(root, "frontend/src/components/floating-chat.tsx"), "utf8");
-const navSource = layout.match(/function useNavItems\(\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
-const mobileSource = layout.match(/function MobileCabinetShell\(\) \{([\s\S]*?)\n\}\n\nfunction useIsMobile/)?.[1] ?? "";
-
-test("mobile navigation prioritizes four core cabinet routes", () => {
-  const routes = [...navSource.matchAll(/to: "(\/cabinet\/[^\"]+)"/g)].map((match) => match[1]);
-  assert.deepEqual(routes.slice(0, 4), [
-    "/cabinet/dashboard",
-    "/cabinet/singbox",
-    "/cabinet/tariffs",
-    "/cabinet/profile",
-  ]);
-  assert.match(layout, /const MAX_VISIBLE_NAV = 4/);
-  assert.doesNotMatch(mobileSource, /hasMore/);
-  assert.doesNotMatch(mobileSource, /cabinet\.nav\.more/);
-  assert.match(mobileSource, /h-\[5rem\]/);
-  assert.match(mobileSource, /text-xs font-semibold/);
-});
-
 test("profile contains a top referral block and Telegram support button", () => {
   assert.match(profile, /<ReferralPromo \/>/);
   assert.match(profile, /<SupportButton \/>/);

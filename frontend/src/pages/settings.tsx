@@ -826,7 +826,6 @@ export function SettingsPage() {
         logo: settings.logo ?? null,
         logoBot: settings.logoBot ?? null,
         favicon: settings.favicon ?? null,
-        cabinetDesign: settings.cabinetDesign ?? undefined,
         remnaClientUrl: settings.remnaClientUrl ?? null,
         smtpHost: settings.smtpHost ?? null,
         smtpPort: settings.smtpPort ?? undefined,
@@ -842,8 +841,6 @@ export function SettingsPage() {
         skipEmailVerification: settings.skipEmailVerification ?? false,
         onboardingEmailRequired: settings.onboardingEmailRequired ?? false,
         onboarding2faEnabled: settings.onboarding2faEnabled !== false,
-        stealthAccent: settings.stealthAccent ?? null,
-        stealthHeroImage: settings.stealthHeroImage ?? null,
         // Антибот-защита регистраций
         signupProtectionEnabled: settings.signupProtectionEnabled !== false,
         emailDomainBlocklist: settings.emailDomainBlocklist ?? "",
@@ -902,7 +899,6 @@ export function SettingsPage() {
         botWelcomeText: settings.botWelcomeText ?? null,
         botWelcomeImage: settings.botWelcomeImage ?? null,
         botWelcomeShowOnce: settings.botWelcomeShowOnce ?? true,
-        cabinetDesignApplyInBrowser: settings.cabinetDesignApplyInBrowser ?? false,
         overpayApiUrl: settings.overpayApiUrl ?? null,
         overpayProjectId: settings.overpayProjectId ?? null,
         overpayLogin: settings.overpayLogin ?? null,
@@ -1531,50 +1527,6 @@ export function SettingsPage() {
                   <p className="text-xs text-muted-foreground">{t("admin.settings.bot_logo_hint")}</p>
                 </div>
                 <div className="space-y-2">
-                  <Label>Мини-апп (Stealth): акцентный цвет</Label>
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <input
-                      type="color"
-                      value={settings.stealthAccent || "#ff2357"}
-                      onChange={(e) => setSettings((s) => (s ? { ...s, stealthAccent: e.target.value } : s))}
-                      className="h-10 w-14 rounded border border-input bg-background cursor-pointer p-1"
-                    />
-                    <Input
-                      value={settings.stealthAccent ?? ""}
-                      onChange={(e) => setSettings((s) => (s ? { ...s, stealthAccent: e.target.value || null } : s))}
-                      placeholder="#ff2357"
-                      className="font-mono w-40"
-                    />
-                    {settings.stealthAccent && (
-                      <Button type="button" variant="outline" size="sm" onClick={() => setSettings((s) => (s ? { ...s, stealthAccent: null } : s))}>Сброс</Button>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground">Перекрашивает весь новый мини-апп (щит, кнопки, активные вкладки, акценты). Пусто = стандартный красный.</p>
-                </div>
-                <div className="space-y-2">
-                  <Label>Мини-апп (Stealth): картинка вместо щита</Label>
-                  {settings.stealthHeroImage ? (
-                    <div className="flex items-center gap-3">
-                      <img src={settings.stealthHeroImage} alt="hero" className="h-14 w-14 object-contain rounded border bg-black/40 p-1" />
-                      <div className="flex gap-2">
-                        <Label className="cursor-pointer">
-                          <span className="inline-flex items-center justify-center rounded-md text-sm font-medium bg-primary text-primary-foreground h-9 px-4">{t("admin.settings.upload_another")}</span>
-                          <input type="file" accept="image/*" className="sr-only" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = () => setSettings((s) => (s ? { ...s, stealthHeroImage: r.result as string } : s)); r.readAsDataURL(f); }} />
-                        </Label>
-                        <Button type="button" variant="outline" size="sm" onClick={() => setSettings((s) => (s ? { ...s, stealthHeroImage: null } : s))}>{t("admin.settings.delete")}</Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div>
-                      <Label className="cursor-pointer">
-                        <span className="inline-flex items-center justify-center rounded-md text-sm font-medium border border-input bg-background h-9 px-4 hover:bg-accent">Загрузить картинку</span>
-                        <input type="file" accept="image/*" className="sr-only" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = () => setSettings((s) => (s ? { ...s, stealthHeroImage: r.result as string } : s)); r.readAsDataURL(f); }} />
-                      </Label>
-                    </div>
-                  )}
-                  <p className="text-xs text-muted-foreground">PNG/SVG с прозрачным фоном. Заменяет иконку-щит в шапке мини-аппа. Пусто = стандартный щит.</p>
-                </div>
-                <div className="space-y-2">
                   <Label>{t("admin.settings.favicon")}</Label>
                   {settings.favicon ? (
                     <div className="flex items-center gap-3">
@@ -1633,49 +1585,6 @@ export function SettingsPage() {
                   </p>
                 </div>
 
-                {/* Cabinet design selector — переключение между Classic и Stealth UI кабинета */}
-                <div className="space-y-2">
-                  <Label>Дизайн мини-аппа клиента</Label>
-                  <div className="grid grid-cols-2 gap-3">
-                    {([
-                      { v: "classic", title: "Classic", desc: "Текущий glass-дизайн с настройкой темы и акцента", swatch: "from-primary/30 to-purple-500/20" },
-                      { v: "stealth", title: "Stealth", desc: "Тёмный неон с red-акцентом, network-фоном и stadium-кнопками", swatch: "from-rose-500/40 to-orange-500/30" },
-                    ] as const).map((d) => {
-                      const active = (settings.cabinetDesign ?? "classic") === d.v;
-                      return (
-                        <button
-                          key={d.v}
-                          type="button"
-                          onClick={() => setSettings((s) => (s ? { ...s, cabinetDesign: d.v } : s))}
-                          className={`relative overflow-hidden rounded-2xl border p-4 text-left transition-all ${active ? "border-primary ring-2 ring-primary/30 bg-primary/5" : "border-white/10 hover:border-white/30 bg-card/40"}`}
-                        >
-                          <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${d.swatch}`} />
-                          <div className="flex items-center justify-between mb-1.5">
-                            <span className="text-base font-semibold tracking-tight">{d.title}</span>
-                            {active && <span className="text-[10px] font-bold uppercase tracking-widest bg-primary text-primary-foreground rounded-md px-1.5 py-0.5">Активно</span>}
-                          </div>
-                          <p className="text-xs text-muted-foreground leading-relaxed">{d.desc}</p>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Выбранный дизайн применится ко всем клиентам при следующем открытии кабинета. Админ-панель не затрагивается.
-                  </p>
-                  <label className="flex items-start gap-3 rounded-xl border border-white/10 bg-card/30 p-3 mt-2 cursor-pointer hover:bg-card/50 transition-colors">
-                    <Switch
-                      checked={settings.cabinetDesignApplyInBrowser ?? false}
-                      onCheckedChange={(checked: boolean) => setSettings((s) => (s ? { ...s, cabinetDesignApplyInBrowser: checked === true } : s))}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium">Применять также в обычном браузере</div>
-                      <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
-                        По умолчанию выбранный дизайн используется только в Telegram Mini App. В обычном браузере (web кабинет) клиенты видят Classic.
-                        Включи если хочешь чтобы Stealth применялся и на сайте.
-                      </p>
-                    </div>
-                  </label>
-                </div>
                 </div>
                 {/* === Локализация === */}
                 <div className="rounded-2xl border border-amber-500/20 bg-gradient-to-br from-amber-500/5 via-orange-500/5 to-yellow-500/5 p-5 space-y-4">

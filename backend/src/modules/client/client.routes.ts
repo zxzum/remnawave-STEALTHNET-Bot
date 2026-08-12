@@ -7724,7 +7724,6 @@ publicConfigRouter.get("/config", async (req, res) => {
     delete webConfig.logoBot;
     webConfig.logo = configuredAssetUrl(config.logo, "logo");
     webConfig.favicon = configuredAssetUrl(config.favicon, "favicon");
-    webConfig.stealthHeroImage = configuredAssetUrl(config.stealthHeroImage, "stealth-hero");
     res.setHeader("Cache-Control", "private, max-age=30");
     return res.json(webConfig);
   }

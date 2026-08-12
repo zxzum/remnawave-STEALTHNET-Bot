@@ -5,11 +5,7 @@ export type PublicBootstrapConfig = Pick<
   | "serviceName"
   | "logo"
   | "favicon"
-  | "cabinetDesign"
-  | "cabinetDesignApplyInBrowser"
   | "publicAppUrl"
-  | "stealthAccent"
-  | "stealthHeroImage"
 >;
 
 declare global {

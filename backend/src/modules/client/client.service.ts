@@ -98,8 +98,6 @@ const SYSTEM_CONFIG_KEYS = [
   "default_referral_percent", "referral_percent_level_2", "referral_percent_level_3",
   "trial_days", "trial_squad_uuid", "trial_device_limit", "trial_traffic_limit",
   "service_name", "logo", "logo_bot", "favicon", "remna_client_url",
-  // UI design selector for client cabinet/mini app: "classic" (default) | "stealth"
-  "cabinet_design",
   "smtp_host", "smtp_port", "smtp_secure", "smtp_user", "smtp_password",
   "smtp_from_email", "smtp_from_name", "public_app_url",
   "mail_provider", "resend_api_key", "resend_from_email",
@@ -177,8 +175,6 @@ const SYSTEM_CONFIG_KEYS = [
   "withdrawals_enabled", "withdrawal_min_amount",
   // Приветственное сообщение бота (показывается при /start, до главного меню)
   "bot_welcome_enabled", "bot_welcome_text", "bot_welcome_image", "bot_welcome_show_once",
-  // Применять выбранный дизайн (Stealth) и в обычном браузере, не только в Telegram Mini App
-  "cabinet_design_apply_in_browser",
   "tickets_enabled", // Тикет-система: true/false
   "admin_front_notifications_enabled", // Всплывающие уведомления в админке: true/false
   "theme_accent", // Глобальная цветовая тема: default, blue, violet, rose, orange, green, emerald, cyan, amber, red, pink, indigo
@@ -194,8 +190,6 @@ const SYSTEM_CONFIG_KEYS = [
   "skip_email_verification", // Регистрация без подтверждения почты: true/false
   "onboarding_email_required", // Обязательна ли привязка email на онбординге мини-аппа: true/false
   "onboarding_2fa_enabled", // Показывать ли необязательный шаг 2FA при регистрации
-  "stealth_accent", // Акцентный цвет stealth-мини-аппа (hex #RRGGBB)
-  "stealth_hero_image", // Кастомная картинка вместо щита в hero (base64 data URL / URL)
   "multi_subscriptions_enabled", // Мульти-подписки: вкл (default) = несколько подписок; выкл = одна подписка (hard replace)
   // Антибот-защита регистраций
   "signup_protection_enabled", // Master switch: включает email-фильтр и rate-limit по IP
@@ -621,7 +615,6 @@ async function loadSystemConfigFromDb() {
     logo: map.logo || null,
     logoBot: map.logo_bot || null,
     favicon: map.favicon || null,
-    cabinetDesign: (map.cabinet_design === "stealth" ? "stealth" : "classic") as "classic" | "stealth",
     remnaClientUrl: map.remna_client_url || null,
     smtpHost: map.smtp_host || null,
     smtpPort: map.smtp_port != null && map.smtp_port !== "" ? parseInt(map.smtp_port, 10) : 587,
@@ -684,8 +677,6 @@ async function loadSystemConfigFromDb() {
     botWelcomeImage: (map.bot_welcome_image ?? "") || null,
     /** Показывать только при первом /start (по флагу client.onboardingCompleted) или каждый раз */
     botWelcomeShowOnce: (map.bot_welcome_show_once ?? "true").trim() !== "false",
-    /** Применять выбранный дизайн кабинета (Stealth) также в обычном браузере, не только в Telegram Mini App */
-    cabinetDesignApplyInBrowser: (map.cabinet_design_apply_in_browser ?? "").trim() === "true",
     overpayApiUrl: (map.overpay_api_url ?? "").trim() || null,
     overpayProjectId: (map.overpay_project_id ?? "").trim() || null,
     overpayLogin: (map.overpay_login ?? "").trim() || null,
@@ -699,8 +690,6 @@ async function loadSystemConfigFromDb() {
     skipEmailVerification: map.skip_email_verification === "true" || map.skip_email_verification === "1",
     onboardingEmailRequired: map.onboarding_email_required === "true" || map.onboarding_email_required === "1",
     onboarding2faEnabled: map.onboarding_2fa_enabled !== "false" && map.onboarding_2fa_enabled !== "0",
-    stealthAccent: (map.stealth_accent ?? "").trim() || null,
-    stealthHeroImage: map.stealth_hero_image || null,
     // Default TRUE (текущее поведение — мульти-подписки). Выкл только если явно "false".
     multiSubscriptionsEnabled: (map.multi_subscriptions_enabled ?? "true").trim() !== "false",
     passwordResetEnabled: map.password_reset_enabled === "true" || map.password_reset_enabled === "1",
@@ -1294,8 +1283,6 @@ export async function getPublicConfig(_forCloneBot?: { markupPercent?: number | 
     logo: full.logo,
     logoBot: full.logoBot ?? null,
     favicon: full.favicon,
-    cabinetDesign: full.cabinetDesign,
-    cabinetDesignApplyInBrowser: (full as { cabinetDesignApplyInBrowser?: boolean }).cabinetDesignApplyInBrowser ?? false,
     remnaClientUrl: full.remnaClientUrl,
     publicAppUrl: full.publicAppUrl,
     telegramBotUsername: full.telegramBotUsername ?? null,
@@ -1319,8 +1306,6 @@ export async function getPublicConfig(_forCloneBot?: { markupPercent?: number | 
     skipEmailVerification: full.skipEmailVerification ?? false,
     onboardingEmailRequired: full.onboardingEmailRequired ?? false,
     onboarding2faEnabled: full.onboarding2faEnabled ?? true,
-    stealthAccent: full.stealthAccent ?? null,
-    stealthHeroImage: full.stealthHeroImage ?? null,
     multiSubscriptionsEnabled: full.multiSubscriptionsEnabled ?? true,
     passwordResetEnabled: full.passwordResetEnabled ?? false,
     // фронту нужен флаг — настроен ли SMTP.

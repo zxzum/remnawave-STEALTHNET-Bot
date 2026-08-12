@@ -172,14 +172,7 @@ function RequireClientAuth({ children }: { children: React.ReactNode }) {
   const { state } = useClientAuth();
   const inTelegram = typeof window !== "undefined" && Boolean((window as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp?.initData);
   const showMiniappLoading = state.miniappAuthLoading || (inTelegram && !state.token && !state.miniappAuthAttempted);
-  if (showMiniappLoading) {
-    return (
-      <div className="min-h-svh flex flex-col items-center justify-center gap-4 bg-gradient-to-b from-background to-muted/20">
-        <div className="h-10 w-10 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-        <p className="text-muted-foreground">Загрузка кабинета…</p>
-      </div>
-    );
-  }
+  if (showMiniappLoading) return null;
   if (!state.token) {
     return <Navigate to="/cabinet/login" replace />;
   }
@@ -210,14 +203,7 @@ function CabinetIndexRedirect() {
   const location = useLocation();
   const inTelegram = typeof window !== "undefined" && Boolean((window as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp?.initData);
   const showMiniappLoading = state.miniappAuthLoading || (inTelegram && !state.token && !state.miniappAuthAttempted);
-  if (showMiniappLoading) {
-    return (
-      <div className="min-h-svh flex flex-col items-center justify-center gap-4 bg-gradient-to-b from-background to-muted/20">
-        <div className="h-10 w-10 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-        <p className="text-muted-foreground">Загрузка кабинета…</p>
-      </div>
-    );
-  }
+  if (showMiniappLoading) return null;
   return <Navigate to={`${state.token ? "/cabinet/dashboard" : "/cabinet/login"}${location.search}`} replace />;
 }
 
@@ -233,14 +219,7 @@ function RootRoute() {
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) {
-    return (
-      <div className="min-h-svh flex flex-col items-center justify-center gap-4 bg-gradient-to-b from-background to-muted/20">
-        <div className="h-10 w-10 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-        <p className="text-muted-foreground">Загрузка…</p>
-      </div>
-    );
-  }
+  if (loading) return null;
 
   if (config?.landingEnabled) {
     return <LandingPage config={config} />;

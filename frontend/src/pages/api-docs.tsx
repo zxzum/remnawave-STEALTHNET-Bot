@@ -286,7 +286,6 @@ const endpoints: Category[] = [
         auth: "API Key",
         res: `{
   "serviceName": "Лазейка VPN",
-  "cabinetDesign": "stealth",
   "multiSubscriptionsEnabled": true,
   "passwordResetEnabled": true,
   "smtpConfigured": true,
