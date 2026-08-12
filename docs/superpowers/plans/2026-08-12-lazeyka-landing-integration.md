@@ -8,6 +8,8 @@
 
 **Tech Stack:** React 18, TypeScript 5.6, React Router 6, Vite 5, Node test runner, Docker Compose, nginx.
 
+**Execution note:** The planned source-regex contract was replaced during TDD with `frontend/scripts/lazeyka-landing.test.mjs` exercising the real `lazeyka-landing-model.ts` tariff, FAQ, and Telegram adapters. Browser QA covers the rendered structure and interactions.
+
 ## Global Constraints
 
 - Product copy and UI name are **Лазейка ВПН**.
