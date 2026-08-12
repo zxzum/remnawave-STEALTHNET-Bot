@@ -36,6 +36,35 @@ test("client monitoring and trial conversion routes are present", async () => {
   assert.match(source, /convertMode=true/);
 });
 
+test("admin subscription grants permanently consume the client's trial", async () => {
+  const source = await readFile(adminUrl, "utf8");
+  assert.match(source, /lockTrialAfterSubscription/);
+
+  const grantTariff = source.slice(
+    source.indexOf('adminRouter.post("/clients/:id/grant-tariff"'),
+    source.indexOf("const grantExtendSchema"),
+  );
+  assert.match(grantTariff, /lockTrialAfterSubscription\(clientId\)/);
+
+  const grantExtend = source.slice(
+    source.indexOf('adminRouter.post("/subscriptions/:subId/grant-extend"'),
+    source.indexOf("const convertTrialSchema"),
+  );
+  assert.match(grantExtend, /lockTrialAfterSubscription\(sub\.ownerId\)/);
+
+  const convertTrial = source.slice(
+    source.indexOf('adminRouter.post("/subscriptions/:subId/convert-trial"'),
+    source.indexOf("const attachRemnaSchema"),
+  );
+  assert.match(convertTrial, /lockTrialAfterSubscription\(sub\.ownerId\)/);
+
+  const attachRemna = source.slice(
+    source.indexOf('adminRouter.post("/clients/:id/attach-remna-subscription"'),
+    source.indexOf("const squadActionSchema"),
+  );
+  assert.match(attachRemna, /lockTrialAfterSubscription\(clientId\)/);
+});
+
 test("empty clients keep all tabs and never render @null", async () => {
   const source = await readFile(clientsUrl, "utf8");
   assert.doesNotMatch(source, /\(editing\.remnawaveUuid \|\| secondarySubs\.length > 0\) &&/);

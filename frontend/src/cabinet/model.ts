@@ -66,6 +66,10 @@ export type CabinetSubscription = {
   extraDevicesMonthlyPrice: number;
 };
 
+export function isExpiredTrial(subscription: Pick<CabinetSubscription, "isTrial" | "status">): boolean {
+  return subscription.isTrial && subscription.status === "expired";
+}
+
 export type CabinetUser = {
   name: string;
   initials: string;

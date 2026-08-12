@@ -7,7 +7,7 @@ import { useApp } from "../store/AppContext";
 import { useClientAuth } from "@/contexts/client-auth";
 import { TrialsPickerDialog } from "@/components/cabinet/trials-picker-dialog";
 import { cn } from "../lib/cn";
-import type { CabinetSubscription as Subscription } from "../model";
+import { isExpiredTrial, type CabinetSubscription as Subscription } from "../model";
 import { PlanDialog } from "./Tariffs";
 
 function pluralDays(n: number) {
@@ -54,6 +54,7 @@ function TrafficBar({ used, limit }: { used: number; limit: number }) {
 function MainSubscriptionCard({ sub }: { sub: Subscription }) {
   const { disconnectDevice } = useApp();
   const limit = sub.trafficLimitGB ?? 0;
+  const expiredTrial = isExpiredTrial(sub);
 
   return (
     <motion.section
@@ -69,12 +70,25 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
             Подписка · <span className="font-semibold text-fog-300">{sub.name}</span>
           </p>
         </div>
-        <span className="flex items-center gap-2 text-sm font-bold text-mint-400">
-          <span className="status-dot" />
-          Активна
+        <span className={cn("flex items-center gap-2 text-sm font-bold", expiredTrial ? "text-fog-500" : "text-mint-400")}>
+          <span className={cn("status-dot", expiredTrial && "bg-fog-500 shadow-none")} />
+          {expiredTrial ? "Завершена" : "Активна"}
         </span>
       </div>
 
+      {expiredTrial ? (
+        <div className="flex min-h-72 flex-col items-center justify-center text-center">
+          <div className="icon-tile h-16 w-16 rounded-2xl">
+            <Gift className="h-7 w-7" />
+          </div>
+          <h2 className="mt-5 text-2xl font-extrabold">Пробный период закончился</h2>
+          <p className="mt-2 max-w-sm text-sm leading-relaxed text-fog-500">Выберите тариф, чтобы продолжить пользоваться Лазейкой ВПН.</p>
+          <Link to="/cabinet/tariffs" className="btn-primary mt-5 px-6 py-3">
+            <ShoppingBag className="h-5 w-5" />
+            Все тарифы
+          </Link>
+        </div>
+      ) : <>
       <div className="mt-4 flex items-end gap-3">
         <span className="bg-gradient-to-br from-white to-fog-300 bg-clip-text text-7xl leading-none font-extrabold tracking-tight text-transparent">
           {sub.daysLeft}
@@ -145,6 +159,7 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
           </motion.li>
         ))}
       </ul>
+      </>}
     </motion.section>
   );
 }

@@ -15,6 +15,7 @@
     "db:studio": "prisma studio",
     "seed": "tsx src/scripts/seed-admin.ts",
     "migrate:single-subscription": "node dist/scripts/migrate-composite-to-single.js",
+    "cleanup:trial-purchase-lock": "tsx src/scripts/cleanup-trial-purchase-lock.ts",
     "db:loadtest-clients": "tsx src/scripts/seed-loadtest-clients.ts"
   },
   "engines": {

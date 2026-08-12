@@ -13,6 +13,7 @@ import { applyExtraOptionByPaymentId } from "../extra-options/extra-options.serv
 import { notifyProxySlotsCreated, notifySingboxSlotsCreated } from "../notification/telegram-notify.service.js";
 import { auditPaymentClientBotAlignment } from "./payment-webhook-audit.util.js";
 import { extinguishOneTimeDiscount } from "../client/personal-discount.js";
+import { isPaidVpnPurchase, isVpnSubscriptionPurchase, markTrialUsedForPaidPurchase } from "../trial/trial-purchase-lock.service.js";
 
 function hasExtraOptionInMetadata(metadata: string | null): boolean {
   if (!metadata?.trim()) return false;
@@ -57,6 +58,14 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
     clientId: payment.clientId,
   });
   if (payment.status === "PAID") {
+    if (isPaidVpnPurchase(payment)) {
+      try {
+        await markTrialUsedForPaidPurchase(payment.clientId);
+      } catch (error) {
+        console.error("[trial-lock] failed to mark already-paid client", payment.clientId, error);
+        return { ok: false, payment, error: "Не удалось зафиксировать использованный пробный период" };
+      }
+    }
     if (shouldRetryPaidExtraOption(payment.status, payment.metadata, payment.extraOptionState)) {
       const extraResult = await applyExtraOptionByPaymentId(paymentId);
       if (!extraResult.ok) {
@@ -73,12 +82,14 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
   }
   const now = new Date();
   const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
+  const isVpnProduct = isVpnSubscriptionPurchase(payment);
   const isTopUp =
     (payment.provider === "yoomoney_form" || payment.provider === "platega" || payment.provider === "yookassa") &&
     !payment.tariffId &&
     !payment.proxyTariffId &&
     !payment.singboxTariffId &&
-    !isExtraOption;
+    !isExtraOption &&
+    !isVpnProduct;
 
   // Idempotent flip: PENDING → PAID. Если параллельный webhook (или повторный
   // ретрай провайдера) уже зафлипнул — count=0, сюда не лезем второй раз.
@@ -121,8 +132,24 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
   if (flip.count === 0) {
     // Уже PAID параллельным запросом — выходим как идемпотент.
     const updated = await prisma.payment.findUnique({ where: { id: paymentId } });
+    if (updated && isPaidVpnPurchase(updated)) {
+      try {
+        await markTrialUsedForPaidPurchase(updated.clientId);
+      } catch (error) {
+        console.error("[trial-lock] failed to mark concurrently-paid client", updated.clientId, error);
+        return { ok: false, payment: updated, error: "Не удалось зафиксировать использованный пробный период" };
+      }
+    }
     const result = await distributeReferralRewards(paymentId);
     return { ok: true, payment: updated ?? payment, referral: result };
+  }
+  if (isVpnProduct) {
+    try {
+      await markTrialUsedForPaidPurchase(payment.clientId);
+    } catch (error) {
+      console.error("[trial-lock] failed to mark paid client", payment.clientId, error);
+      return { ok: false, payment, error: "Не удалось зафиксировать использованный пробный период" };
+    }
   }
   if (isTopUp) {
     // Списание баланса делаем ТОЛЬКО если flip нам "достался" (count=1).
@@ -145,7 +172,7 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
       const { notifyExtraOptionApplied } = await import("../notification/telegram-notify.service.js");
       await notifyExtraOptionApplied(payment.clientId, paymentId).catch(() => {});
     }
-  } else if (payment.tariffId) {
+  } else if (payment.tariffId || isVpnProduct) {
     activation = await activateTariffByPaymentId(paymentId);
   } else if (payment.proxyTariffId) {
     const proxyResult = await createProxySlotsByPaymentId(paymentId);
@@ -179,13 +206,6 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
     } else {
       proxySlots = { ok: false, error: singboxResult.error };
     }
-  }
-
-  if (payment.tariffId || payment.proxyTariffId || payment.singboxTariffId) {
-    await prisma.client.update({
-      where: { id: payment.clientId },
-      data: { trialUsed: true },
-    }).catch(() => {});
   }
 
   // сжигаем одноразовую персональную

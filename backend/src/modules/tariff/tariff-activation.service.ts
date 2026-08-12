@@ -20,6 +20,11 @@ import { getSystemConfig } from "../client/client.service.js";
 import { upsertSubscriptionByRemnaUuid } from "../subscription/subscription.helpers.js";
 import { deleteSingleSubscription } from "../subscription/single-subscription-lifecycle.service.js";
 import {
+  deleteSeparateTrialSubscriptions,
+  isPaidVpnPurchase,
+  markTrialUsedForPaidPurchase,
+} from "../trial/trial-purchase-lock.service.js";
+import {
   applyTrafficEntitlement,
   validateTrafficEntitlement,
   type TrafficEntitlementInput,
@@ -1099,6 +1104,8 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
     where: { id: paymentId },
     select: {
       id: true,
+      status: true,
+      provider: true,
       tariffId: true,
       tariffPriceOptionId: true,
       deviceCount: true,
@@ -1117,6 +1124,15 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
   });
   if (!client) {
     return { ok: false, error: "Клиент не найден", status: 404 };
+  }
+
+  if (isPaidVpnPurchase(payment)) {
+    try {
+      await markTrialUsedForPaidPurchase(client.id);
+    } catch (error) {
+      console.error("[trial-lock] failed to mark paid client", client.id, error);
+      return { ok: false, error: "Не удалось зафиксировать использованный пробный период", status: 500 };
+    }
   }
 
   // УНИФИЦИРОВАННАЯ логика покупки тарифа.
@@ -1225,6 +1241,9 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
         if (!targetSub.trialId && !isGiftPurchase) {
           await replaceTrialOnPurchase(client.id, getReplaceTrialSubId(payment.metadata));
         }
+        if (!isGiftPurchase && targetSub.trialId) {
+          await deleteSeparateTrialSubscriptions(client.id, targetSub.trialId ? extendsSecondaryId : null);
+        }
         await resetOneTimeDiscount();
       }
       return result;
@@ -1276,6 +1295,9 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
           if (!convertible.trialId) {
             await replaceTrialOnPurchase(client.id, getReplaceTrialSubId(payment.metadata));
           }
+          if (!isGiftPurchase && convertible.trialId) {
+            await deleteSeparateTrialSubscriptions(client.id, convertible.trialId ? convertible.id : null);
+          }
           await resetOneTimeDiscount();
           // Single-режим: оставляем ровно одну подписку — удаляем остальные.
           if (!multiSubEnabled) {
@@ -1323,6 +1345,7 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
         where: { id: payment.id },
         data: { subscriptionId: result.data.subscriptionId, metadata: JSON.stringify(meta) },
       }).catch(() => {});
+      if (isGiftPurchase) await deleteSeparateTrialSubscriptions(client.id);
       await resetOneTimeDiscount();
       // Single-режим: подчищаем любые прочие подписки клиента (оставляем эту).
       const cfgMs2 = await getSystemConfig().catch(() => null);
@@ -1335,8 +1358,10 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
 
   const customBuild = parseCustomBuildMetadata(payment.metadata);
   if (customBuild) {
+    if (!isGiftPurchase) await deleteSeparateTrialSubscriptions(client.id);
     const result = await createAdditionalSubscription(client.id, customBuild, { purchasedAsGift: isGiftPurchase, skipConfigCheck: true });
     if (result.ok) {
+      if (isGiftPurchase) await deleteSeparateTrialSubscriptions(client.id);
       await applyTrafficEntitlement(result.data.subscriptionId, {
         tariffId: null,
         mode: "REMNAWAVE",
@@ -1345,7 +1370,6 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
         trafficLimitBytes: customBuild.trafficLimitBytes,
       }, "NEW_PURCHASE");
       await prisma.payment.update({ where: { id: payment.id }, data: { subscriptionId: result.data.subscriptionId } }).catch(() => {});
-      if (!isGiftPurchase) await replaceTrialOnPurchase(client.id, getReplaceTrialSubId(payment.metadata));
       // Single-режим: кастом-билд, как и обычная покупка, оставляет ОДНУ подписку.
       // Не для подарков (иначе консолидация снесла бы реальные подписки клиента).
       if (!isGiftPurchase) {
@@ -1400,12 +1424,13 @@ function getReplaceTrialSubId(metadata: string | null): string | null {
  */
 export async function replaceTrialOnPurchase(clientId: string, requestedTrialSubId: string | null): Promise<string | null> {
   const trials = await prisma.subscription.findMany({
-    where: { ownerId: clientId, trialId: { not: null }, purchasedAsGift: false, deletionRequestedAt: null },
+    where: { ownerId: clientId, trialId: { not: null }, purchasedAsGift: false, giftStatus: null, giftedToClientId: null, deletionRequestedAt: null },
     orderBy: { createdAt: "asc" },
     select: { id: true, remnawaveUuid: true },
   });
   if (trials.length === 0) return null;
   const target = (requestedTrialSubId && trials.find((t) => t.id === requestedTrialSubId)) || trials[0];
+  await deleteSeparateTrialSubscriptions(clientId, target.id);
   const deletion = await deleteSingleSubscription(target.id).catch((error) => ({ deleted: false, error }));
   if (!deletion.deleted) console.error("[trial-replace] deletion scheduled for reconciliation", "error" in deletion ? deletion.error : deletion.failures);
   // легаси-указатель клиента мог смотреть на удалённого Remna-юзера.

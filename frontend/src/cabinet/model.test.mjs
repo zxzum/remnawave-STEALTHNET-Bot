@@ -10,6 +10,7 @@ import {
   quoteTariff,
   resolveOptionalNav,
   resolvePaymentUrl,
+  isExpiredTrial,
   shouldOfferTelegramLink,
 } from "./model.ts";
 
@@ -173,6 +174,12 @@ test("maps standalone trial conversion policy for tariff selection", () => {
     },
     { convertTariffIds: ["paid-1"], trialConvertEnabled: true, trialConvertAllTariffs: false },
   );
+});
+
+test("recognizes only an expired trial for the dedicated cabinet state", () => {
+  assert.equal(isExpiredTrial({ isTrial: true, status: "expired" }), true);
+  assert.equal(isExpiredTrial({ isTrial: true, status: "active" }), false);
+  assert.equal(isExpiredTrial({ isTrial: false, status: "expired" }), false);
 });
 
 test("maps local whitelist usage separately from Remnawave traffic", () => {
