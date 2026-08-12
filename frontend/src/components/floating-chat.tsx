@@ -101,13 +101,13 @@ function TelegramSupportCta({ href }: { href: string }) {
       target="_blank"
       rel="noopener noreferrer"
       aria-label="Написать в Telegram"
-      className="group mx-4 mb-2 flex min-h-10 items-center gap-2.5 rounded-xl border border-[#2AABEE]/30 bg-gradient-to-r from-[#229ED9]/18 via-violet-glow/12 to-transparent px-3 py-2 text-left shadow-[0_10px_26px_-20px_rgba(34,158,217,0.9)] transition hover:border-[#2AABEE]/60 hover:from-[#229ED9]/28"
+      className="group mx-4 mt-2 mb-1 flex min-h-8 items-center gap-2 rounded-lg border border-[#2AABEE]/25 bg-gradient-to-r from-[#229ED9]/14 via-violet-glow/10 to-transparent px-2.5 py-1.5 text-left transition hover:border-[#2AABEE]/55 hover:from-[#229ED9]/24"
     >
-      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[#229ED9]/90 text-white shadow-[0_8px_18px_-10px_rgba(34,158,217,0.9)]">
-        <Send className="h-3.5 w-3.5" />
+      <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-[#229ED9]/85 text-white">
+        <Send className="h-3 w-3" />
       </span>
-      <span className="min-w-0 flex-1 truncate text-xs font-extrabold tracking-tight text-foreground">Написать в Telegram</span>
-      <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-[#2AABEE] transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+      <span className="min-w-0 flex-1 truncate text-[11px] font-extrabold tracking-tight text-foreground">Написать в Telegram</span>
+      <ArrowUpRight className="h-3 w-3 shrink-0 text-[#2AABEE] transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
     </a>
   );
 }
@@ -225,7 +225,7 @@ const ChatHeader = ({ activeChat, setActiveChat, isExpanded, setIsExpanded, setI
 
     {/* Chat Switcher */}
     {showAiTab && (
-      <div className="flex sm:justify-center px-4 py-3 sm:py-4 shrink-0 bg-ink-950/25 border-b border-violet-glow/20">
+      <div className="flex sm:justify-center px-4 pt-1.5 pb-2 sm:pt-2 sm:pb-3 shrink-0 bg-ink-950/25 border-b border-violet-glow/20">
         <ChatSwitcher activeChat={activeChat} setActiveChat={setActiveChat} aiUnread={aiUnread} supportUnread={supportUnread} showAiTab={showAiTab} />
       </div>
     )}

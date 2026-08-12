@@ -39,8 +39,10 @@ test("floating chat exposes Telegram support in both modes and clears mobile nav
   assert.match(floatingChat, /Написать в Telegram/);
   assert.match(floatingChat, /config\?\.supportLink\?\.trim\(\)/);
   assert.match(floatingChat, /<TelegramSupportCta href=\{supportUrl\} \/>/);
-  assert.match(floatingChat, /min-h-10/);
-  assert.match(floatingChat, /rounded-xl/);
+  assert.match(floatingChat, /min-h-8/);
+  assert.match(floatingChat, /mx-4 mt-2 mb-1/);
+  assert.match(floatingChat, /h-6 w-6/);
+  assert.match(floatingChat, /rounded-lg/);
   assert.doesNotMatch(floatingChat, /Поддержка Лазейки ВПН/);
   assert.match(floatingChat, /from-violet-900\/80/);
   assert.match(floatingChat, /bg-gradient-to-b from-violet-900\/12/);
