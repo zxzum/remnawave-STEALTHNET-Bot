@@ -59,10 +59,25 @@ test("client lock orders advisory lock, operation, and commit", async () => {
   assert.deepEqual(events, ["lock", "operation", "commit"]);
 });
 
+test("payment activation core uses the transaction client for local state", async () => {
+  const source = await readFile(new URL("../tariff/tariff-activation.service.ts", import.meta.url), "utf8");
+  const activation = source.slice(
+    source.indexOf("async function activateTariffByPaymentIdUnlocked"),
+    source.indexOf("/** Serialize payment activation", source.indexOf("async function activateTariffByPaymentIdUnlocked")),
+  );
+  assert.match(activation, /activateTariffByPaymentIdUnlocked\(paymentId: string, tx: Prisma\.TransactionClient\)/);
+  assert.match(activation, /tx\.payment\.findUnique/);
+  assert.match(activation, /tx\.client\.findUnique/);
+  assert.match(activation, /tx\.tariff\.findUnique/);
+  assert.match(activation, /tx\.subscription\.findUnique/);
+  assert.match(activation, /tx\.payment\.update/);
+  assert.doesNotMatch(activation, /await prisma\.(payment|client|tariff|subscription)\./);
+});
+
 test("bonus metadata persistence is required before the trial lock", async () => {
   const source = await readFile(new URL("../tariff/tariff-activation.service.ts", import.meta.url), "utf8");
   const activation = source.slice(source.indexOf("async function activateTariffByPaymentIdUnlocked"));
-  const update = activation.indexOf("await prisma.payment.update({");
+  const update = activation.indexOf("await tx.payment.update({");
   const mark = activation.indexOf("markTrialUsedForPaidPurchase");
   assert.ok(update >= 0 && mark > update, `update=${update}, mark=${mark}`);
   const persistenceBlock = activation.slice(update, mark);

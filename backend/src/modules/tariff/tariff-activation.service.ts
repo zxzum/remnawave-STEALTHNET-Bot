@@ -117,10 +117,13 @@ type FirstPaidTrialBonusInput = {
  * retries cannot grant the bonus twice, even when Remnawave is eventually
  * consistent.
  */
-async function calculateFirstPaidTrialBonusDays(input: FirstPaidTrialBonusInput): Promise<number> {
+async function calculateFirstPaidTrialBonusDays(
+  input: FirstPaidTrialBonusInput,
+  db: Prisma.TransactionClient | typeof prisma = prisma,
+): Promise<number> {
   const [trialUsages, subscriptions, priorPaidPurchase, activeTrials] = await Promise.all([
-    prisma.clientTrialUsage.count({ where: { clientId: input.clientId } }),
-    prisma.subscription.count({
+    db.clientTrialUsage.count({ where: { clientId: input.clientId } }),
+    db.subscription.count({
       where: {
         ownerId: input.clientId,
         purchasedAsGift: false,
@@ -129,7 +132,7 @@ async function calculateFirstPaidTrialBonusDays(input: FirstPaidTrialBonusInput)
         deletionRequestedAt: null,
       },
     }),
-    prisma.payment.findFirst({
+    db.payment.findFirst({
       where: {
         clientId: input.clientId,
         id: { not: input.paymentId },
@@ -138,7 +141,7 @@ async function calculateFirstPaidTrialBonusDays(input: FirstPaidTrialBonusInput)
       },
       select: { id: true },
     }),
-    prisma.trial.findMany({ where: { enabled: true }, select: { durationDays: true } }),
+    db.trial.findMany({ where: { enabled: true }, select: { durationDays: true } }),
   ]);
 
   return minimumEligibleTrialBonus({
@@ -1217,8 +1220,8 @@ export async function consolidateToSingleSubscription(clientId: string, keepSubI
 /**
  * Активация тарифа по paymentId — находит клиента и тариф из Payment (или customBuild из metadata), вызывает activateTariffForClient.
  */
-async function activateTariffByPaymentIdUnlocked(paymentId: string): Promise<ActivationResult> {
-  const payment = await prisma.payment.findUnique({
+async function activateTariffByPaymentIdUnlocked(paymentId: string, tx: Prisma.TransactionClient): Promise<ActivationResult> {
+  const payment = await tx.payment.findUnique({
     where: { id: paymentId },
     select: {
       id: true,
@@ -1236,7 +1239,7 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string): Promise<Act
     return { ok: false, error: "Платёж не найден", status: 404 };
   }
 
-  const client = await prisma.client.findUnique({
+  const client = await tx.client.findUnique({
     where: { id: payment.clientId },
     select: { id: true, remnawaveUuid: true, email: true, telegramId: true, telegramUsername: true, trialUsed: true },
   });
@@ -1257,11 +1260,11 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string): Promise<Act
           clientId: client.id,
           paymentId: payment.id,
           trialUsed: client.trialUsed,
-        });
+        }, tx);
     paymentMetadata.firstPaidTrialBonusDays = firstPaidTrialBonusDays;
     payment.metadata = JSON.stringify(paymentMetadata);
     try {
-      await prisma.payment.update({
+      await tx.payment.update({
         where: { id: payment.id },
         data: { metadata: payment.metadata },
       });
@@ -1296,7 +1299,7 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string): Promise<Act
   const extendsSecondaryId = getExtendsSecondarySubId(payment.metadata);
 
   if (payment.tariffId) {
-    const tariff = await prisma.tariff.findUnique({ where: { id: payment.tariffId } });
+    const tariff = await tx.tariff.findUnique({ where: { id: payment.tariffId } });
     if (!tariff) {
       return { ok: false, error: "Тариф не найден", status: 404 };
     }
@@ -1312,7 +1315,7 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string): Promise<Act
       : undefined;
 
     const resetOneTimeDiscount = async (): Promise<void> => {
-      await prisma.client.updateMany({
+      await tx.client.updateMany({
         where: { id: client.id, personalDiscountPercent: { gt: 0 } },
         data: { personalDiscountPercent: null },
       }).catch(() => { /* ignore */ });
@@ -1322,7 +1325,7 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string): Promise<Act
     if (extendsSecondaryId) {
       // конвертация триала: разрешение и список целевых тарифов
       // задаются в настройках триала (convertEnabled / convertAllTariffs / convertTariffIds).
-      const targetSub = await prisma.subscription.findUnique({
+      const targetSub = await tx.subscription.findUnique({
         where: { id: extendsSecondaryId },
         select: {
           ownerId: true,
@@ -1377,7 +1380,7 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string): Promise<Act
           try { return payment.metadata ? JSON.parse(payment.metadata) as Record<string, unknown> : {}; } catch { return {}; }
         })();
         if (targetSub.trialId) meta.trialToTariff = true;
-        await prisma.payment.update({
+        await tx.payment.update({
           where: { id: payment.id },
           data: { subscriptionId: extendsSecondaryId, metadata: JSON.stringify(meta) },
         }).catch(() => {});
@@ -1431,7 +1434,7 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string): Promise<Act
           })();
           meta.convertedSubscriptionId = convertible.id;
           meta.convertedDays = result.convertedDays ?? 0;
-          await prisma.payment.update({
+          await tx.payment.update({
             where: { id: payment.id },
             data: { subscriptionId: convertible.id, metadata: JSON.stringify(meta) },
           }).catch(() => {});
@@ -1484,7 +1487,7 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string): Promise<Act
         try { return payment.metadata ? JSON.parse(payment.metadata) as Record<string, unknown> : {}; } catch { return {}; }
       })();
       if (replacedTrialId) meta.trialToTariff = true;
-      await prisma.payment.update({
+      await tx.payment.update({
         where: { id: payment.id },
         data: { subscriptionId: result.data.subscriptionId, metadata: JSON.stringify(meta) },
       }).catch(() => {});
@@ -1512,7 +1515,7 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string): Promise<Act
         meteredSquadUuid: null,
         trafficLimitBytes: customBuild.trafficLimitBytes,
       }, "NEW_PURCHASE");
-      await prisma.payment.update({ where: { id: payment.id }, data: { subscriptionId: result.data.subscriptionId } }).catch(() => {});
+      await tx.payment.update({ where: { id: payment.id }, data: { subscriptionId: result.data.subscriptionId } }).catch(() => {});
       // Single-режим: кастом-билд, как и обычная покупка, оставляет ОДНУ подписку.
       // Не для подарков (иначе консолидация снесла бы реальные подписки клиента).
       if (!isGiftPurchase) {
@@ -1535,7 +1538,7 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
     select: { clientId: true },
   });
   if (!payment) return { ok: false, error: "Платёж не найден", status: 404 };
-  return withClientSubscriptionLock(payment.clientId, () => activateTariffByPaymentIdUnlocked(paymentId));
+  return withClientSubscriptionLock(payment.clientId, (tx) => activateTariffByPaymentIdUnlocked(paymentId, tx));
 }
 
 /**
