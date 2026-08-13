@@ -19,6 +19,7 @@ import {
   shouldPreserveSubscriptionLink,
 } from "./subscription-access.js";
 import { shouldShowBotWelcome } from "./onboarding-policy.js";
+import { buildMainMenuSummary, selectPrimarySubscription } from "./main-menu-summary.js";
 import {
   mainMenu,
   botSectionsMenu,
@@ -1517,31 +1518,6 @@ function formatCompactSubscription(item: CompactMenuSubscription): string {
   return `${statusEmoji} #${item.subscriptionIndex ?? 0} · ${name}\n${details}`;
 }
 
-function buildCompactMainMenuText(
-  serviceName: string,
-  balance: number,
-  currency: string,
-  allSubs?: { items: CompactMenuSubscription[] } | null,
-): { text: string; entities: CustomEmojiEntity[] } {
-  const items = [...(allSubs?.items ?? [])].sort((a, b) => {
-    if (a.type !== b.type) return a.type === "root" ? -1 : 1;
-    return (a.subscriptionIndex ?? 0) - (b.subscriptionIndex ?? 0);
-  });
-  const lines = [
-    `🏠 Личный кабинет ${serviceName.trim() || "Лазейка ВПН"}`,
-    "Подписки и подключение — в одном месте.",
-    `💳 Баланс: ${formatMoney(balance, currency)}`,
-    "",
-    "📋 Подписки",
-  ];
-  if (items.length > 0) {
-    for (const item of items) lines.push(formatCompactSubscription(item));
-  } else {
-    lines.push("Пока нет активных подписок.");
-  }
-  return { text: lines.join("\n"), entities: [] };
-}
-
 function buildMainMenuText(opts: {
   serviceName: string;
   balance: number;
@@ -2316,8 +2292,6 @@ composer.command("start", async (ctx) => {
   try {
     const config = await api.getPublicConfig();
     if (config?.translations) setTranslations(config.translations);
-    const name = config?.serviceName?.trim() || "Кабинет";
-
     const auth = await api.registerByTelegram({
       telegramId,
       telegramUsername,
@@ -2412,56 +2386,27 @@ composer.command("start", async (ctx) => {
       await api.completeOnboarding(auth.token).catch(() => {});
     }
 
-    const [subRes, proxyRes, singboxRes, allSubsRes] = await Promise.all([
-      api.getSubscription(auth.token).catch(() => ({ subscription: null })),
-      api.getPublicProxyTariffs().catch(() => ({ items: [] })),
-      api.getPublicSingboxTariffs().catch(() => ({ items: [] })),
-      // тянем все подписки клиента для блок подписок в welcome (нагрузка + список).
+    const [allSubsRes, tariffRes] = await Promise.all([
       api.getAllSubscriptions(auth.token).catch(() => ({ items: [] })),
+      api.getPublicTariffs().catch(() => ({ items: [] })),
     ]);
-    const vpnUrl = getSubscriptionUrl(subRes.subscription);
-    // если в админке настроены trials → используем их (скрываем
-    // кнопку когда юзер всё взял); иначе fallback на legacy single-trial.
-    const trialAvail = await api.getAvailableTrials(auth.token).catch(() => ({ items: [], hasAnyEnabled: false }));
-    const showTrial = trialAvail.hasAnyEnabled
-      ? trialAvail.items.length > 0
-      : Boolean(config?.trialEnabled && !client?.trialUsed);
-    const showProxy = proxyRes.items?.some((c: { tariffs: unknown[] }) => c.tariffs?.length > 0) ?? false;
-    const showSingbox = singboxRes.items?.some((c: { tariffs: unknown[] }) => c.tariffs?.length > 0) ?? false;
     const appUrl = config?.publicAppUrl?.replace(/\/$/, "") ?? null;
 
-    const { text, entities } = buildCompactMainMenuText(
-      name,
-      client?.balance ?? 0,
-      client?.preferredCurrency ?? config?.defaultCurrency ?? "usd",
-      allSubsRes,
-    );
+    const primarySubscription = selectPrimarySubscription(allSubsRes.items ?? []);
+    const currentTariff = tariffRes.items.flatMap((category) => category.tariffs)
+      .find((tariff) => tariff.id === primarySubscription?.tariffId) ?? null;
+    const text = buildMainMenuSummary({ subscription: primarySubscription, tariff: currentTariff });
+    const entities: CustomEmojiEntity[] = [];
     const caption = text.length > TELEGRAM_CAPTION_MAX ? text.slice(0, TELEGRAM_CAPTION_MAX - 3) + "..." : text;
     const captionEntities = text.length > TELEGRAM_CAPTION_MAX && entities.length ? entities.filter((e) => e.offset + e.length <= TELEGRAM_CAPTION_MAX - 3) : entities;
-    const hasVideoInstructions = config?.videoInstructionsEnabled && (config?.videoInstructions?.length ?? 0) > 0;
-    const hasSupportLinks = !!(supportBotLink() || config?.supportLink || config?.agreementLink || config?.offerLink || config?.instructionsLink || hasVideoInstructions);
     const markup = mainMenu({
-      showTrial,
-      // кнопка «🔌 Подключиться автоматически» показывается
-      // если есть ХОТЯ БЫ ОДНА подписка (root ИЛИ secondary, включая триал). Раньше зависела
-      // только от vpnUrl (root), и юзеры с одним триалом не видели кнопку.
-      showVpn: Boolean(vpnUrl) || (allSubsRes.items?.length ?? 0) > 0,
-      showProxy,
-      showSingbox,
-      showGift: config?.giftSubscriptionsEnabled === true,
+      showTrial: false,
+      showVpn: (allSubsRes.items?.length ?? 0) > 0,
       appUrl,
-      botButtons: config?.botButtons ?? null,
-      botBackLabel: config?.botBackLabel ?? null,
-      hasSupportLinks,
-      showTickets: config?.ticketsEnabled === true,
-      showExtraOptions: config?.sellOptionsEnabled === true && (config?.sellOptions?.length ?? 0) > 0,
-      buttonsPerRow: config?.botButtonsPerRow ?? 1,
-      remnaSubscriptionUrl: config?.useRemnaSubscriptionPage ? vpnUrl : null,
+      supportUrl: supportBotLink(),
+      renewTariffId: primarySubscription?.tariffId ?? null,
+      isAdmin: config?.botAdminTelegramIds?.includes(String(from.id)) ?? false,
     });
-    const isBotAdmin = config?.botAdminTelegramIds?.includes(String(from.id)) ?? false;
-    if (isBotAdmin) {
-      markup.inline_keyboard.push([{ text: "⚙️ Панель админа", callback_data: "admin:menu" }]);
-    }
 
     // 🎨 Rich-меню (Bot API 10.1) — ВЫКЛЮЧЕНО до следующей обновы (флаг env BOT_RICH_MENU=on).
     let richMenuSent = false;
@@ -3682,54 +3627,42 @@ composer.on("callback_query:data", async (ctx) => {
       await api.completeOnboarding(token).catch(() => {});
       // defensive cleanup — выходя в главное меню сбрасываем addsub-флаг.
       addsubPending.delete(userId);
-      const [client, subRes, proxyRes, singboxRes, allSubsRes] = await Promise.all([
-        api.getMe(token),
-        api.getSubscription(token).catch(() => ({ subscription: null })),
-        api.getPublicProxyTariffs().catch(() => ({ items: [] })),
-        api.getPublicSingboxTariffs().catch(() => ({ items: [] })),
-        // для блок подписок в welcome (нагрузка + список подписок).
+      const [allSubsRes, tariffRes] = await Promise.all([
         api.getAllSubscriptions(token).catch(() => ({ items: [] })),
+        api.getPublicTariffs().catch(() => ({ items: [] })),
       ]);
-      if (client?.preferredLang) setUserLang(userId, client.preferredLang);
-      const vpnUrl = getSubscriptionUrl(subRes.subscription);
-      // если в админке настроены trials → используем их (скрываем
-      // кнопку когда юзер всё взял); иначе fallback на legacy single-trial.
-      const trialAvail = await api.getAvailableTrials(token).catch(() => ({ items: [], hasAnyEnabled: false }));
-      const showTrial = trialAvail.hasAnyEnabled
-        ? trialAvail.items.length > 0
-        : Boolean(config?.trialEnabled && !client?.trialUsed);
-      const showProxy = proxyRes.items?.some((c: { tariffs: unknown[] }) => c.tariffs?.length > 0) ?? false;
-      const showSingbox = singboxRes.items?.some((c: { tariffs: unknown[] }) => c.tariffs?.length > 0) ?? false;
-      const name = config?.serviceName?.trim() || "Кабинет";
-      const { text, entities } = buildCompactMainMenuText(
-        name,
-        client?.balance ?? 0,
-        client?.preferredCurrency ?? config?.defaultCurrency ?? "usd",
-        allSubsRes,
-      );
-      const hasVideoInstructionsCb = config?.videoInstructionsEnabled && (config?.videoInstructions?.length ?? 0) > 0;
-      const hasSupportLinks = !!(supportBotLink() || config?.supportLink || config?.agreementLink || config?.offerLink || config?.instructionsLink || hasVideoInstructionsCb);
+      const primarySubscription = selectPrimarySubscription(allSubsRes.items ?? []);
+      const currentTariff = tariffRes.items.flatMap((category) => category.tariffs)
+        .find((tariff) => tariff.id === primarySubscription?.tariffId) ?? null;
+      const text = buildMainMenuSummary({ subscription: primarySubscription, tariff: currentTariff });
+      const entities: CustomEmojiEntity[] = [];
       const backMarkup = mainMenu({
-        showTrial,
-        // T-fix (11.05.2026): кнопка vpn доступна если есть ЛЮБАЯ подписка (включая secondary/триал).
-        showVpn: Boolean(vpnUrl) || (allSubsRes.items?.length ?? 0) > 0,
-        showProxy,
-        showSingbox,
-        showGift: config?.giftSubscriptionsEnabled === true,
+        showTrial: false,
+        showVpn: (allSubsRes.items?.length ?? 0) > 0,
         appUrl,
-        botButtons: config?.botButtons ?? null,
-        botBackLabel: config?.botBackLabel ?? null,
-        hasSupportLinks,
-        showTickets: config?.ticketsEnabled === true,
-        showExtraOptions: config?.sellOptionsEnabled === true && (config?.sellOptions?.length ?? 0) > 0,
-        buttonsPerRow: config?.botButtonsPerRow ?? 1,
-        remnaSubscriptionUrl: config?.useRemnaSubscriptionPage ? vpnUrl : null,
+        supportUrl: supportBotLink(),
+        renewTariffId: primarySubscription?.tariffId ?? null,
+        isAdmin: config?.botAdminTelegramIds?.includes(String(userId)) ?? false,
       });
-      if (config?.botAdminTelegramIds?.includes(String(userId))) {
-        backMarkup.inline_keyboard.push([{ text: "⚙️ Панель админа", callback_data: "admin:menu" }]);
-      }
 
       await editMessageContent(ctx, text, backMarkup, entities, screenBannerUrl(config, "welcome") ?? undefined);
+      return;
+    }
+
+    if (data === "menu:info") {
+      await editMessageContent(ctx, "ℹ️ Раздел скоро появится.", {
+        inline_keyboard: [[{ text: "🏠 Главное меню", callback_data: "menu:main" }]],
+      });
+      return;
+    }
+
+    if (data === "menu:renew") {
+      const rows: InlineMarkup["inline_keyboard"] = [];
+      if (appUrl) {
+        rows.push([{ text: "💳 Открыть тарифы", web_app: { url: `${appUrl}/cabinet/tariffs` }, style: "primary" }]);
+      }
+      rows.push([{ text: "🏠 Главное меню", callback_data: "menu:main" }]);
+      await editMessageContent(ctx, "У вас пока нет текущего тарифа для продления.", { inline_keyboard: rows });
       return;
     }
 
