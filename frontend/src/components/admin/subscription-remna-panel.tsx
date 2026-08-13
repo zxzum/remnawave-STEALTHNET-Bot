@@ -37,6 +37,7 @@ import {
   Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getRemnaUserIdentifier } from "@/lib/remna-user";
 
 const STRATEGY_LABELS: Record<string, string> = {
   NO_RESET: "Без сброса",
@@ -264,6 +265,9 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, tarif
     ? Number(quota.quota.baseLimitBytes) + quota.activeGrants.reduce((total, grant) => total + Number(grant.bytes), 0)
     : 0;
   const quotaRemainingBytes = quota ? Math.max(0, quotaLimitBytes - Number(quota.quota.usedBytes)) : 0;
+  const remnaIdentifier = remnaUser
+    ? getRemnaUserIdentifier(remnaUser, subscription.remnawaveUuid)
+    : "";
 
   return (
     <div className="space-y-3">
@@ -309,10 +313,10 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, tarif
                   <span className="font-mono text-xs">{remnaUser.id ?? "—"}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">UUID</span>
+                  <span className="text-muted-foreground">Идентификатор</span>
                   <span className="flex items-center gap-1">
-                    <code className="text-[10px]">{remnaUser.uuid.slice(0, 12)}…</code>
-                    <CopyButton text={remnaUser.uuid} />
+                    <code className="text-[10px]">{remnaIdentifier.slice(0, 12)}{remnaIdentifier.length > 12 ? "…" : ""}</code>
+                    <CopyButton text={remnaIdentifier} />
                   </span>
                 </div>
                 <div className="flex justify-between">
