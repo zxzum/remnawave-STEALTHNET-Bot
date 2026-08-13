@@ -5,7 +5,7 @@ import * as Accordion from "@radix-ui/react-accordion";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { useClientAuth } from "@/contexts/client-auth";
-import { api, type PublicConfig, type TariffConversionPreview } from "@/lib/api";
+import { ApiError, api, type ManualConversionQuote, type ManualConversionResult, type PublicConfig, type TariffConversionPreview } from "@/lib/api";
 import {
   Box,
   ChevronDown,
@@ -68,6 +68,9 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
   const [keepExistingExtras, setKeepExistingExtras] = useState(true);
   const [selectedTrialId, setSelectedTrialId] = useState<string | null>(null);
   const [pendingPaymentId, setPendingPaymentId] = useState<string | null>(null);
+  const [manualQuote, setManualQuote] = useState<ManualConversionQuote | null>(null);
+  const [manualResult, setManualResult] = useState<ManualConversionResult | null>(null);
+  const [manualBusy, setManualBusy] = useState(false);
 
   useEffect(() => { if (open) void api.getPublicConfig().then(setConfig).catch(() => undefined); }, [open]);
   useEffect(() => {
@@ -89,15 +92,28 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
   useEffect(() => {
     if (!open || !plan || !state.token) {
       setConversion(null);
+      setManualQuote(null);
       return;
     }
     let current = true;
     setKeepExistingExtras(true);
+    setManualQuote(null);
+    setManualResult(null);
     void api.clientTariffConversionPreview(state.token, {
       tariffId: plan.id,
       priceOptionId: selectedOptionId ?? undefined,
     }).then((preview) => {
       if (current) setConversion(preview);
+      if (!preview.willConvert || !preview.subscription?.id) return null;
+      return api.clientSubscriptionConversionQuote(state.token!, {
+        subscriptionId: preview.subscription.id,
+        tariffId: plan.id,
+        priceOptionId: selectedOptionId,
+      }).then((quote) => {
+        if (current) setManualQuote(quote);
+      }).catch(() => {
+        if (current) setManualQuote(null);
+      });
     }).catch(() => {
       if (current) setConversion(null);
     });
@@ -184,6 +200,9 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
     setConversion(null);
     setKeepExistingExtras(true);
     setSelectedTrialId(null);
+    setManualQuote(null);
+    setManualResult(null);
+    setManualBusy(false);
   };
 
   const applyPromo = async () => {
@@ -257,6 +276,32 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
     description: `Тариф «${plan.name}» · ${days} дней · ${totalDevices} устр.`,
   }));
   const payCryptoBot = () => state.token && openPayment("Crypto Bot", () => api.cryptopayCreatePayment(state.token!, purchasePayload));
+  const convertManually = async () => {
+    if (!state.token || !manualQuote || manualBusy) return;
+    setManualBusy(true);
+    try {
+      const result = await api.clientSubscriptionConversion(state.token, manualQuote.quoteToken);
+      setManualResult(result);
+      await Promise.all([refreshProfile(), reload()]);
+      if (result.direction !== "upgrade") {
+        toast({ title: "Конвертация выполнена", description: `Добавлено ${result.convertedDays} дн. без покупки месяца`, variant: "success" });
+        onOpenChange(false);
+        reset();
+      } else {
+        toast({ title: "Тариф изменён", description: "Можно оплатить ещё месяц", variant: "success" });
+      }
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 409) {
+        setManualQuote(null);
+        setConversion(null);
+        toast({ title: "Расчёт устарел", description: "Откройте тариф заново и подтвердите актуальный остаток", variant: "error" });
+      } else {
+        toast({ title: "Не удалось выполнить конвертацию", description: cause instanceof Error ? cause.message : undefined, variant: "error" });
+      }
+    } finally {
+      setManualBusy(false);
+    }
+  };
   const plategaMethods = config?.plategaMethods ?? [];
   const sbpMethod = plategaMethods.find((method) => /сбп|sbp|qr/i.test(method.label));
   const cardMethod = plategaMethods.find((method) => /карт|card/i.test(method.label));
@@ -394,6 +439,12 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                         <span className="text-fog-500">Тариф ({totalDevices} устр)</span>
                         <span className="font-bold">{formatMoney(basePrice, plan.currency)}</span>
                       </div>
+                      {conversion?.willConvert && conversion.convertedDays !== undefined && (
+                        <div className="mt-1.5 flex justify-between text-sm">
+                          <span className="text-fog-500">Добавится конвертацией</span>
+                          <span className="font-bold text-amber-glow">+{conversion.convertedDays} дн.</span>
+                        </div>
+                      )}
                       <div className="my-3 h-px bg-white/8" />
                       <div className="flex items-baseline justify-between">
                         <span className="font-bold">К оплате</span>
@@ -497,7 +548,10 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                           <Wifi className="h-4 w-4 text-fog-500" /> {plan.traffic}
                         </p>
                       </div>
-                    </div>
+                      </div>
+                      {conversion?.willConvert && conversion.convertedDays !== undefined && (
+                        <p className="mt-3 text-xs text-fog-500">В обычной покупке к сроку добавится конвертация: <b className="text-amber-glow">+{conversion.convertedDays} дн.</b></p>
+                      )}
                     {plan.whitelistGB && (
                       <span className="chip chip-amber chip-fluid mt-2.5">
                         <Signal className="h-3.5 w-3.5" /> Белые списки: {plan.whitelistGB.toFixed(0)} ГБ / мес
@@ -533,6 +587,41 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                         {conversion.convertedDays !== undefined && <>После пересчёта: {conversion.convertedDays} дн. </>}
                         {conversion.totalDays !== undefined && <>Итого после покупки: <b className="text-amber-glow">{conversion.totalDays} дн.</b></>}
                       </p>
+                    </div>
+                  )}
+
+                  {manualQuote && (
+                    <div className="mt-4 rounded-3xl border border-accent-400/30 bg-accent-500/8 p-4">
+                      <p className="text-sm font-bold">Конвертация без покупки месяца</p>
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                        <span className="text-fog-500">Текущий тариф</span>
+                        <span className="text-right font-semibold">{manualQuote.currentTariff.name ?? "—"}</span>
+                        <span className="text-fog-500">Целевой тариф</span>
+                        <span className="text-right font-semibold">{manualQuote.targetTariff.name}</span>
+                        <span className="text-fog-500">Остаток</span>
+                        <span className="text-right font-semibold">{manualQuote.remainingDays} дн.</span>
+                        <span className="text-fog-500">Расчёт и округление</span>
+                        <span className="text-right font-semibold">{manualQuote.rawConvertedDays.toFixed(2)} → {manualQuote.rounding}</span>
+                        <span className="text-fog-500">Комиссия</span>
+                        <span className="text-right font-semibold">{manualQuote.commissionPercent}%</span>
+                        <span className="text-fog-500">Итоговые дни</span>
+                        <span className="text-right font-bold text-accent-300">{manualQuote.totalDays} дн.</span>
+                      </div>
+                      {manualResult?.direction === "upgrade" ? (
+                        <div className="mt-3 rounded-2xl border border-mint-400/25 bg-mint-500/10 p-3 text-xs text-fog-300">
+                          Конвертация выполнена. <button type="button" className="font-bold text-mint-300 underline" onClick={() => setManualResult(null)}>Оплатить ещё месяц</button>
+                        </div>
+                      ) : !manualResult ? (
+                        <button
+                          type="button"
+                          disabled={manualBusy}
+                          onClick={convertManually}
+                          className="btn-primary mt-3 w-full justify-center disabled:opacity-50"
+                        >
+                          {manualBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                          {manualBusy ? "Конвертация…" : "Конвертация"}
+                        </button>
+                      ) : null}
                     </div>
                   )}
 

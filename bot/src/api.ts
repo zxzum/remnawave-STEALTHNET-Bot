@@ -689,6 +689,34 @@ export async function tariffConversionPreview(
   return fetchJson(`/api/client/tariff-conversion-preview?${q.toString()}`, { token });
 }
 
+export type ManualConversionQuote = {
+  quoteToken: string;
+  subscriptionId: string;
+  tariffId: string;
+  priceOptionId: string | null;
+  currentTariff: { id: string | null; name: string | null };
+  targetTariff: { id: string; name: string };
+  remainingDays: number;
+  rawConvertedDays: number;
+  rounding: "ceil" | "floor" | "none";
+  direction: "same" | "trial" | "upgrade" | "downgrade" | "equal" | "none";
+  commissionPercent: number;
+  convertedDays: number;
+  totalDays: number;
+};
+
+/** Получает signed quote от backend; bot не повторяет математику конвертации. */
+export async function subscriptionConversionQuote(
+  token: string,
+  data: { subscriptionId: string; tariffId: string; priceOptionId?: string | null },
+): Promise<ManualConversionQuote> {
+  return fetchJson("/api/client/subscription-conversion/quote", {
+    method: "POST",
+    body: { ...data, priceOptionId: data.priceOptionId ?? null },
+    token,
+  });
+}
+
 /** Оплата тарифа или прокси-тарифа балансом */
 export async function payByBalance(
   token: string,

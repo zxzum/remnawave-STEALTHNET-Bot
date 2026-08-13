@@ -7599,7 +7599,7 @@ composer.on("callback_query:data", async (ctx) => {
       const subType = rest.slice(0, sep) as "root" | "secondary";
       const subId = rest.slice(sep + 1);
       const text = ((config as { reissueWarningText?: string | null })?.reissueWarningText ?? "").trim()
-        || "⚠️ Обновление подписки\n\nБот выдаст вам новую подписку с аналогичным сроком действия. Старая перестанет работать.\n\nВы действительно обновить подписку?";
+        || "⚠️ Обновление подписки\n\nБот выдаст вам новую ссылку с аналогичным сроком действия. Старая ссылка и старые конфигурации перестанут работать.\n\nРекомендуем подтверждать обновление на обычном сайте, а не в mini-app.\n\nВы действительно хотите обновить ссылку?";
       await editMessageContent(ctx, text, {
         inline_keyboard: [[
           { text: "✅ Да", callback_data: `sub:reissue_confirm:${subType}:${subId}` },
@@ -7620,7 +7620,7 @@ composer.on("callback_query:data", async (ctx) => {
         const result = await api.reissueSubscription(token, subType, subId);
         const newUrl = result.subscriptionUrl ?? "—";
         // подсказка «если инструкция не открылась».
-        await editMessageContent(ctx, `✅ Подписка обновлена!\n\n🔗 Новая ссылка для подключения:\n${newUrl}\n\nСтарая ссылка больше не работает. Не забудьте заново добавить подписку в приложение.\n\n${instructionFallbackText(config)}`, {
+        await editMessageContent(ctx, `✅ Ссылка обновлена!\n\n🔗 Новая ссылка для подключения:\n${newUrl}\n\nСтарая ссылка и старые конфигурации больше не работают. Не забудьте заново добавить подписку в приложение.\n\nДля следующего обновления рекомендуем обычный сайт, а не mini-app.\n\n${instructionFallbackText(config)}`, {
           inline_keyboard: [[{ text: backToSubLabel(config?.botEmojis ?? null), callback_data: `sub:detail:${subType}:${subId}` }]],
         });
       } catch (e: unknown) {
