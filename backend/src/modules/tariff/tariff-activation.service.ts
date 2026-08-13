@@ -164,6 +164,15 @@ function parsePaymentMetadata(metadata: string | null): Record<string, unknown> 
   }
 }
 
+/** Cleanup after a successful Remnawave mutation must never roll back its marker. */
+export async function bestEffortTrialCleanup(label: string, cleanup: () => Promise<unknown>): Promise<void> {
+  try {
+    await cleanup();
+  } catch (error) {
+    console.error(`[trial-cleanup] ${label} failed:`, error);
+  }
+}
+
 export type TrialConversionPolicy = {
   tariffId?: string | null;
   convertEnabled?: boolean | null;
@@ -1132,6 +1141,11 @@ export async function findConvertibleSubscription(
   } as const;
   const candidateSelect = {
     id: true,
+    ownerId: true,
+    purchasedAsGift: true,
+    giftStatus: true,
+    giftedToClientId: true,
+    deletionRequestedAt: true,
     subscriptionIndex: true,
     tariffId: true,
     expireAt: true,
@@ -1144,13 +1158,10 @@ export async function findConvertibleSubscription(
   // Single-mode always owns the canonical index-zero record. A newer
   // same-tariff secondary must never steal that slot; only fall back when the
   // canonical record is absent (or its trial policy rejects this tariff).
-  const canonical = !multiSubEnabled
-    ? await prisma.subscription.findFirst({
-        where: { ...commonWhere, subscriptionIndex: 0 },
-        orderBy: { expireAt: { sort: "desc", nulls: "last" } },
-        select: candidateSelect,
-      })
-    : null;
+  const canonicalRows = !multiSubEnabled
+    ? await prisma.subscription.findMany({ where: commonWhere, select: candidateSelect })
+    : [];
+  const canonical = selectCanonicalSubscription(canonicalRows);
   let candidate = canonical && (!canonical.trialId || trialAllowsTariff({
     tariffId: canonical.tariffId,
     convertEnabled: canonical.trial?.convertEnabled,
@@ -1416,10 +1427,10 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string, tx: Prisma.T
       if (result.ok) {
         await persistActivation(extendsSecondaryId, targetSub.trialId ? { trialToTariff: true } : {});
         if (!targetSub.trialId && !isGiftPurchase) {
-          await replaceTrialOnPurchase(client.id, getReplaceTrialSubId(payment.metadata));
+          await bestEffortTrialCleanup("replace-after-extend", () => replaceTrialOnPurchase(client.id, getReplaceTrialSubId(payment.metadata)));
         }
         if (!isGiftPurchase && targetSub.trialId) {
-          await deleteSeparateTrialSubscriptions(client.id, targetSub.trialId ? extendsSecondaryId : null);
+          await bestEffortTrialCleanup("delete-after-trial-conversion", () => deleteSeparateTrialSubscriptions(client.id, extendsSecondaryId));
         }
         await resetOneTimeDiscount();
       }
@@ -1466,10 +1477,10 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string, tx: Prisma.T
             ...(convertible.trialId ? { trialToTariff: true } : {}),
           });
           if (!convertible.trialId) {
-            await replaceTrialOnPurchase(client.id, getReplaceTrialSubId(payment.metadata));
+            await bestEffortTrialCleanup("replace-after-conversion", () => replaceTrialOnPurchase(client.id, getReplaceTrialSubId(payment.metadata)));
           }
           if (!isGiftPurchase && convertible.trialId) {
-            await deleteSeparateTrialSubscriptions(client.id, convertible.trialId ? convertible.id : null);
+            await bestEffortTrialCleanup("delete-after-trial-conversion", () => deleteSeparateTrialSubscriptions(client.id, convertible.id));
           }
           await resetOneTimeDiscount();
           // Single-режим: оставляем ровно одну подписку — удаляем остальные.

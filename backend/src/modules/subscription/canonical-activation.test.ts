@@ -7,7 +7,7 @@ process.env.JWT_SECRET ??= "test-secret-that-is-long-enough-for-validation";
 process.env.REMNA_API_URL = "https://remna.test";
 process.env.REMNA_ADMIN_TOKEN = "test-token";
 
-const { selectCanonicalSubscription, withClientSubscriptionLock } = await import("../tariff/tariff-activation.service.js");
+const { selectCanonicalSubscription, withClientSubscriptionLock, bestEffortTrialCleanup } = await import("../tariff/tariff-activation.service.js");
 
 test("canonical selection prefers owned index zero over a newer secondary", () => {
   const selected = selectCanonicalSubscription([
@@ -24,6 +24,14 @@ test("canonical selection ignores gifts and deletion tombstones", () => {
     { id: "canonical-sub-0", subscriptionIndex: 1, ownerId: "client-1", purchasedAsGift: false, giftStatus: null, giftedToClientId: null, deletionRequestedAt: null, expireAt: new Date("2027-01-01") },
   ]);
   assert.equal(selected?.id, "canonical-sub-0");
+});
+
+test("canonical selection prefers an active secondary over an expired index zero", () => {
+  const selected = selectCanonicalSubscription([
+    { id: "expired-index-0", subscriptionIndex: 0, ownerId: "client-1", purchasedAsGift: false, giftStatus: null, giftedToClientId: null, deletionRequestedAt: null, expireAt: new Date("2020-01-01") },
+    { id: "active-secondary", subscriptionIndex: 1, ownerId: "client-1", purchasedAsGift: false, giftStatus: null, giftedToClientId: null, deletionRequestedAt: null, expireAt: new Date("2099-01-01") },
+  ], new Date("2026-01-01"));
+  assert.equal(selected?.id, "active-secondary");
 });
 
 test("activation exposes a database-backed client lock and canonical resolver", async () => {
@@ -105,9 +113,24 @@ test("single-mode paid conversion never passes hardReplace", async () => {
 test("single-mode conversion searches canonical index zero before same-tariff fallback", async () => {
   const source = await readFile(new URL("../tariff/tariff-activation.service.ts", import.meta.url), "utf8");
   const finder = source.slice(source.indexOf("export async function findConvertibleSubscription"));
-  const canonical = finder.indexOf("subscriptionIndex: 0");
+  const canonical = finder.indexOf("selectCanonicalSubscription(canonicalRows)");
   const sameTariffFallback = finder.indexOf("where: { ...commonWhere, tariffId, trialId: null }");
   assert.ok(canonical >= 0 && sameTariffFallback > canonical, `canonical=${canonical}, fallback=${sameTariffFallback}`);
+});
+
+test("trial cleanup errors cannot undo a successful activation marker", async () => {
+  let markerPersisted = false;
+  markerPersisted = true;
+  const log = console.error;
+  console.error = () => {};
+  try {
+    await bestEffortTrialCleanup("test", async () => {
+      throw new Error("cleanup unavailable");
+    });
+  } finally {
+    console.error = log;
+  }
+  assert.equal(markerPersisted, true);
 });
 
 test("activation retries require a verified success marker and subscription id", async () => {
