@@ -34,7 +34,7 @@ export function mapPublicTariffs(categories: PublicTariffCategory[]): LandingTar
     return {
       id: tariff.id,
       name: tariff.name,
-      description: tariff.description?.trim() || "Защищённый доступ без лишних настроек",
+      description: tariff.description || "Защищённый доступ без лишних настроек",
       price: tariff.price,
       trafficGb: Number.isFinite(bytes) && bytes > 0 ? Math.round(bytes / 1024 ** 3) : null,
       devices: tariff.includedDevices || tariff.deviceLimit || 1,

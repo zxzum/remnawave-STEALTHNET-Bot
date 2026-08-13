@@ -116,7 +116,7 @@ export type DeviceAddon = { extra: number; perMonth: number; bestValue?: boolean
 export type TariffPlan = {
   id: string;
   name: string;
-  emojiLine: string[];
+  emojiLine: string;
   monthlyPrice: number;
   traffic: string;
   whitelistGB: number | null;
@@ -349,7 +349,7 @@ export function mapTariffGroups(groups: PublicTariffGroupShape[]): TariffGroup[]
       return {
         id: tariff.id,
         name: tariff.name,
-        emojiLine: [group.emoji, ...(tariff.description?.split(/[·\n]/) ?? [])].filter((value): value is string => Boolean(value?.trim())),
+        emojiLine: [group.emoji, tariff.description].filter((value): value is string => Boolean(value)).join("\n"),
         monthlyPrice: options[0]?.price ?? tariff.price,
         traffic: tariff.trafficLimitMode !== "LOCAL_SQUAD" && trafficGB ? `${Number(trafficGB.toFixed(1))} ГБ` : "Безлимит",
         whitelistGB,

@@ -304,8 +304,8 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                     </div>
                     <div className="min-w-0 flex-1">
                       <Dialog.Title className="text-2xl font-extrabold tracking-tight">{plan.name}</Dialog.Title>
-                      <Dialog.Description className="mt-0.5 text-xs leading-relaxed text-fog-500">
-                        {plan.emojiLine.join(" · ")}
+                      <Dialog.Description className="mt-0.5 whitespace-pre-wrap text-xs leading-relaxed text-fog-500">
+                        {plan.emojiLine}
                       </Dialog.Description>
                     </div>
                     <Dialog.Close className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-fog-500 transition-colors hover:bg-white/8 hover:text-white">
@@ -732,7 +732,7 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
       )}
 
       <h3 className="text-lg font-extrabold">{plan.name}</h3>
-      <p className="mt-1.5 text-xs leading-relaxed text-fog-500">{plan.emojiLine.join("  ")}</p>
+      <p className="mt-1.5 whitespace-pre-wrap text-xs leading-relaxed text-fog-500">{plan.emojiLine}</p>
       <div className="mt-3 grid grid-cols-2 gap-2">
         <span className="chip chip-fluid">
           <CalendarDays className="h-3.5 w-3.5" /> от {Math.min(...plan.durationOptions.map((option) => option.days))} дн.

@@ -46,6 +46,17 @@ test("maps public tariff options and computes extra devices like the backend", (
   assert.deepEqual(quoteTariff(plan, 365, 3), { base: 3000, extras: 2920, total: 5920, discountPercent: 20 });
 });
 
+test("preserves tariff description whitespace for cabinet rendering", () => {
+  const description = "  Выбор большинства  \n\n  50GB белых списков  ";
+  const [group] = mapTariffGroups([{ id: "g1", name: "VPN", emoji: "⭐", tariffs: [{
+    id: "t1", name: "Стандарт", description, durationDays: 30, price: 200,
+    currency: "rub", deviceLimit: 5, includedDevices: 5,
+    pricePerExtraDevice: 0, maxExtraDevices: 0, deviceDiscountTiers: [], priceOptions: [],
+  }] }]);
+
+  assert.equal(group.plans[0].emojiLine, `⭐\n${description}`);
+});
+
 test("maps local squad limits as whitelist traffic and best choice", () => {
   const [group] = mapTariffGroups([{ id: "g1", name: "VPN", emoji: "🚀", tariffs: [{
     id: "t1", name: "Whitelist", description: null, durationDays: 30, price: 300,
