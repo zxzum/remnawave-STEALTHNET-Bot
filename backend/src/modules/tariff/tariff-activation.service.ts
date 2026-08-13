@@ -19,6 +19,7 @@ import { createAdditionalSubscription, deleteSubscription } from "../gift/gift.s
 import { getSystemConfig } from "../client/client.service.js";
 import { upsertSubscriptionByRemnaUuid } from "../subscription/subscription.helpers.js";
 import { deleteSingleSubscription } from "../subscription/single-subscription-lifecycle.service.js";
+import { quoteConvertedDays } from "../subscription/subscription-change.policy.js";
 import {
   deleteSeparateTrialSubscriptions,
   isPaidVpnPurchase,
@@ -254,35 +255,25 @@ function remnaStrategy(mode: TrafficResetMode): "NO_RESET" | "MONTH" | "MONTH_RO
 }
 
 /**
- * Рассчитать pro-rata конвертацию остатка дней при смене тарифной ставки.
- * Возвращает количество "конвертированных" дней, которые добавляются к новой покупке.
- *
- * Формула: convertedDays = floor(remainingDays × oldPricePerDay / newPricePerDay)
- *
- * Логика:
- * - Если ставка (₽/день) совпадает — дни складываются 1:1 без конвертации
- * - Если ставка другая (другой тариф ИЛИ та же модель но другая длительность/устройства) — pro-rata
- *
- * Это закрывает дыру: купил 1 устр за 250 на 30 дней (8.33/день), потом 5 устр за 1000
- * на 30 дней (33.33/день) — без конвертации стеклись бы 30 старых дней по 8.33 + 30 новых
- * по 33.33, и юзер фактически получил бы 60 дней на 5 устройств заплатив за 30. Now: остаток
- * конвертируется по ставке (30 × 8.33 / 33.33 ≈ 7.5 дней).
+ * Compatibility wrapper for callers that still only provide daily prices.
+ * Preview/apply paths should use quoteConvertedDays directly once their
+ * source subscription metadata is available. The historic near-equal-rate
+ * tolerance is retained here so old callers keep renewal semantics.
  */
 export function computeConvertedDays(args: {
   remainingDays: number;
   oldPricePerDay: number | null;
   newPricePerDay: number;
 }): number {
-  const { remainingDays, oldPricePerDay, newPricePerDay } = args;
-  if (remainingDays <= 0) return 0;
-  // Та же ставка — просто стек, без конвертации
-  if (oldPricePerDay != null && Math.abs(oldPricePerDay - newPricePerDay) < 0.01) return remainingDays;
-  // Нет ставки старого тарифа — не можем считать, теряем остаток (free → бывший trial)
-  if (oldPricePerDay == null || oldPricePerDay <= 0) return 0;
-  // Новая бесплатная — отдаём как есть (нечего конвертировать)
-  if (newPricePerDay <= 0) return remainingDays;
-  const converted = Math.floor((remainingDays * oldPricePerDay) / newPricePerDay);
-  return Math.max(0, converted);
+  const sameTariff = args.oldPricePerDay != null
+    && Number.isFinite(args.oldPricePerDay)
+    && Number.isFinite(args.newPricePerDay)
+    && Math.abs(args.oldPricePerDay - args.newPricePerDay) < 0.01;
+  return quoteConvertedDays({
+    ...args,
+    sameTariff,
+    isTrial: false,
+  }).convertedDays;
 }
 
 /**
@@ -745,10 +736,11 @@ export async function extendSecondarySubscription(
    *  (computeConvertedDays), отсчёт от «сейчас», сквады ЗАМЕНЯЮТСЯ на сквады
    *  нового тарифа, трафик начинается заново по новому тарифу. */
   convertMode?: boolean,
-  /** ЖЁСТКАЯ ЗАМЕНА (глобальный single-режим при выключенных мульти-подписках + смена тарифа):
-   *  ведёт себя как convertMode (сброс трафика, замена сквадов, отсчёт expireAt от «сейчас»,
-   *  тот же Remnawave-UUID → ссылка подписки НЕ меняется), НО остаток дней НЕ переносится
-   *  (convertedDays=0) — старые дни сгорают, тариф начинается с нуля. */
+  /**
+   * Legacy single-mode flag. It still selects the conversion path, but the
+   * value of the existing subscription is always quoted by the shared policy;
+   * no days are discarded and no Remnawave UUID is replaced.
+   */
   hardReplace?: boolean,
   dependencies: ExtendSubscriptionDependencies = {},
 ): Promise<ActivationResult> {
@@ -837,7 +829,7 @@ export async function extendSecondarySubscription(
   // конвертация ТРИАЛА — это всегда переход (convertMode):
   // сквады заменяются на сквады целевого тарифа (уход с триального сквада),
   // трафик начинается заново. Остаток бесплатных дней не конвертируется
-  // (currentPricePerDay у триала нет → computeConvertedDays вернёт 0).
+  // (у триала нет paid daily rate, policy сохраняет остаток 1:1).
   const isTrialConversion = sec.trialId != null;
   const effectiveConvert = convertMode || isTrialConversion || hardReplace;
 
@@ -851,30 +843,27 @@ export async function extendSecondarySubscription(
   //   • ОСТАВЛЯЕТ устройства → они переезжают на новую подписку (новый included +
   //     прежние extra), но новая полная ставка выше (тариф + устройства) — дней МЕНЬШЕ.
   let convertedDays = 0;
-  if (effectiveConvert && !hardReplace) {
+  if (effectiveConvert) {
     const remainingMs = currentExpireAt ? currentExpireAt.getTime() - Date.now() : 0;
     const remainingDays = Math.max(0, Math.floor(remainingMs / 86_400_000));
-    if (isTrialConversion) {
-      // конвертация ТРИАЛА сохраняет дни 1:1 (и остаток
-      // трафика — см. traffic ниже): юзер ничего не теряет при переходе на платный.
-      convertedDays = remainingDays;
-    } else {
-      const newPrice = selectedOption?.price ?? tariff.price ?? 0;
-      const newBasePerDay = effectiveDays > 0 ? newPrice / effectiveDays : 0;
-      const extrasPerDay = (sec.extraDevices ?? 0) > 0 ? (sec.extraDevicesMonthlyPrice ?? 0) / 30 : 0;
-      const keepExtras = !removeExtrasAfter && extrasPerDay > 0;
-      // Старая ПОЛНАЯ ставка (база + устройства).
-      const oldFullPerDay = sec.currentPricePerDay != null
-        ? sec.currentPricePerDay + extrasPerDay
-        : (extrasPerDay > 0 ? extrasPerDay : null);
-      // Новая ставка: с устройствами, если юзер их оставляет.
-      const newFullPerDay = newBasePerDay + (keepExtras ? extrasPerDay : 0);
-      convertedDays = computeConvertedDays({
-        remainingDays,
-        oldPricePerDay: oldFullPerDay,
-        newPricePerDay: newFullPerDay,
-      });
-    }
+    const newPrice = selectedOption?.price ?? tariff.price ?? 0;
+    const newBasePerDay = effectiveDays > 0 ? newPrice / effectiveDays : 0;
+    const extrasPerDay = (sec.extraDevices ?? 0) > 0 ? (sec.extraDevicesMonthlyPrice ?? 0) / 30 : 0;
+    const keepExtras = !removeExtrasAfter && extrasPerDay > 0;
+    // Старая ПОЛНАЯ ставка (база + устройства).
+    const oldFullPerDay = sec.currentPricePerDay != null
+      ? sec.currentPricePerDay + extrasPerDay
+      : (extrasPerDay > 0 ? extrasPerDay : null);
+    // Новая ставка: с устройствами, если юзер их оставляет.
+    const newFullPerDay = newBasePerDay + (keepExtras ? extrasPerDay : 0);
+    const quote = quoteConvertedDays({
+      remainingDays,
+      oldPricePerDay: oldFullPerDay,
+      newPricePerDay: newFullPerDay,
+      sameTariff: !isTrialConversion && tariff.id != null && tariff.id === sec.tariffId,
+      isTrial: isTrialConversion,
+    });
+    convertedDays = quote.allowed ? quote.convertedDays : 0;
   }
 
   // Стек дней: если подписка активна → +effectiveDays к expireAt; иначе now+effectiveDays.
