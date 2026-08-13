@@ -349,7 +349,7 @@ export function mapTariffGroups(groups: PublicTariffGroupShape[]): TariffGroup[]
       return {
         id: tariff.id,
         name: tariff.name,
-        emojiLine: [group.emoji, tariff.description].filter((value): value is string => Boolean(value)).join("\n"),
+        emojiLine: tariff.description ?? "",
         monthlyPrice: options[0]?.price ?? tariff.price,
         traffic: tariff.trafficLimitMode !== "LOCAL_SQUAD" && trafficGB ? `${Number(trafficGB.toFixed(1))} ГБ` : "Безлимит",
         whitelistGB,
