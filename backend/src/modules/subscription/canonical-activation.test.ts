@@ -101,3 +101,19 @@ test("single-mode paid conversion never passes hardReplace", async () => {
   assert.doesNotMatch(activation, /const hardReplace\s*=\s*!multiSubEnabled/);
   assert.doesNotMatch(activation, /\/\* hardReplace \*\/\s*!multiSubEnabled/);
 });
+
+test("single-mode conversion searches canonical index zero before same-tariff fallback", async () => {
+  const source = await readFile(new URL("../tariff/tariff-activation.service.ts", import.meta.url), "utf8");
+  const finder = source.slice(source.indexOf("export async function findConvertibleSubscription"));
+  const canonical = finder.indexOf("subscriptionIndex: 0");
+  const sameTariffFallback = finder.indexOf("where: { ...commonWhere, tariffId, trialId: null }");
+  assert.ok(canonical >= 0 && sameTariffFallback > canonical, `canonical=${canonical}, fallback=${sameTariffFallback}`);
+});
+
+test("activation retries require a verified success marker and subscription id", async () => {
+  const source = await readFile(new URL("../tariff/tariff-activation.service.ts", import.meta.url), "utf8");
+  const activation = source.slice(source.indexOf("async function activateTariffByPaymentIdUnlocked"));
+  assert.match(activation, /subscriptionActivated\s*===\s*true/);
+  assert.match(activation, /subscriptionId/);
+  assert.match(activation, /subscriptionActivated:\s*true/);
+});

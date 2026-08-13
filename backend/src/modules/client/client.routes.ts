@@ -4528,6 +4528,7 @@ clientRouter.post("/payments/balance", async (req, res) => {
     if (!tariffMeta.originalPrice) tariffMeta.originalPrice = basePriceForTariff;
   }
   if (extendsSecondarySubId) tariffMeta.extendsSecondarySubId = extendsSecondarySubId;
+  if (replaceTrialSubId) tariffMeta.replaceTrialSubId = replaceTrialSubId;
   if (removeExtrasOnActivate === true) tariffMeta.removeExtrasOnActivate = true;
   if (asAdditional && !extendsSecondarySubId) tariffMeta.isAdditionalSubscription = true;
 
@@ -4562,7 +4563,20 @@ clientRouter.post("/payments/balance", async (req, res) => {
 
   // The payment is already PAID and recorded. Canonical activation owns all
   // subscription selection, trial conversion, UUID reuse, and metadata linking.
-  const activateResult = await activateTariffByPaymentId(payment.id);
+  const activationAttempt = await (async () => {
+    try {
+      const activateResult = await activateTariffByPaymentId(payment.id);
+      return { activateResult } as const;
+    } catch (error) {
+      return { error } as const;
+    }
+  })();
+  if ("error" in activationAttempt) {
+    const { error } = activationAttempt;
+    const message = error instanceof Error ? error.message : "Не удалось активировать тариф";
+    return failBalancePayment(500, message);
+  }
+  const activateResult = activationAttempt.activateResult;
   if (!activateResult.ok) {
     return failBalancePayment(activateResult.status, activateResult.error);
   }
