@@ -10,6 +10,7 @@ import {
 } from "../src/pages/lazeyka-landing-model.ts";
 
 test("maps live public tariffs into landing cards", () => {
+  const description = "  Выбор большинства  \n\n  50GB белых списков  ";
   const result = mapPublicTariffs([
     {
       id: "vpn",
@@ -20,7 +21,7 @@ test("maps live public tariffs into landing cards", () => {
         {
           id: "optimal-id",
           name: "Оптимальный",
-          description: "100 ГБ белых списков",
+          description,
           durationDays: 30,
           price: 300,
           currency: "rub",
@@ -40,7 +41,7 @@ test("maps live public tariffs into landing cards", () => {
     {
       id: "optimal-id",
       name: "Оптимальный",
-      description: "100 ГБ белых списков",
+      description,
       price: 300,
       trafficGb: 100,
       devices: 5,
