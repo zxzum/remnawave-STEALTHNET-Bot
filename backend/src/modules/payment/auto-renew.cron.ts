@@ -128,6 +128,7 @@ export async function processAutoRenewals() {
   const notifyDaysBefore = config.autoRenewNotifyDaysBefore ?? 3;
   const gracePeriodDays = config.autoRenewGracePeriodDays ?? 2;
   const maxRetries = config.autoRenewMaxRetries ?? 3;
+  const multiSubscriptionsEnabled = config.multiSubscriptionsEnabled ?? true;
 
   const renewThreshold = daysBeforeExpiry * DAY_MS;
   const notifyThreshold = notifyDaysBefore * DAY_MS;
@@ -149,15 +150,14 @@ export async function processAutoRenewals() {
   for (const client of clients) {
     if (!client.remnawaveUuid || !client.autoRenewTariff) continue;
 
-    // defensive дедуп — если у клиента primary-подписка
-    // (Subscription[0]) уже имеет autoRenewEnabled=true → её обработает новый Subscription-цикл.
-    // Пропускаем в legacy Client-цикле, чтобы не списать дважды.
-    const primaryHasAutoRenew = await prisma.subscription.findUnique({
+    // Canonical Subscription[0] owns renewal whenever it exists. This also
+    // respects a per-subscription autoRenewEnabled=false toggle.
+    const primarySubscription = await prisma.subscription.findUnique({
       where: { ownerId_subscriptionIndex: { ownerId: client.id, subscriptionIndex: 0 } },
-      select: { autoRenewEnabled: true, deletionRequestedAt: true },
+      select: { id: true },
     });
-    if (primaryHasAutoRenew?.autoRenewEnabled === true || primaryHasAutoRenew?.deletionRequestedAt) {
-      console.log(`[auto-renew] Skipping legacy Client-cycle for ${client.id}: Subscription[0].autoRenewEnabled handled by unified cycle.`);
+    if (primarySubscription) {
+      console.log(`[auto-renew] Skipping legacy Client-cycle for ${client.id}: canonical Subscription[0] owns renewal.`);
       continue;
     }
 
@@ -654,7 +654,7 @@ export async function processAutoRenewals() {
   }
 
   // обрабатываем индивидуальные автосписания secondary подписок.
-  await processSecondaryAutoRenewals();
+  await processSecondaryAutoRenewals(multiSubscriptionsEnabled);
 }
 
 /**
@@ -673,7 +673,7 @@ export async function processAutoRenewals() {
  *     (но Payment остаётся PAID — на следующем cron tick попробуем активировать заново).
  *   • Notifications клиенту при успехе/ошибке (notifyAutoRenewYookassaSuccess/Failed).
  */
-async function processSecondaryAutoRenewals(): Promise<void> {
+async function processSecondaryAutoRenewals(multiSubscriptionsEnabled: boolean): Promise<void> {
   const config = await getSystemConfig();
   const daysBeforeExpiry = config.autoRenewDaysBeforeExpiry ?? 1;
   const renewThreshold = daysBeforeExpiry * DAY_MS;
@@ -683,7 +683,13 @@ async function processSecondaryAutoRenewals(): Promise<void> {
   // Продлевать не на что — раньше висели включёнными и молчали («не списывает и не пишет»).
   // Выключаем тумблер и один раз говорим клиенту (EXPIRED-шаблон «автосписание отключено»).
   const orphans = await prisma.subscription.findMany({
-    where: { autoRenewEnabled: true, tariffId: null, autoRenewTariffId: null, deletionRequestedAt: null },
+    where: {
+      autoRenewEnabled: true,
+      ...(multiSubscriptionsEnabled ? {} : { subscriptionIndex: 0 }),
+      tariffId: null,
+      autoRenewTariffId: null,
+      deletionRequestedAt: null,
+    },
     select: { id: true, ownerId: true, subscriptionIndex: true, owner: { select: { balance: true } } },
   });
   for (const o of orphans) {
@@ -698,19 +704,12 @@ async function processSecondaryAutoRenewals(): Promise<void> {
     }).catch(() => {});
   }
 
-  // цикл обрабатывает ВСЕ подписки с autoRenewEnabled,
-  // включая primary (subscriptionIndex=0). Раньше был фильтр `subscriptionIndex > 0` чтобы избежать
-  // дублирования с legacy циклом по `Client.autoRenewEnabled`. Но эндпоинт включения автопродления
-  // (`/api/client/subscription/:type/:id/auto-renew`) теперь пишет ТОЛЬКО в Subscription, не в
-  // Client → старый цикл по Client всё равно не сработает для primary, а новый его пропускал.
-  // Зазор закрыт: один цикл = все подписки.
-  //
-  // Дедупликация: если у клиента случайно есть И `Client.autoRenewEnabled=true` И
-  // `Subscription[0].autoRenewEnabled=true` (legacy backfill), defensive-фильтр в Client-цикле
-  // ниже пропустит primary через `existsPrimaryWithAutoRenew` чтобы не списать дважды.
+  // In multi mode every enabled subscription is eligible. In single mode the
+  // canonical primary is the only renewal source of truth.
   const secondaries = await prisma.subscription.findMany({
     where: {
       autoRenewEnabled: true,
+      ...(multiSubscriptionsEnabled ? {} : { subscriptionIndex: 0 }),
       deletionRequestedAt: null,
       remnawaveUuid: { not: null },
       // тариф подписки мог быть удалён (FK SetNull → tariffId=null). Раньше такие
@@ -820,26 +819,12 @@ async function processSecondaryAutoRenewals(): Promise<void> {
         orderBy: { paidAt: "desc" },
       });
       if (recentYkPayment) {
+        if (recentYkPayment.subscriptionId === sec.id) {
+          console.log(`[auto-renew/sec] Skipping already activated YooKassa payment ${recentYkPayment.id} for sec ${sec.id}.`);
+          continue;
+        }
         console.log(`[auto-renew/sec] Found recent YK autopay ${recentYkPayment.id} for sec ${sec.id}, retrying activation only.`);
-        const { extendSecondarySubscription } = await import("../tariff/tariff-activation.service.js");
-        const retryResult = await extendSecondarySubscription(
-          sec.id,
-          sec.owner.id,
-          {
-            id: tariffForRenewal.id,
-            durationDays: tariffForRenewal.durationDays,
-            trafficLimitBytes: tariffForRenewal.trafficLimitBytes,
-            deviceLimit: tariffForRenewal.deviceLimit,
-            includedDevices: tariffForRenewal.includedDevices ?? undefined,
-            pricePerExtraDevice: tariffForRenewal.pricePerExtraDevice ?? 0,
-            maxExtraDevices: tariffForRenewal.maxExtraDevices ?? 0,
-            internalSquadUuids: tariffForRenewal.internalSquadUuids,
-            trafficResetMode: tariffForRenewal.trafficResetMode ?? undefined,
-            price,
-          },
-          undefined,
-          0,
-        );
+        const retryResult = await activateTariffByPaymentId(recentYkPayment.id);
         if (retryResult.ok) {
           console.log(`[auto-renew/sec] sec ${sec.id} re-activated from recent YK payment ${recentYkPayment.id}.`);
         } else {
@@ -1009,26 +994,18 @@ async function processSecondaryAutoRenewals(): Promise<void> {
         return null;
       });
 
+      if (!payment) {
+        if (paidViaBalance > 0) {
+          await prisma.client.update({
+            where: { id: sec.owner.id },
+            data: { balance: { increment: paidViaBalance } },
+          }).catch(() => {});
+        }
+        continue;
+      }
+
       // 6. Активация подписки.
-      const { extendSecondarySubscription } = await import("../tariff/tariff-activation.service.js");
-      const result = await extendSecondarySubscription(
-        sec.id,
-        sec.owner.id,
-        {
-          id: tariffForRenewal.id,
-          durationDays: tariffForRenewal.durationDays,
-          trafficLimitBytes: tariffForRenewal.trafficLimitBytes,
-          deviceLimit: tariffForRenewal.deviceLimit,
-          includedDevices: tariffForRenewal.includedDevices ?? undefined,
-          pricePerExtraDevice: tariffForRenewal.pricePerExtraDevice ?? 0,
-          maxExtraDevices: tariffForRenewal.maxExtraDevices ?? 0,
-          internalSquadUuids: tariffForRenewal.internalSquadUuids,
-          trafficResetMode: tariffForRenewal.trafficResetMode ?? undefined,
-          price,
-        },
-        undefined,
-        0,
-      );
+      const result = await activateTariffByPaymentId(payment.id);
 
       if (!result.ok) {
         // Activation fail.
