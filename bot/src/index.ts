@@ -162,9 +162,9 @@ const composer = new Composer<Context>();
 const botErrorContext = new AsyncLocalStorage<Context>();
 composer.use((ctx, next) => botErrorContext.run(ctx, next));
 const syncTelegramUsername = createTelegramUsernameSync(api.syncTelegramUsername);
-composer.use(async (ctx, next) => {
+composer.use((ctx, next) => {
   if (ctx.from?.username) {
-    await syncTelegramUsername(ctx.from.id, ctx.from.username).catch(() => {});
+    void syncTelegramUsername(ctx.from.id, ctx.from.username).catch(() => {});
   }
   return next();
 });
