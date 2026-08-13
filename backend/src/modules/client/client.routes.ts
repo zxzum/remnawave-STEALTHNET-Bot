@@ -76,6 +76,7 @@ import {
   completeEmailRegistration,
   isClientEmailUniqueViolation,
 } from "./email-registration-completion.js";
+import { changedTelegramUsername } from "./telegram-username-sync.js";
 
 /** Извлекает реальный IP клиента (с учётом trust proxy). */
 function getRequestIp(req: Request): string | null {
@@ -876,6 +877,14 @@ clientAuthRouter.post("/telegram-miniapp", async (req, res) => {
   });
   if (existing) {
     if (existing.isBlocked) return res.status(403).json({ message: "Аккаунт заблокирован" });
+    const changedUsername = changedTelegramUsername(existing.telegramUsername, telegramUsername);
+    if (changedUsername) {
+      await prisma.client.update({
+        where: { id: existing.id },
+        data: { telegramUsername: changedUsername },
+      });
+      existing.telegramUsername = changedUsername;
+    }
     // см. /telegram-login-check — тот же триггер.
     // passwordHash из условия убран: у бот-юзеров может быть dummy-пароль.
     if (existing.onboardingCompleted && !existing.email) {
@@ -7904,6 +7913,32 @@ const linkTelegramFromBotSchema = z.object({
   confirm: z.boolean().optional(),
   mergeChoice: z.enum(["smart", "keep_both", "to_primary", "to_absorbed"]).optional(),
 });
+
+const syncTelegramUsernameSchema = z.object({
+  telegramId: z.number().int(),
+  telegramUsername: z.string().trim().min(1).max(32),
+});
+publicConfigRouter.post("/sync-telegram-username", async (req, res) => {
+  const token = extractBotTokenFromRequest(req as Parameters<typeof extractBotTokenFromRequest>[0]);
+  if (!token || !(await getBotByToken(token))) {
+    return res.status(401).json({ message: "Недействительный токен бота" });
+  }
+  const body = syncTelegramUsernameSchema.safeParse(req.body);
+  if (!body.success) return res.status(400).json({ message: "Проверьте данные Telegram" });
+  const { telegramId, telegramUsername } = body.data;
+  const result = await prisma.client.updateMany({
+    where: {
+      telegramId: String(telegramId),
+      OR: [
+        { telegramUsername: null },
+        { telegramUsername: { not: telegramUsername } },
+      ],
+    },
+    data: { telegramUsername },
+  });
+  return res.json({ updated: result.count > 0 });
+});
+
 publicConfigRouter.post("/link-telegram-from-bot", async (req, res) => {
   // v5.0.0: токен один (основной BOT_TOKEN).
   const headerToken = typeof req.headers["x-telegram-bot-token"] === "string" ? req.headers["x-telegram-bot-token"].trim() : "";
