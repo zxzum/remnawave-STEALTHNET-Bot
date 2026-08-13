@@ -80,6 +80,37 @@ export async function remnaFetch<T>(
 
 export type Result<T> = { data?: T; error?: string; status: number };
 
+function isNumericUserId(value: string): boolean {
+  return /^(?:0|[1-9]\d*)$/.test(value) && Number.isSafeInteger(Number(value));
+}
+
+function userIdValue(value: string): number | string {
+  return isNumericUserId(value) ? Number(value) : value;
+}
+
+function userIdsBody(ids: string[], extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return ids.every(isNumericUserId)
+    ? { ...extra, userIds: ids.map(Number) }
+    : { ...extra, uuids: ids };
+}
+
+function userIdentifierBody(body: Record<string, unknown>): Record<string, unknown> {
+  if (typeof body.uuid !== "string" || !isNumericUserId(body.uuid)) return body;
+  const { uuid, ...rest } = body;
+  return { ...rest, id: Number(uuid) };
+}
+
+function hwidBody(userUuid: string, hwid?: string): Record<string, unknown> {
+  return isNumericUserId(userUuid)
+    ? { userId: Number(userUuid), ...(hwid === undefined ? {} : { hwid }) }
+    : { userUuid, ...(hwid === undefined ? {} : { hwid }) };
+}
+
+async function remnaGetUserFromStream(field: "email" | "telegramId", value: string) {
+  const query = new URLSearchParams({ size: "1", [field]: value });
+  return remnaFetch<unknown>(`/api/users/stream?${query}`);
+}
+
 /** GET /api/users — пагинация Remna: size и start (offset) */
 export function remnaGetUsers(params?: { page?: number; limit?: number; start?: number; size?: number }) {
   const search = new URLSearchParams();
@@ -113,30 +144,45 @@ export function remnaGetUserByUsername(username: string) {
   return remnaFetch<unknown>(`/api/users/by-username/${encoded}`);
 }
 
-/** GET /api/users/by-email/{email} — может вернуть массив или объект с users */
-export function remnaGetUserByEmail(email: string) {
+/** GET /api/users/by-email/{email}; API 3.x uses /api/users/stream instead. */
+export async function remnaGetUserByEmail(email: string) {
   const encoded = encodeURIComponent(email);
-  return remnaFetch<unknown>(`/api/users/by-email/${encoded}`);
+  const legacy = await remnaFetch<unknown>(`/api/users/by-email/${encoded}`);
+  return legacy.status === 404 ? remnaGetUserFromStream("email", email) : legacy;
 }
 
-/** GET /api/users/by-telegram-id/{telegramId} */
-export function remnaGetUserByTelegramId(telegramId: string) {
+/** GET /api/users/by-telegram-id/{telegramId}; API 3.x uses /api/users/stream instead. */
+export async function remnaGetUserByTelegramId(telegramId: string) {
   const encoded = encodeURIComponent(telegramId);
-  return remnaFetch<unknown>(`/api/users/by-telegram-id/${encoded}`);
+  const legacy = await remnaFetch<unknown>(`/api/users/by-telegram-id/${encoded}`);
+  return legacy.status === 404 ? remnaGetUserFromStream("telegramId", telegramId) : legacy;
 }
 
-/** Извлечь UUID из ответа Remna (create/get: объект, response, data, users[0]). */
+/** Извлечь UUID в API 2.x или numeric id в API 3.x (create/get/stream). */
 export function extractRemnaUuid(d: unknown): string | null {
   if (!d || typeof d !== "object") return null;
   const o = d as Record<string, unknown>;
-  if (typeof o.uuid === "string") return o.uuid;
-  const resp = (o.response ?? o.data) as Record<string, unknown> | undefined;
-  if (resp && typeof resp.uuid === "string") return resp.uuid;
-  const users = Array.isArray(o.users) ? o.users : Array.isArray(o.response) ? o.response : Array.isArray(o.data) ? o.data : null;
-  const first = users?.[0];
-  return first && typeof first === "object" && first !== null && typeof (first as Record<string, unknown>).uuid === "string"
-    ? (first as Record<string, unknown>).uuid as string
-    : null;
+  const read = (value: unknown): string | null => {
+    if (!value || typeof value !== "object") return null;
+    const item = value as Record<string, unknown>;
+    if (typeof item.uuid === "string") return item.uuid;
+    if (typeof item.id === "number" && Number.isSafeInteger(item.id)) return String(item.id);
+    if (typeof item.id === "string" && isNumericUserId(item.id)) return item.id;
+    return null;
+  };
+  const direct = read(o);
+  if (direct) return direct;
+  const resp = o.response ?? o.data;
+  const responseDirect = read(resp);
+  if (responseDirect) return responseDirect;
+  const users = Array.isArray(o.users)
+    ? o.users
+    : resp && typeof resp === "object" && Array.isArray((resp as Record<string, unknown>).users)
+      ? (resp as Record<string, unknown>).users as unknown[]
+      : Array.isArray(resp)
+        ? resp
+        : null;
+  return read(users?.[0]);
 }
 
 /**
@@ -183,7 +229,7 @@ export function remnaCreateUser(body: Record<string, unknown>) {
 
 /** PATCH /api/users */
 export function remnaUpdateUser(body: Record<string, unknown>) {
-  return remnaFetch<unknown>("/api/users", { method: "PATCH", body: JSON.stringify(body) });
+  return remnaFetch<unknown>("/api/users", { method: "PATCH", body: JSON.stringify(userIdentifierBody(body)) });
 }
 
 /** GET /api/subscriptions */
@@ -357,7 +403,7 @@ export function remnaGetUserHwidDevices(userUuid: string) {
 export function remnaDeleteUserHwidDevice(userUuid: string, hwid: string) {
   return remnaFetch<unknown>("/api/hwid/devices/delete", {
     method: "POST",
-    body: JSON.stringify({ userUuid, hwid }),
+    body: JSON.stringify(hwidBody(userUuid, hwid)),
   });
 }
 
@@ -371,7 +417,7 @@ export function remnaDeleteUserHwidDevice(userUuid: string, hwid: string) {
 export function remnaBulkUpdateUsersSquads(body: { uuids: string[]; activeInternalSquads: string[] }) {
   return remnaFetch<unknown>("/api/users/bulk/update-squads", {
     method: "POST",
-    body: JSON.stringify(body),
+    body: JSON.stringify(userIdsBody(body.uuids, { activeInternalSquads: body.activeInternalSquads })),
   });
 }
 
@@ -379,7 +425,11 @@ export function remnaBulkUpdateUsersSquads(body: { uuids: string[]; activeIntern
 export function remnaAddUsersToInternalSquad(squadUuid: string, body: { userUuids: string[] }) {
   return remnaFetch<unknown>(`/api/internal-squads/${squadUuid}/bulk-actions/add-users`, {
     method: "POST",
-    body: JSON.stringify(body),
+    body: JSON.stringify(
+      body.userUuids.every(isNumericUserId)
+        ? { userIds: body.userUuids.map(Number) }
+        : body,
+    ),
   });
 }
 
@@ -709,9 +759,21 @@ export function remnaGetTorrentStats() {
   return remnaFetch<{ response?: unknown }>("/api/node-plugins/torrent-blocker/stats");
 }
 
-/** POST /api/ip-control/drop-connections — сбросить соединения (по IP/юзеру) */
-export function remnaDropConnections(dropBy: unknown) {
-  return remnaFetch("/api/ip-control/drop-connections", { method: "POST", body: JSON.stringify({ dropBy }) });
+/** POST /api/connections/drop — сбросить соединения (API 3.x; fallback для 2.x). */
+export async function remnaDropConnections(dropBy: unknown) {
+  const dropObject = dropBy && typeof dropBy === "object" ? dropBy as Record<string, unknown> : null;
+  const userUuids = dropObject && Array.isArray(dropObject.userUuids) ? dropObject.userUuids : null;
+  const adaptedDropBy = userUuids && userUuids.every((id): id is string => typeof id === "string" && isNumericUserId(id))
+    ? (() => {
+        const { userUuids: _, ...rest } = dropObject!;
+        return { ...rest, userIds: userUuids.map(Number) };
+      })()
+    : dropBy;
+  const body = { dropBy: adaptedDropBy };
+  const current = await remnaFetch("/api/connections/drop", { method: "POST", body: JSON.stringify(body) });
+  return current.status === 404
+    ? remnaFetch("/api/ip-control/drop-connections", { method: "POST", body: JSON.stringify({ dropBy }) })
+    : current;
 }
 
 /* ═══ API 2.8 — заход 3: hosts-tags / users-bulk / node-plugins ═══ */
@@ -723,19 +785,22 @@ export function remnaGetHostTags() {
 
 /** POST /api/users/bulk/reset-traffic — сброс трафика пачке юзеров */
 export function remnaUsersBulkResetTraffic(uuids: string[]) {
-  return remnaFetch("/api/users/bulk/reset-traffic", { method: "POST", body: JSON.stringify({ uuids }) });
+  return remnaFetch("/api/users/bulk/reset-traffic", { method: "POST", body: JSON.stringify(userIdsBody(uuids)) });
 }
 /** POST /api/users/bulk/revoke-subscription — перевыпуск подписки пачке */
 export function remnaUsersBulkRevoke(uuids: string[]) {
-  return remnaFetch("/api/users/bulk/revoke-subscription", { method: "POST", body: JSON.stringify({ uuids }) });
+  return remnaFetch("/api/users/bulk/revoke-subscription", { method: "POST", body: JSON.stringify(userIdsBody(uuids)) });
 }
 /** POST /api/users/bulk/delete — удаление пачки юзеров из Remna */
 export function remnaUsersBulkDelete(uuids: string[]) {
-  return remnaFetch("/api/users/bulk/delete", { method: "POST", body: JSON.stringify({ uuids }) });
+  return remnaFetch("/api/users/bulk/delete", { method: "POST", body: JSON.stringify(userIdsBody(uuids)) });
 }
 /** POST /api/users/bulk/update-squads — назначить сквады пачке */
 export function remnaUsersBulkUpdateSquads(uuids: string[], activeInternalSquads: string[]) {
-  return remnaFetch("/api/users/bulk/update-squads", { method: "POST", body: JSON.stringify({ uuids, activeInternalSquads }) });
+  return remnaFetch(
+    "/api/users/bulk/update-squads",
+    { method: "POST", body: JSON.stringify(userIdsBody(uuids, { activeInternalSquads })) },
+  );
 }
 
 /** GET /api/node-plugins — список плагинов нод */
@@ -788,11 +853,11 @@ export function remnaGetUserDevices(userUuid: string) {
 }
 /** POST /api/hwid/devices/delete — удалить одно устройство */
 export function remnaDeleteUserDevice(userUuid: string, hwid: string) {
-  return remnaFetch("/api/hwid/devices/delete", { method: "POST", body: JSON.stringify({ userUuid, hwid }) });
+  return remnaFetch("/api/hwid/devices/delete", { method: "POST", body: JSON.stringify(hwidBody(userUuid, hwid)) });
 }
 /** POST /api/hwid/devices/delete-all — сбросить все устройства юзера */
 export function remnaDeleteAllUserDevices(userUuid: string) {
-  return remnaFetch("/api/hwid/devices/delete-all", { method: "POST", body: JSON.stringify({ userUuid }) });
+  return remnaFetch("/api/hwid/devices/delete-all", { method: "POST", body: JSON.stringify(hwidBody(userUuid)) });
 }
 
 /** сквады: доступные ноды + добавить/убрать юзеров */

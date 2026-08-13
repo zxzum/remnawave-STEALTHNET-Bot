@@ -17,14 +17,6 @@
   --color-destructive: hsl(var(--destructive));
   --color-card: hsl(var(--card) / 0.15);
   --color-card-foreground: hsl(var(--card-foreground));
-  /* Акцент stealth-мини-аппа (настраивается из админки через --stealth-accent). */
-  --color-saccent-100: color-mix(in oklab, rgb(var(--stealth-accent)), white 62%);
-  --color-saccent-200: color-mix(in oklab, rgb(var(--stealth-accent)), white 48%);
-  --color-saccent-300: color-mix(in oklab, rgb(var(--stealth-accent)), white 32%);
-  --color-saccent-400: color-mix(in oklab, rgb(var(--stealth-accent)), white 16%);
-  --color-saccent-500: rgb(var(--stealth-accent));
-  --color-saccent-600: color-mix(in oklab, rgb(var(--stealth-accent)), black 12%);
-
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --color-ink-950: #070512;
   --color-ink-900: #0b081a;
@@ -50,8 +42,6 @@
 
 @layer base {
   :root {
-    /* Дефолтный акцент stealth-мини-аппа (RGB-каналы через пробел). Перекрывается в StealthLayout из конфига. */
-    --stealth-accent: 255 35 87;
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
     --card: 0 0% 100%;

@@ -24,6 +24,7 @@ import {
 } from "../notification/telegram-notify.service.js";
 import { recordPromoCodeUsageFromPayment } from "../payment/promo-code-usage.util.js";
 import { auditPaymentClientBotAlignment } from "../payment/payment-webhook-audit.util.js";
+import { isVpnSubscriptionPurchase } from "../trial/trial-purchase-lock.service.js";
 
 function hasExtraOptionInMetadata(metadata: string | null): boolean {
   if (!metadata?.trim()) return false;
@@ -64,10 +65,11 @@ async function ensureTariffActivation(paymentId: string): Promise<void> {
   const claim = await prisma.$transaction(async (tx) => {
     const row = await tx.payment.findUnique({
       where: { id: paymentId },
-      select: { status: true, tariffId: true, proxyTariffId: true, singboxTariffId: true, metadata: true, clientId: true },
+      select: { status: true, provider: true, tariffId: true, proxyTariffId: true, singboxTariffId: true, metadata: true, clientId: true },
     });
     const hasExtra = hasExtraOptionInMetadata(row?.metadata ?? null);
-    if (!row || row.status !== "PAID" || (!row.tariffId && !row.proxyTariffId && !row.singboxTariffId && !hasExtra)) {
+    const hasVpnProduct = row ? isVpnSubscriptionPurchase(row) : false;
+    if (!row || row.status !== "PAID" || (!row.tariffId && !row.proxyTariffId && !row.singboxTariffId && !hasExtra && !hasVpnProduct)) {
       return { claimed: false as const, reason: "not_paid_or_no_tariff" };
     }
 
@@ -270,7 +272,7 @@ async function handle(req: Request, res: Response) {
     }
 
     const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
-    const isTopUp = !payment.tariffId && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
+    const isTopUp = !isVpnSubscriptionPurchase(payment) && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
     if (isTopUp) {
       const changed = await prisma.$transaction(async (tx) => {
         const upd = await tx.payment.updateMany({

@@ -141,6 +141,7 @@ import {
 import { runRule, runAllRules, getEligibleClientIds } from "../auto-broadcast/auto-broadcast.service.js";
 import { testNalogConnection } from "../nalog/nalog.service.js";
 import { adminCreateGiftCode } from "../gift/gift.service.js";
+import { lockTrialAfterSubscription } from "../trial/trial-purchase-lock.service.js";
 import { languageRouter } from "./language.routes.js";
 import { adminGramadsRouter } from "./gramads.routes.js";
 
@@ -2733,6 +2734,8 @@ adminRouter.post("/clients/:id/grant-tariff", async (req, res) => {
     return res.status(502).json({ ok: false, message: "Ошибка применения лимита трафика" });
   }
 
+  await lockTrialAfterSubscription(clientId);
+
   // T-unify: привязываем Payment к созданной Subscription (для аналитики + auto-renew).
   if (paymentId) {
     await prisma.payment.update({
@@ -2879,6 +2882,8 @@ adminRouter.post("/subscriptions/:subId/grant-extend", asyncRoute(async (req, re
     return res.status(result.status >= 400 ? result.status : 500).json({ ok: false, message: result.error });
   }
 
+  await lockTrialAfterSubscription(sub.ownerId);
+
   await logAdmin(req, "subscription.grant_extend", { type: "subscription", id: sub.id }, {
     tariffId: tariff.id,
     days: effectiveDays,
@@ -2958,6 +2963,7 @@ adminRouter.post("/subscriptions/:subId/convert-trial", asyncRoute(async (req, r
   }, selectedOption, undefined, false, true); // convertMode=true: бесплатный переход с trial
 
   if (!result.ok) return res.status(result.status >= 400 ? result.status : 500).json({ ok: false, message: result.error });
+  await lockTrialAfterSubscription(sub.ownerId);
   await logAdmin(req, "subscription.convert_trial", { type: "subscription", id: sub.id }, {
     tariffId: tariff.id,
     days: effectiveDays,
@@ -3048,6 +3054,8 @@ adminRouter.post("/clients/:id/attach-remna-subscription", asyncRoute(async (req
       expireAt,
     },
   });
+
+  await lockTrialAfterSubscription(clientId);
 
   // Best-effort: привязываем TG/email клиента к Remna-юзеру (как при покупке).
   if (client.telegramId?.trim() || client.email?.trim()) {
@@ -3326,8 +3334,6 @@ const updateSettingsSchema = z.object({
   logo: z.string().max(5_500_000).nullable().optional(),
   logoBot: z.string().max(5_500_000).nullable().optional(),
   favicon: z.string().max(5_500_000).nullable().optional(),
-  cabinetDesign: z.enum(["classic", "stealth"]).optional(),
-  cabinetDesignApplyInBrowser: z.boolean().optional(),
   remnaClientUrl: z.string().max(2000).nullable().optional(),
   smtpHost: z.string().max(255).nullable().optional(),
   smtpPort: z.number().int().min(1).max(65535).optional(),
@@ -3469,8 +3475,6 @@ const updateSettingsSchema = z.object({
   onboardingEmailRequired: z.boolean().optional(),
   onboarding2faEnabled: z.boolean().optional(),
   passwordResetEnabled: z.boolean().optional(),
-  stealthAccent: z.string().max(20).nullable().optional(),
-  stealthHeroImage: z.string().max(8_000_000).nullable().optional(),
   multiSubscriptionsEnabled: z.boolean().optional(),
   // заявки на вывод реф. баланса: вкл/выкл + мин. сумма.
   withdrawalsEnabled: z.boolean().optional(),
@@ -3780,21 +3784,6 @@ adminRouter.patch("/settings", async (req, res) => {
     await prisma.systemSetting.upsert({
       where: { key: "favicon" },
       create: { key: "favicon", value: val },
-      update: { value: val },
-    });
-  }
-  if (updates.cabinetDesign !== undefined) {
-    await prisma.systemSetting.upsert({
-      where: { key: "cabinet_design" },
-      create: { key: "cabinet_design", value: updates.cabinetDesign },
-      update: { value: updates.cabinetDesign },
-    });
-  }
-  if (updates.cabinetDesignApplyInBrowser !== undefined) {
-    const val = updates.cabinetDesignApplyInBrowser ? "true" : "false";
-    await prisma.systemSetting.upsert({
-      where: { key: "cabinet_design_apply_in_browser" },
-      create: { key: "cabinet_design_apply_in_browser", value: val },
       update: { value: val },
     });
   }
@@ -4339,22 +4328,6 @@ adminRouter.patch("/settings", async (req, res) => {
     await prisma.systemSetting.upsert({
       where: { key: "onboarding_2fa_enabled" },
       create: { key: "onboarding_2fa_enabled", value: val },
-      update: { value: val },
-    });
-  }
-  if (updates.stealthAccent !== undefined) {
-    const val = updates.stealthAccent ?? "";
-    await prisma.systemSetting.upsert({
-      where: { key: "stealth_accent" },
-      create: { key: "stealth_accent", value: val },
-      update: { value: val },
-    });
-  }
-  if (updates.stealthHeroImage !== undefined) {
-    const val = updates.stealthHeroImage ?? "";
-    await prisma.systemSetting.upsert({
-      where: { key: "stealth_hero_image" },
-      create: { key: "stealth_hero_image", value: val },
       update: { value: val },
     });
   }

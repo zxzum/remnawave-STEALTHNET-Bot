@@ -27,6 +27,7 @@ import { distributeReferralRewards } from "../referral/referral.service.js";
 import { notifyBalanceToppedUp, notifyTariffActivated, notifyProxySlotsCreated, notifySingboxSlotsCreated } from "../notification/telegram-notify.service.js";
 import { recordPromoCodeUsageFromPayment } from "../payment/promo-code-usage.util.js";
 import { auditPaymentClientBotAlignment } from "../payment/payment-webhook-audit.util.js";
+import { isVpnSubscriptionPurchase } from "../trial/trial-purchase-lock.service.js";
 
 export const yoomoneyWebhooksRouter = Router();
 
@@ -208,7 +209,7 @@ yoomoneyWebhooksRouter.post("/yoomoney", async (req, res) => {
     console.log("[YooMoney Webhook] Payment already processed", { paymentId: payment.id });
     return res.status(200).send("OK");
   }
-  const isTopUp = !payment.tariffId && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
+  const isTopUp = !isVpnSubscriptionPurchase(payment) && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
 
   if (isTopUp) {
     await prisma.$transaction([

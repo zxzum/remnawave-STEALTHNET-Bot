@@ -21,7 +21,7 @@ esac
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
-if [[ ! -d "$PROJECT_DIR/.git" ]]; then
+if ! git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   printf 'Error: %s is not a Git working tree.\n' "$PROJECT_DIR" >&2
   exit 1
 fi

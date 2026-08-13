@@ -16,8 +16,8 @@ test("email linking applies the same blocklist validation as email registration"
 });
 
 test("profile uses direct linking when email verification is unavailable or disabled", () => {
-  const profile = readFileSync(new URL("../../../../frontend/src/pages/cabinet/client-profile.tsx", import.meta.url), "utf8");
-  assert.match(profile, /smtpConfigured && !c\.skipEmailVerification/);
+  const profile = readFileSync(new URL("../../../../frontend/src/cabinet/pages/Profile.tsx", import.meta.url), "utf8");
+  assert.match(profile, /config\?\.skipEmailVerification \|\| !config\?\.smtpConfigured/);
   assert.match(profile, /api\.clientLinkEmailDirect/);
   assert.match(profile, /api\.clientLinkEmailRequest/);
 });

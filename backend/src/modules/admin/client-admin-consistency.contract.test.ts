@@ -4,8 +4,9 @@ import test from "node:test";
 
 const adminUrl = new URL("./admin.routes.ts", import.meta.url);
 const clientsUrl = new URL("../../../../frontend/src/pages/clients.tsx", import.meta.url);
-const tariffsUrl = new URL("../../../../frontend/src/pages/cabinet/client-tariffs.tsx", import.meta.url);
-const onboardingUrl = new URL("../../../../frontend/src/pages/cabinet/client-onboarding.tsx", import.meta.url);
+const tariffModelUrl = new URL("../../../../frontend/src/cabinet/model.ts", import.meta.url);
+const tariffsUrl = new URL("../../../../frontend/src/cabinet/pages/Tariffs.tsx", import.meta.url);
+const onboardingUrl = new URL("../../../../frontend/src/cabinet/pages/Auth.tsx", import.meta.url);
 const settingsUrl = new URL("../../../../frontend/src/pages/settings.tsx", import.meta.url);
 const trialsUrl = new URL("../../../../frontend/src/pages/trials.tsx", import.meta.url);
 
@@ -35,6 +36,35 @@ test("client monitoring and trial conversion routes are present", async () => {
   assert.match(source, /convertMode=true/);
 });
 
+test("admin subscription grants permanently consume the client's trial", async () => {
+  const source = await readFile(adminUrl, "utf8");
+  assert.match(source, /lockTrialAfterSubscription/);
+
+  const grantTariff = source.slice(
+    source.indexOf('adminRouter.post("/clients/:id/grant-tariff"'),
+    source.indexOf("const grantExtendSchema"),
+  );
+  assert.match(grantTariff, /lockTrialAfterSubscription\(clientId\)/);
+
+  const grantExtend = source.slice(
+    source.indexOf('adminRouter.post("/subscriptions/:subId/grant-extend"'),
+    source.indexOf("const convertTrialSchema"),
+  );
+  assert.match(grantExtend, /lockTrialAfterSubscription\(sub\.ownerId\)/);
+
+  const convertTrial = source.slice(
+    source.indexOf('adminRouter.post("/subscriptions/:subId/convert-trial"'),
+    source.indexOf("const attachRemnaSchema"),
+  );
+  assert.match(convertTrial, /lockTrialAfterSubscription\(sub\.ownerId\)/);
+
+  const attachRemna = source.slice(
+    source.indexOf('adminRouter.post("/clients/:id/attach-remna-subscription"'),
+    source.indexOf("const squadActionSchema"),
+  );
+  assert.match(attachRemna, /lockTrialAfterSubscription\(clientId\)/);
+});
+
 test("empty clients keep all tabs and never render @null", async () => {
   const source = await readFile(clientsUrl, "utf8");
   assert.doesNotMatch(source, /\(editing\.remnawaveUuid \|\| secondarySubs\.length > 0\) &&/);
@@ -50,9 +80,9 @@ test("empty clients keep all tabs and never render @null", async () => {
 });
 
 test("cabinet tariff cards distinguish unlimited VPN from local whitelist quota and use included devices", async () => {
-  const source = await readFile(tariffsUrl, "utf8");
+  const source = `${await readFile(tariffModelUrl, "utf8")}\n${await readFile(tariffsUrl, "utf8")}`;
   assert.match(source, /trafficLimitMode\?: "REMNAWAVE" \| "LOCAL_SQUAD"/);
-  assert.match(source, /Безлимит трафика/);
+  assert.match(source, /"Безлимит"/);
   assert.match(source, /Белые списки/);
   assert.match(source, /tariff\.includedDevices/);
   assert.doesNotMatch(source, /tf\.deviceLimit != null && tf\.deviceLimit > 0/);
