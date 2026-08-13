@@ -55,3 +55,10 @@ Remaining Task 2: trial routes and their canonical UUID/link reuse are intention
 - `/payments/balance` refunds the debit and marks the Payment `FAILED` when canonical activation throws. The selected `replaceTrialSubId` is retained in `tariffMeta`.
 - Verification: focused canonical/balance/tariff suites — 21 passed; `npx tsc --noEmit --pretty false` — clean; `git diff --check` — clean.
 - Commit: `2c61a6d fix: make canonical activation retries idempotent`.
+
+## Post-review rollback-hole fix
+
+- Trial cleanup after a successful Remnawave extend/conversion is now best-effort and logged; cleanup errors cannot roll back the persisted activation marker or make balance payment activation fail.
+- Single-mode canonical lookup now reuses `selectCanonicalSubscription`: active eligible rows win over expired rows, then index `0` wins among equally active records, with deterministic expiry fallback. This preserves an active secondary UUID when a stale index-zero row remains.
+- Verification: focused canonical/balance/tariff suites — 23 passed; `npx tsc --noEmit --pretty false` — clean; `git diff --check` — clean.
+- Commit: `1c45424 fix: preserve activation marker after trial cleanup`.
