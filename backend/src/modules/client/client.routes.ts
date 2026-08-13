@@ -35,7 +35,7 @@ import { isSmtpConfigured, isMailConfigured, mailConfigFromSystem, sendEmail } f
 import { renderEmailTemplate } from "../email-templates/email-templates.service.js";
 import { signClientPasswordResetToken, verifyClientPasswordResetToken } from "../auth/auth.service.js";
 import { createPlategaTransaction, isPlategaConfigured } from "../platega/platega.service.js";
-import { activateTariffByPaymentId, findConvertibleSubscription } from "../tariff/tariff-activation.service.js";
+import { activateTariffByPaymentId, findConvertibleSubscription, resolveCanonicalSubscription, withClientSubscriptionLock } from "../tariff/tariff-activation.service.js";
 import { upsertSubscriptionByRemnaUuid } from "../subscription/subscription.helpers.js";
 import { quoteConvertedDays } from "../subscription/subscription-change.policy.js";
 import { extractRemnaSubscriptionUrl } from "../subscription/subscription-url.js";
@@ -2336,26 +2336,36 @@ clientRouter.post("/trial", async (req, res) => {
     return res.status(503).json({ message: "Сервис временно недоступен" });
   }
 
-  // single-режим (мульти-подписки ВЫКЛ): у клиента может быть только ОДНА подписка.
-  // Если подписка (не подарок) уже есть — триал вторым не выдаём. В мульти-режиме
-  // (по умолчанию) — как раньше, триал доступен параллельно.
-  if (config.multiSubscriptionsEnabled === false) {
-    const existingSubs = await prisma.subscription.count({
-      where: { ownerId: client.id, purchasedAsGift: false, giftStatus: null, deletionRequestedAt: null },
-    });
-    if (existingSubs > 0) {
-      return res.status(400).json({ message: "Бесплатный тест недоступен — у вас уже есть подписка." });
+  return withClientSubscriptionLock(client.id, async () => {
+  // Single-mode reuses the active canonical row/UUID instead of creating a
+  // second Remnawave user. Multi-mode keeps the legacy parallel-trial flow.
+  const singleMode = config.multiSubscriptionsEnabled === false;
+  const canonical = singleMode ? await resolveCanonicalSubscription(client.id) : null;
+  const canonicalId = canonical?.id ?? null;
+  const saveTrialSubscription = async (uuid: string, expireAt: Date): Promise<void> => {
+    if (canonicalId) {
+      await prisma.subscription.update({
+        where: { id: canonicalId },
+        data: { remnawaveUuid: uuid, expireAt },
+      });
+      return;
     }
-  }
+    await upsertSubscriptionByRemnaUuid(client.id, { remnawaveUuid: uuid, expireAt }).catch((e) => {
+      console.error("[trial] upsertSubscriptionByRemnaUuid failed:", e);
+    });
+  };
 
   const trafficLimitBytes = config.trialTrafficLimitBytes ?? 0;
   const hwidDeviceLimit = config.trialDeviceLimit ?? null;
 
-  let workingUuid = client.remnawaveUuid;
+  let workingUuid = singleMode ? (canonical?.remnawaveUuid ?? null) : client.remnawaveUuid;
 
   if (workingUuid) {
     const checkRes = await remnaGetUser(workingUuid);
     if (checkRes.error || !checkRes.data) {
+      if (singleMode && canonical?.remnawaveUuid) {
+        return res.status(checkRes.status >= 400 ? checkRes.status : 502).json({ message: checkRes.error ?? "Пользователь не найден" });
+      }
       console.warn(`[trial] Remna user ${workingUuid} not found (status ${checkRes.status}), will re-create`);
       workingUuid = null;
       await prisma.client.update({ where: { id: client.id }, data: { remnawaveUuid: null } });
@@ -2422,17 +2432,11 @@ clientRouter.post("/trial", async (req, res) => {
       return res.status(updateRes.status >= 400 ? updateRes.status : 500).json({ message: updateRes.error });
     }
 
-    // материализуем подписку для триала в ПЕРВЫЙ СВОБОДНЫЙ
-    // слот (0, 1, 2…). Если триал переактивируется на том же Remna-юзере — UPDATE, не дубль.
-    await upsertSubscriptionByRemnaUuid(client.id, {
-      remnawaveUuid: workingUuid,
-      expireAt: new Date(expireAt),
-      // Триал не привязан к конкретному тарифу — tariffId=null.
-      // trialId здесь null (триал из system config, не из таблицы Trial).
-    }).catch((e) => {
-      console.error("[trial] upsertSubscriptionByRemnaUuid failed:", e);
-      return null;
-    });
+    // Материализуем в ту же каноническую запись, сохраняя UUID/короткую ссылку.
+    await saveTrialSubscription(workingUuid, new Date(expireAt));
+    if (singleMode && client.remnawaveUuid !== workingUuid) {
+      await prisma.client.update({ where: { id: client.id }, data: { remnawaveUuid: workingUuid } });
+    }
   } else {
     let existingUuid: string | null = null;
     let currentExpireAt: Date | null = null;
@@ -2503,14 +2507,8 @@ clientRouter.post("/trial", async (req, res) => {
       data: { remnawaveUuid: existingUuid }, // trialUsed already set by atomic guard
     });
 
-    // подписка для триала в первый свободный слот.
-    await upsertSubscriptionByRemnaUuid(client.id, {
-      remnawaveUuid: existingUuid,
-      expireAt: new Date(expireAt),
-    }).catch((e) => {
-      console.error("[trial] upsertSubscriptionByRemnaUuid failed:", e);
-      return null;
-    });
+    // Приземляем новый UUID в ту же каноническую строку, если она была без UUID.
+    await saveTrialSubscription(existingUuid, new Date(expireAt));
 
     // уведомление админам в TG-группу: активирован legacy-триал (best-effort).
     import("../notification/telegram-notify.service.js")
@@ -2530,6 +2528,7 @@ clientRouter.post("/trial", async (req, res) => {
   // Отдельный write был чисто легаси-страховкой.
   const updated = await prisma.client.findUnique({ where: { id: client.id }, select: { id: true, email: true, telegramId: true, telegramUsername: true, preferredLang: true, preferredCurrency: true, balance: true, referralCode: true, remnawaveUuid: true, trialUsed: true, isBlocked: true, autoRenewEnabled: true, autoRenewTariffId: true, createdAt: true, onboardingCompleted: true } });
   return res.json({ message: "Бесплатный тест активирован", client: updated ? toClientShape(updated) : null });
+  });
 });
 
 /**
@@ -2592,143 +2591,222 @@ clientRouter.get("/trials/available", async (req, res) => {
 clientRouter.post("/trials/:id/activate", async (req, res) => {
   const trialId = req.params.id;
   const clientId = (req as unknown as { clientId: string }).clientId;
-  const client = (req as unknown as { client?: { trialUsed?: boolean } }).client;
-  if (await isClientTrialBlocked(clientId, Boolean(client?.trialUsed))) {
-    return res.status(400).json({ message: "Пробный период недоступен — у вас уже была платная подписка." });
-  }
   if (!isRemnaConfigured()) return res.status(503).json({ message: "Сервис временно недоступен" });
 
-  const trial = await prisma.trial.findUnique({
-    where: { id: trialId },
-    include: { tariff: true },
-  });
-  if (!trial || !trial.enabled) {
-    return res.status(404).json({ message: "Триал не найден или отключён" });
-  }
-
-  // Проверяем что клиент ещё не активировал этот триал (атомарно через UNIQUE).
-  const existingUsage = await prisma.clientTrialUsage.findUnique({
-    where: { clientId_trialId: { clientId, trialId } },
-  });
-  if (existingUsage) {
-    return res.status(409).json({ message: "Этот пробный период уже активирован" });
-  }
-
-  // single-режим (мульти-подписки ВЫКЛ): одна подписка на клиента. Если подписка
-  // (не подарок) уже есть — standalone-пробный вторым не выдаём.
-  const cfgTrialStandalone = await getSystemConfig().catch(() => null);
-  if ((cfgTrialStandalone as { multiSubscriptionsEnabled?: boolean } | null)?.multiSubscriptionsEnabled === false) {
-    const existingSubsT = await prisma.subscription.count({ where: { ownerId: clientId, purchasedAsGift: false, giftStatus: null, deletionRequestedAt: null } });
-    if (existingSubsT > 0) {
-      return res.status(400).json({ message: "Пробный период недоступен — у вас уже есть подписка." });
+  return withClientSubscriptionLock(clientId, async () => {
+    const requestClient = (req as unknown as { client?: { trialUsed?: boolean } }).client;
+    const client = await prisma.client.findUnique({
+      where: { id: clientId },
+      select: { id: true, remnawaveUuid: true, trialUsed: true, email: true, telegramId: true, telegramUsername: true },
+    });
+    if (await isClientTrialBlocked(clientId, Boolean(client?.trialUsed ?? requestClient?.trialUsed))) {
+      return res.status(400).json({ message: "Пробный период недоступен — у вас уже была платная подписка." });
     }
-  }
 
-  if (await isClientTrialBlocked(clientId, false)) {
-    return res.status(400).json({ message: "Пробный период недоступен — у вас уже была платная подписка." });
-  }
+    const trial = await prisma.trial.findUnique({
+      where: { id: trialId },
+      include: { tariff: true },
+    });
+    if (!trial || !trial.enabled) {
+      return res.status(404).json({ message: "Триал не найден или отключён" });
+    }
 
-  // Создаём secondary subscription. Источник параметров —
-  // ЛИБО тариф триала (как раньше), ЛИБО сам standalone-триал (сквады/лимиты
-  // заданы прямо в триале, tariffId=null — такой «псевдо-тариф» в каталоге не виден).
-  const trialTrafficLimit = trial.trafficLimitBytes ?? trial.tariff?.trafficLimitBytes ?? null;
-  let trialSquads: string[] = trial.tariff?.internalSquadUuids ?? [];
-  if (!trial.tariffId) {
+    // Проверяем что клиент ещё не активировал этот триал (атомарно через UNIQUE).
+    const existingUsage = await prisma.clientTrialUsage.findUnique({
+      where: { clientId_trialId: { clientId, trialId } },
+    });
+    if (existingUsage) {
+      return res.status(409).json({ message: "Этот пробный период уже активирован" });
+    }
+
+    const cfgTrialStandalone = await getSystemConfig().catch(() => null);
+    const singleMode = (cfgTrialStandalone as { multiSubscriptionsEnabled?: boolean } | null)?.multiSubscriptionsEnabled === false;
+    const canonical = singleMode ? await resolveCanonicalSubscription(clientId) : null;
+
+    if (await isClientTrialBlocked(clientId, false)) {
+      return res.status(400).json({ message: "Пробный период недоступен — у вас уже была платная подписка." });
+    }
+
+    // Источник параметров — тариф триала или standalone-конфигурация.
+    const trialTrafficLimit = trial.trafficLimitBytes ?? trial.tariff?.trafficLimitBytes ?? null;
+    let trialSquads: string[] = trial.tariff?.internalSquadUuids ?? [];
+    if (!trial.tariffId) {
+      try {
+        const parsed = trial.squadUuids ? JSON.parse(trial.squadUuids) as unknown : [];
+        trialSquads = Array.isArray(parsed) ? parsed.map((x) => String(x)) : [];
+      } catch { trialSquads = []; }
+      if (trialSquads.length === 0) {
+        return res.status(503).json({ message: "Триал настроен некорректно (нет сквадов)" });
+      }
+    }
     try {
-      const parsed = trial.squadUuids ? JSON.parse(trial.squadUuids) as unknown : [];
-      trialSquads = Array.isArray(parsed) ? parsed.map((x) => String(x)) : [];
-    } catch { trialSquads = []; }
-    if (trialSquads.length === 0) {
-      return res.status(503).json({ message: "Триал настроен некорректно (нет сквадов)" });
+      await prisma.clientTrialUsage.create({ data: { clientId, trialId: trial.id } });
+    } catch {
+      return res.status(409).json({ message: "Этот пробный период уже активируется или был активирован" });
     }
-  }
-  try {
-    await prisma.clientTrialUsage.create({ data: { clientId, trialId: trial.id } });
-  } catch {
-    return res.status(409).json({ message: "Этот пробный период уже активируется или был активирован" });
-  }
-  const { createAdditionalSubscription } = await import("../gift/gift.service.js");
-  const subResult = await createAdditionalSubscription(clientId, {
-    id: trial.tariffId ?? undefined,
-    name: trial.name,
-    price: 0,
-    durationDays: trial.durationDays, // ← длительность из триала, не тарифа
-    trafficLimitBytes: trial.trafficLimitMode === "LOCAL_SQUAD" ? 0n : trialTrafficLimit,
-    deviceLimit: trial.deviceLimit ?? trial.tariff?.deviceLimit ?? null,
-    includedDevices: trial.tariff?.includedDevices ?? trial.deviceLimit ?? undefined,
-    internalSquadUuids: trialSquads,
-    trafficResetMode: trial.tariff?.trafficResetMode ?? undefined,
-  }, { skipConfigCheck: true, extraDevices: 0 });
-  if (!subResult.ok) {
-    await prisma.clientTrialUsage.deleteMany({ where: { clientId, trialId: trial.id, subscriptionId: null } }).catch(() => {});
-    return res.status(subResult.status).json({ message: subResult.error });
-  }
 
-  // Помечаем sub как «триал» (для отображения в боте + кнопки «Конвертировать»).
-  await prisma.subscription.update({
-    where: { id: subResult.data.subscriptionId },
-    data: { trialId: trial.id },
-  });
-  if (await isClientTrialBlocked(clientId, false)) {
-    const { deleteSingleSubscription } = await import("../subscription/single-subscription-lifecycle.service.js");
-    await deleteSingleSubscription(subResult.data.subscriptionId).catch(() => {});
-    await prisma.clientTrialUsage.deleteMany({
-      where: { clientId, trialId: trial.id, subscriptionId: subResult.data.subscriptionId },
-    }).catch(() => {});
-    return res.status(409).json({ message: "Пробный период недоступен — у вас уже была платная подписка." });
-  }
-  await applyTrafficEntitlement(subResult.data.subscriptionId, {
-    tariffId: trial.tariffId,
-    mode: trial.trafficLimitMode,
-    internalSquadUuids: trialSquads,
-    meteredSquadUuid: trial.meteredSquadUuid,
-    trafficLimitBytes: trialTrafficLimit,
-  }, "TRIAL_ACTIVATION");
-  // если триал стал primary (subscriptionIndex=0) и у клиента
-  // ещё пустой Client.remnawaveUuid — синкаем туда remnawaveUuid подписки для legacy-чтения.
-  if (subResult.data.subscriptionIndex === 0) {
-    const createdSubForSync = await prisma.subscription.findUnique({
+    // В single-режиме каноническая запись и её UUID переиспользуются. Если миграция
+    // ещё не материализовала запись, но Client.remnawaveUuid уже есть — материализуем
+    // её в index=0 без создания нового Remnawave пользователя.
+    const legacyUuid = singleMode && !canonical ? client?.remnawaveUuid ?? null : null;
+    if (singleMode && (canonical || legacyUuid)) {
+      let subscriptionId = canonical?.id ?? null;
+      let workingUuid = canonical?.remnawaveUuid ?? legacyUuid;
+      if (!subscriptionId && workingUuid) {
+        subscriptionId = (await upsertSubscriptionByRemnaUuid(clientId, { remnawaveUuid: workingUuid })).id;
+      }
+
+      let currentExpireAt: Date | null = null;
+      if (workingUuid) {
+        const userRes = await remnaGetUser(workingUuid);
+        if (userRes.error || !userRes.data) {
+          await prisma.clientTrialUsage.deleteMany({ where: { clientId, trialId: trial.id, subscriptionId: null } }).catch(() => {});
+          return res.status(userRes.status >= 400 ? userRes.status : 502).json({ message: userRes.error ?? "Пользователь не найден" });
+        }
+        currentExpireAt = extractCurrentExpireAt(userRes.data);
+      }
+
+      const expireAt = calculateExpireAt(currentExpireAt, trial.durationDays);
+      if (!workingUuid) {
+        const displayUsername = remnaUsernameFromClient({
+          telegramUsername: client?.telegramUsername,
+          telegramId: client?.telegramId,
+          email: client?.email,
+          clientIdFallback: clientId,
+        });
+        const createRes = await remnaCreateUser({
+          username: displayUsername,
+          trafficLimitBytes: trial.trafficLimitMode === "LOCAL_SQUAD" ? 0 : Number(trialTrafficLimit ?? 0),
+          trafficLimitStrategy: "NO_RESET",
+          expireAt,
+          hwidDeviceLimit: trial.deviceLimit ?? trial.tariff?.deviceLimit ?? undefined,
+          activeInternalSquads: trialSquads,
+          ...(client?.telegramId?.trim() && { telegramId: parseInt(client.telegramId, 10) }),
+          ...(client?.email?.trim() && { email: client.email.trim() }),
+        });
+        workingUuid = extractRemnaUuid(createRes.data);
+      }
+      if (!workingUuid) {
+        await prisma.clientTrialUsage.deleteMany({ where: { clientId, trialId: trial.id, subscriptionId: null } }).catch(() => {});
+        return res.status(502).json({ message: "Ошибка создания пользователя" });
+      }
+
+      const updateRes = await remnaUpdateUser({
+        uuid: workingUuid,
+        expireAt,
+        trafficLimitBytes: trial.trafficLimitMode === "LOCAL_SQUAD" ? 0 : Number(trialTrafficLimit ?? 0),
+        hwidDeviceLimit: trial.deviceLimit ?? trial.tariff?.deviceLimit ?? null,
+        activeInternalSquads: trialSquads,
+      });
+      if (updateRes.error) {
+        await prisma.clientTrialUsage.deleteMany({ where: { clientId, trialId: trial.id, subscriptionId: null } }).catch(() => {});
+        return res.status(updateRes.status >= 400 ? updateRes.status : 500).json({ message: updateRes.error });
+      }
+
+      if (!subscriptionId) {
+        subscriptionId = (await upsertSubscriptionByRemnaUuid(clientId, { remnawaveUuid: workingUuid })).id;
+      }
+      await prisma.subscription.update({
+        where: { id: subscriptionId },
+        data: { remnawaveUuid: workingUuid, trialId: trial.id, expireAt: new Date(expireAt) },
+      });
+      if (singleMode) {
+        await prisma.client.update({ where: { id: clientId }, data: { remnawaveUuid: workingUuid } }).catch(() => {});
+      }
+      await applyTrafficEntitlement(subscriptionId, {
+        tariffId: trial.tariffId,
+        mode: trial.trafficLimitMode,
+        internalSquadUuids: trialSquads,
+        meteredSquadUuid: trial.meteredSquadUuid,
+        trafficLimitBytes: trialTrafficLimit,
+      }, "TRIAL_ACTIVATION");
+      await prisma.clientTrialUsage.updateMany({
+        where: { clientId, trialId: trial.id, subscriptionId: null },
+        data: { subscriptionId },
+      });
+      const remnaUser = await remnaGetUser(workingUuid);
+      const subscriptionUrl = extractRemnaSubscriptionUrl(remnaUser?.data);
+      import("../notification/telegram-notify.service.js")
+        .then((m) => m.notifyAdminsAboutTrialActivated(clientId, trial.name, trial.durationDays))
+        .catch((e) => console.error("[trial activate] admin notify failed:", e));
+      return res.json({
+        message: `🎁 Пробная подписка «${trial.name}» активирована на ${trial.durationDays} дн.!`,
+        subscriptionId,
+        trialId: trial.id,
+        durationDays: trial.durationDays,
+        tariffId: trial.tariffId,
+        tariffHasLocations: !!(trial.tariff?.locations?.trim()),
+        subscriptionUrl,
+      });
+    }
+
+    const { createAdditionalSubscription } = await import("../gift/gift.service.js");
+    const subResult = await createAdditionalSubscription(clientId, {
+      id: trial.tariffId ?? undefined,
+      name: trial.name,
+      price: 0,
+      durationDays: trial.durationDays,
+      trafficLimitBytes: trial.trafficLimitMode === "LOCAL_SQUAD" ? 0n : trialTrafficLimit,
+      deviceLimit: trial.deviceLimit ?? trial.tariff?.deviceLimit ?? null,
+      includedDevices: trial.tariff?.includedDevices ?? trial.deviceLimit ?? undefined,
+      internalSquadUuids: trialSquads,
+      trafficResetMode: trial.tariff?.trafficResetMode ?? undefined,
+    }, { skipConfigCheck: true, extraDevices: 0 });
+    if (!subResult.ok) {
+      await prisma.clientTrialUsage.deleteMany({ where: { clientId, trialId: trial.id, subscriptionId: null } }).catch(() => {});
+      return res.status(subResult.status).json({ message: subResult.error });
+    }
+
+    await prisma.subscription.update({
+      where: { id: subResult.data.subscriptionId },
+      data: { trialId: trial.id },
+    });
+    if (await isClientTrialBlocked(clientId, false)) {
+      const { deleteSingleSubscription } = await import("../subscription/single-subscription-lifecycle.service.js");
+      await deleteSingleSubscription(subResult.data.subscriptionId).catch(() => {});
+      await prisma.clientTrialUsage.deleteMany({
+        where: { clientId, trialId: trial.id, subscriptionId: subResult.data.subscriptionId },
+      }).catch(() => {});
+      return res.status(409).json({ message: "Пробный период недоступен — у вас уже была платная подписка." });
+    }
+    await applyTrafficEntitlement(subResult.data.subscriptionId, {
+      tariffId: trial.tariffId,
+      mode: trial.trafficLimitMode,
+      internalSquadUuids: trialSquads,
+      meteredSquadUuid: trial.meteredSquadUuid,
+      trafficLimitBytes: trialTrafficLimit,
+    }, "TRIAL_ACTIVATION");
+    if (subResult.data.subscriptionIndex === 0) {
+      const createdSubForSync = await prisma.subscription.findUnique({
+        where: { id: subResult.data.subscriptionId },
+        select: { remnawaveUuid: true },
+      });
+      if (createdSubForSync?.remnawaveUuid) {
+        await prisma.client.update({ where: { id: clientId }, data: { remnawaveUuid: createdSubForSync.remnawaveUuid } }).catch(() => {});
+      }
+    }
+    await prisma.clientTrialUsage.updateMany({
+      where: { clientId, trialId: trial.id, subscriptionId: null },
+      data: { subscriptionId: subResult.data.subscriptionId },
+    });
+    const createdSub = await prisma.subscription.findUnique({
       where: { id: subResult.data.subscriptionId },
       select: { remnawaveUuid: true },
     });
-    if (createdSubForSync?.remnawaveUuid) {
-      await prisma.client.update({
-        where: { id: clientId },
-        data: { remnawaveUuid: createdSubForSync.remnawaveUuid },
-      }).catch(() => {});
-    }
-  }
-
-  await prisma.clientTrialUsage.updateMany({
-    where: { clientId, trialId: trial.id, subscriptionId: null },
-    data: { subscriptionId: subResult.data.subscriptionId },
-  });
-
-  // подгружаем subscriptionUrl + remnawaveUuid из созданной подписки
-  // чтобы бот мог сразу показать кнопку «📲 Инструкции по установке» с прямой ссылкой.
-  const createdSub = await prisma.subscription.findUnique({
-    where: { id: subResult.data.subscriptionId },
-    select: { remnawaveUuid: true },
-  });
-  const createdRemnaUser = createdSub?.remnawaveUuid ? await remnaGetUser(createdSub.remnawaveUuid) : null;
-  const subscriptionUrl = extractRemnaSubscriptionUrl(createdRemnaUser?.data);
-
-  // уведомление админам в TG-группу: активирован триал (best-effort, не ломаем флоу).
-  import("../notification/telegram-notify.service.js")
-    .then((m) => m.notifyAdminsAboutTrialActivated(clientId, trial.name, trial.durationDays))
-    .catch((e) => console.error("[trial activate] admin notify failed:", e));
-
-  return res.json({
-    message: `🎁 Пробная подписка «${trial.name}» активирована на ${trial.durationDays} дн.!`,
-    subscriptionId: subResult.data.subscriptionId,
-    trialId: trial.id,
-    durationDays: trial.durationDays,
-    // для кнопки «🌐 Локации» на экране активации (скрин 5).
-    // Бот покажет кнопку только если у тарифа триала есть текст локаций.
-    tariffId: trial.tariffId,
-    tariffHasLocations: !!(trial.tariff?.locations?.trim()),
-    // T-unify: subscription URL для прямой URL-кнопки инструкций.
-    subscriptionUrl,
+    const createdRemnaUser = createdSub?.remnawaveUuid ? await remnaGetUser(createdSub.remnawaveUuid) : null;
+    const subscriptionUrl = extractRemnaSubscriptionUrl(createdRemnaUser?.data);
+    import("../notification/telegram-notify.service.js")
+      .then((m) => m.notifyAdminsAboutTrialActivated(clientId, trial.name, trial.durationDays))
+      .catch((e) => console.error("[trial activate] admin notify failed:", e));
+    return res.json({
+      message: `🎁 Пробная подписка «${trial.name}» активирована на ${trial.durationDays} дн.!`,
+      subscriptionId: subResult.data.subscriptionId,
+      trialId: trial.id,
+      durationDays: trial.durationDays,
+      tariffId: trial.tariffId,
+      tariffHasLocations: !!(trial.tariff?.locations?.trim()),
+      subscriptionUrl,
+    });
   });
 });
 

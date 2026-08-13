@@ -68,3 +68,16 @@ Remaining Task 2: trial routes and their canonical UUID/link reuse are intention
 - Gift cleanup after new tariff activation and all custom-build trial cleanup now run through `bestEffortTrialCleanup` after `persistActivation`; custom cleanup no longer runs before Remnawave creation.
 - Verification: focused canonical/balance/tariff suites — 24 passed; `npx tsc --noEmit --pretty false` — clean; `git diff --check` — clean.
 - Commit: `c4df082 fix: make new activation cleanup best effort`.
+
+## Checkpoint C — trial route canonical reuse
+
+- Both legacy `POST /trial` and configurable `POST /trials/:id/activate` now run under `withClientSubscriptionLock`.
+- Single-mode trial activation resolves the canonical owned row, patches its existing Remnawave UUID and the same `Subscription` row (including `trialId`/expiry), and preserves existing short UUID/link fields. A Remnawave user is created only when no canonical UUID (or legacy client UUID) exists; multi-mode retains `createAdditionalSubscription` behavior.
+- Trial usage is reserved and linked to the reused subscription ID; traffic entitlement and client UUID synchronization remain intact.
+- A missing Remnawave user for an existing canonical UUID now returns an error instead of rotating the user/link.
+
+Verification:
+
+- `cd backend && npx tsx --test src/modules/tariff/trial-conversion.test.ts src/modules/tariff/tariff-activation.service.test.ts` — 11 passed.
+- `cd backend && npm run build` — passed; `git diff --check` — clean.
+- Commit: `7b2ab69 feat: reuse canonical subscription for trial activation`.

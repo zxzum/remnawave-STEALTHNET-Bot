@@ -98,7 +98,6 @@ export async function resolveCanonicalSubscription(clientId: string) {
       giftStatus: null,
       giftedToClientId: null,
       deletionRequestedAt: null,
-      remnawaveUuid: { not: null },
     },
     orderBy: [{ subscriptionIndex: "asc" }, { expireAt: { sort: "desc", nulls: "last" } }],
   });

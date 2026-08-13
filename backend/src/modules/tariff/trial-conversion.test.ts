@@ -59,7 +59,12 @@ test("trial activation has a canonical single-mode path instead of creating a se
   const routeEnd = source.indexOf("clientRouter.", routeStart + 1);
   const body = source.slice(routeStart, routeEnd > routeStart ? routeEnd : undefined);
   assert.match(source, /resolveCanonicalSubscription/);
+  assert.match(body, /withClientSubscriptionLock\(clientId/);
   assert.match(body, /multiSubscriptionsEnabled/);
+  assert.match(body, /resolveCanonicalSubscription\(clientId\)/);
+  assert.match(body, /if \(singleMode/);
   assert.match(body, /remnaUpdateUser/);
-  assert.doesNotMatch(body, /createAdditionalSubscription/);
+  assert.match(body, /createAdditionalSubscription/);
+  assert.match(body, /trialId: trial\.id/);
+  assert.match(body, /let subscriptionId = canonical\?\.id/);
 });
