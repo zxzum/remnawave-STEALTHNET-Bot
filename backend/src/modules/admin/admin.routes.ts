@@ -106,10 +106,11 @@ import { syncFromRemna, syncToRemna, createRemnaUsersForClientsWithoutUuid } fro
 import { distributeReferralRewards } from "../referral/referral.service.js";
 import { markPaymentPaid } from "../payment/mark-paid.service.js";
 // activateTariffForClient больше не используется в admin —
-// выдача подписки идёт через createAdditionalSubscription (создание новой Subscription).
-// extendSecondarySubscription — для админского продления конкретной
-// подписки (grant-extend): тот же механизм, что и оплаченное продление.
-import { extendSecondarySubscription } from "../tariff/tariff-activation.service.js";
+// fallback-выдача без существующего источника идёт через createAdditionalSubscription.
+// extendSecondarySubscription — общий путь продления и конвертации существующей
+// подписки: он сохраняет Remnawave UUID и локальную запись подписки.
+import { extendSecondarySubscription, selectCanonicalSubscription } from "../tariff/tariff-activation.service.js";
+import { quoteConvertedDays } from "../subscription/subscription-change.policy.js";
 import {
   applyTrafficEntitlement,
   validateTrafficEntitlement,
@@ -2569,6 +2570,324 @@ adminRouter.post("/clients/:id/remna/reset-traffic", async (req, res) => {
   return res.status(report.failed ? 502 : 200).json(report);
 });
 
+const adminSubscriptionConversionSchema = z.object({
+  targetTariffId: z.string().min(1),
+  priceOptionId: z.string().min(1).optional(),
+  customDurationDays: z.number().int().min(1).max(3650).optional(),
+  subscriptionId: z.string().min(1).optional(),
+  sourceRevision: z.string().min(1).optional(),
+  note: z.string().max(500).optional(),
+});
+
+const adminConversionSourceSelect = {
+  id: true,
+  ownerId: true,
+  subscriptionIndex: true,
+  remnawaveUuid: true,
+  remnawaveShortUuid: true,
+  tariffId: true,
+  trialId: true,
+  currentPricePerDay: true,
+  customPrice: true,
+  extraDevices: true,
+  extraDevicesMonthlyPrice: true,
+  purchasedAsGift: true,
+  giftStatus: true,
+  giftedToClientId: true,
+  deletionRequestedAt: true,
+  expireAt: true,
+  updatedAt: true,
+  tariff: { select: { id: true, name: true, durationDays: true, price: true } },
+  trial: { select: { name: true, durationDays: true } },
+} as const;
+
+const adminConversionTariffInclude: Prisma.TariffInclude = {
+  priceOptions: { orderBy: [{ sortOrder: "asc" }, { durationDays: "asc" }] },
+};
+
+const adminConversionSourceWhere = (ownerId: string) => ({
+  ownerId,
+  deletionRequestedAt: null,
+  remnawaveUuid: { not: null },
+  purchasedAsGift: false,
+  giftStatus: null,
+  giftedToClientId: null,
+});
+
+type AdminConversionSource = Prisma.SubscriptionGetPayload<{ select: typeof adminConversionSourceSelect }>;
+type AdminConversionTariff = Prisma.TariffGetPayload<{ include: typeof adminConversionTariffInclude }>;
+type AdminConversionInput = z.infer<typeof adminSubscriptionConversionSchema>;
+
+type AdminSubscriptionConversionPolicy = {
+  source: AdminConversionSource;
+  target: AdminConversionTariff;
+  selectedOption?: { id?: string; durationDays: number; price: number };
+  targetDays: number;
+  targetPrice: number;
+  sourceRevision: string;
+  allowed: boolean;
+  preview: {
+    subscriptionId: string;
+    subscriptionIndex: number;
+    currentTariff: { id: string | null; name: string; durationDays: number; price: number };
+    targetTariff: { id: string; name: string; durationDays: number; price: number };
+    remainingDays: number;
+    convertedDays: number;
+    totalDays: number;
+    commissionPercent: number;
+    direction: string;
+    sourceRevision: string;
+  };
+};
+
+class AdminConversionError extends Error {
+  constructor(public readonly status: number, message: string, public readonly code?: string) {
+    super(message);
+    this.name = "AdminConversionError";
+  }
+}
+
+function adminConversionSourceRevision(source: AdminConversionSource): string {
+  return JSON.stringify({
+    id: source.id,
+    updatedAt: source.updatedAt.toISOString(),
+    tariffId: source.tariffId,
+    trialId: source.trialId,
+    expireAt: source.expireAt?.toISOString() ?? null,
+    remnawaveUuid: source.remnawaveUuid,
+    remnawaveShortUuid: source.remnawaveShortUuid,
+    currentPricePerDay: source.currentPricePerDay,
+    customPrice: source.customPrice,
+    extraDevices: source.extraDevices,
+  });
+}
+
+async function findAdminCanonicalSubscription(ownerId: string, now = new Date(), activeOnly = true): Promise<AdminConversionSource | null> {
+  const rows = await prisma.subscription.findMany({
+    where: { ...adminConversionSourceWhere(ownerId), ...(activeOnly ? { expireAt: { gt: now } } : {}) },
+    select: adminConversionSourceSelect,
+  });
+  const canonical = selectCanonicalSubscription(rows, now);
+  if (!canonical) return null;
+  return rows.filter((row) => row.subscriptionIndex === canonical.subscriptionIndex).sort((a, b) => a.id.localeCompare(b.id))[0] ?? canonical;
+}
+
+/**
+ * Единственная policy для preview и apply. В single-mode обычный input.subscriptionId
+ * игнорируется; явный trial остаётся выбранным источником, чтобы сохранить его UUID/link.
+ */
+async function buildAdminSubscriptionConversionPolicy(
+  clientId: string,
+  input: AdminConversionInput,
+  options: { allowMissingSource?: boolean; now?: Date; explicitSource?: boolean } = {},
+): Promise<AdminSubscriptionConversionPolicy | null> {
+  const client = await prisma.client.findUnique({ where: { id: clientId }, select: { id: true } });
+  if (!client) throw new AdminConversionError(404, "Клиент не найден", "CLIENT_NOT_FOUND");
+
+  const config = await getSystemConfig();
+  const multiSubscriptionsEnabled = config.multiSubscriptionsEnabled === true;
+  const now = options.now ?? new Date();
+  const sourceWhere = adminConversionSourceWhere(clientId);
+
+  let source: AdminConversionSource | null;
+  if (multiSubscriptionsEnabled || options.explicitSource) {
+    if (!input.subscriptionId) {
+      throw new AdminConversionError(400, "В multi-mode выберите конкретную подписку", "SUBSCRIPTION_REQUIRED");
+    }
+    source = await prisma.subscription.findFirst({
+      where: { ...sourceWhere, id: input.subscriptionId },
+      select: adminConversionSourceSelect,
+    });
+  } else {
+    // Trial conversion is the one intentional single-mode exception: the
+    // selected trial record is the source whose UUID/link must be preserved.
+    const explicitTrial = input.subscriptionId
+      ? await prisma.subscription.findFirst({
+          where: { ...sourceWhere, id: input.subscriptionId, trialId: { not: null } },
+          select: adminConversionSourceSelect,
+        })
+      : null;
+    if (explicitTrial) {
+      source = explicitTrial;
+    } else {
+      source = await findAdminCanonicalSubscription(clientId, now);
+    }
+  }
+
+  if (!source) {
+    if (input.sourceRevision) {
+      throw new AdminConversionError(409, "Preview устарел, обновите данные подписки", "STALE_PREVIEW");
+    }
+    if (options.allowMissingSource) return null;
+    throw new AdminConversionError(404, "Активная каноническая подписка не найдена", "SOURCE_NOT_FOUND");
+  }
+  if (!source.remnawaveUuid) {
+    throw new AdminConversionError(400, "Подписка не привязана к Remnawave", "SOURCE_NOT_ATTACHED");
+  }
+
+  const target = await prisma.tariff.findUnique({
+    where: { id: input.targetTariffId },
+    include: adminConversionTariffInclude,
+  });
+  if (!target) throw new AdminConversionError(404, "Тариф не найден", "TARGET_TARIFF_NOT_FOUND");
+
+  let option: { id?: string; durationDays: number; price: number } | undefined;
+  if (input.priceOptionId) {
+    const found = target.priceOptions.find((item) => item.id === input.priceOptionId);
+    if (!found) throw new AdminConversionError(400, "Опция цены не найдена в этом тарифе", "PRICE_OPTION_NOT_FOUND");
+    option = { id: found.id, durationDays: found.durationDays, price: found.price };
+  } else if (target.priceOptions.length > 0) {
+    const found = [...target.priceOptions].sort((a, b) => a.price - b.price || a.durationDays - b.durationDays)[0]!;
+    option = { id: found.id, durationDays: found.durationDays, price: found.price };
+  }
+
+  const targetDays = input.customDurationDays ?? option?.durationDays ?? target.durationDays;
+  const targetPrice = option?.price ?? target.price;
+  if (targetDays <= 0 || targetPrice <= 0) {
+    throw new AdminConversionError(400, "У целевого тарифа должна быть положительная цена и длительность");
+  }
+  if (option && input.customDurationDays) option = { ...option, durationDays: targetDays };
+
+  const remainingDays = source.expireAt
+    ? Math.max(0, Math.floor((source.expireAt.getTime() - now.getTime()) / 86_400_000))
+    : 0;
+  const extrasPerDay = source.extraDevices > 0 ? source.extraDevicesMonthlyPrice / 30 : 0;
+  const baseOldPricePerDay = source.currentPricePerDay != null && source.currentPricePerDay > 0
+    ? source.currentPricePerDay
+    : source.customPrice != null && source.tariff && source.tariff.durationDays > 0
+      ? source.customPrice / source.tariff.durationDays
+      : source.tariff && source.tariff.durationDays > 0
+        ? source.tariff.price / source.tariff.durationDays
+        : null;
+  const oldPricePerDay = baseOldPricePerDay == null ? null : baseOldPricePerDay + extrasPerDay;
+  const newPricePerDay = targetPrice / targetDays + extrasPerDay;
+  const quote = quoteConvertedDays({
+    remainingDays,
+    oldPricePerDay,
+    newPricePerDay,
+    sameTariff: source.tariffId === target.id && source.trialId == null,
+    isTrial: source.trialId != null,
+  });
+  const sourceRevision = adminConversionSourceRevision(source);
+  const currentTariff = source.trialId != null
+    ? { id: source.tariffId, name: source.trial?.name ?? "Trial", durationDays: source.trial?.durationDays ?? 0, price: 0 }
+    : source.tariff
+    ? { id: source.tariff.id, name: source.tariff.name, durationDays: source.tariff.durationDays, price: source.tariff.price }
+    : { id: null, name: source.trial?.name ?? "Trial", durationDays: source.trial?.durationDays ?? 0, price: 0 };
+
+  return {
+    source,
+    target,
+    selectedOption: option,
+    targetDays,
+    targetPrice,
+    sourceRevision,
+    allowed: quote.allowed || remainingDays === 0,
+    preview: {
+      subscriptionId: source.id,
+      subscriptionIndex: source.subscriptionIndex,
+      currentTariff,
+      targetTariff: { id: target.id, name: target.name, durationDays: targetDays, price: targetPrice },
+      remainingDays,
+      convertedDays: quote.allowed ? quote.convertedDays : 0,
+      totalDays: targetDays + (quote.allowed ? quote.convertedDays : 0),
+      commissionPercent: quote.commissionPercent,
+      direction: quote.direction,
+      sourceRevision,
+    },
+  };
+}
+
+type AdminConversionApplyOptions = {
+  extraDevices?: number;
+  removeExtrasAfter?: boolean;
+  auditKind?: string;
+  trafficLimitBytes?: bigint | null;
+  note?: string | null;
+};
+
+async function applyAdminSubscriptionConversion(
+  req: express.Request,
+  policy: AdminSubscriptionConversionPolicy,
+  options: AdminConversionApplyOptions = {},
+) {
+  const target = policy.target;
+  const result = await extendSecondarySubscription(
+    policy.source.id,
+    policy.source.ownerId,
+    {
+      id: target.id,
+      durationDays: policy.targetDays,
+      trafficLimitBytes: options.trafficLimitBytes ?? target.trafficLimitBytes,
+      trafficLimitMode: target.trafficLimitMode,
+      meteredSquadUuid: target.meteredSquadUuid,
+      deviceLimit: target.deviceLimit,
+      includedDevices: target.includedDevices,
+      pricePerExtraDevice: target.pricePerExtraDevice,
+      maxExtraDevices: target.maxExtraDevices,
+      deviceDiscountTiers: target.deviceDiscountTiers,
+      internalSquadUuids: target.internalSquadUuids,
+      trafficResetMode: target.trafficResetMode ?? undefined,
+      price: policy.targetPrice,
+    },
+    policy.selectedOption,
+    options.extraDevices,
+    options.removeExtrasAfter ?? false,
+    true, // convertMode: true — сохраняет существующий UUID/short UUID/link.
+  );
+  if (!result.ok) return result;
+
+  await lockTrialAfterSubscription(policy.source.ownerId);
+  await logAdmin(req, options.auditKind ?? "subscription.convert_admin", { type: "subscription", id: policy.source.id }, {
+    sourceRevision: policy.sourceRevision,
+    sourceSubscriptionId: policy.source.id,
+    targetTariffId: target.id,
+    remainingDays: policy.preview.remainingDays,
+    convertedDays: result.convertedDays ?? policy.preview.convertedDays,
+    totalDays: policy.targetDays + (result.convertedDays ?? policy.preview.convertedDays),
+    commissionPercent: policy.preview.commissionPercent,
+    note: options.note ?? null,
+  });
+  return result;
+}
+
+adminRouter.post("/clients/:id/subscription-conversion/preview", asyncRoute(async (req, res) => {
+  const parsed = clientIdParam.safeParse(req.params);
+  if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
+  const body = adminSubscriptionConversionSchema.safeParse(req.body);
+  if (!body.success) return res.status(400).json({ message: "Invalid input", errors: body.error.flatten() });
+  try {
+    const policy = await buildAdminSubscriptionConversionPolicy(parsed.data.id, body.data);
+    return res.json(policy!.preview);
+  } catch (error) {
+    if (error instanceof AdminConversionError) return res.status(error.status).json({ message: error.message });
+    throw error;
+  }
+}));
+
+adminRouter.post("/clients/:id/subscription-conversion/apply", asyncRoute(async (req, res) => {
+  const parsed = clientIdParam.safeParse(req.params);
+  if (!parsed.success) return res.status(400).json({ message: "Invalid client id" });
+  const body = adminSubscriptionConversionSchema.safeParse(req.body);
+  if (!body.success) return res.status(400).json({ message: "Invalid input", errors: body.error.flatten() });
+  if (!body.data.sourceRevision) return res.status(400).json({ message: "sourceRevision обязателен для apply" });
+  try {
+    const policy = await buildAdminSubscriptionConversionPolicy(parsed.data.id, body.data);
+    if (!policy) return res.status(404).json({ message: "Активная каноническая подписка не найдена" });
+    if (policy.sourceRevision !== body.data.sourceRevision) {
+      return res.status(409).json({ message: "Preview устарел, обновите данные подписки", sourceRevision: policy.sourceRevision });
+    }
+    if (!policy.allowed) return res.status(400).json({ message: "Конвертация остатка по текущей цене невозможна" });
+
+    const result = await applyAdminSubscriptionConversion(req, policy, { note: body.data.note });
+    if (!result.ok) return res.status(result.status >= 400 ? result.status : 500).json({ ok: false, message: result.error });
+    return res.json({ ok: true, ...policy.preview, convertedDays: result.convertedDays ?? policy.preview.convertedDays, totalDays: policy.targetDays + (result.convertedDays ?? policy.preview.convertedDays) });
+  } catch (error) {
+    if (error instanceof AdminConversionError) return res.status(error.status).json({ message: error.message });
+    throw error;
+  }
+}));
+
 const grantTariffSchema = z.object({
   tariffId: z.string().min(1),
   // Опционально: конкретная опция длительности из priceOptions тарифа.
@@ -2635,6 +2954,22 @@ adminRouter.post("/clients/:id/grant-tariff", async (req, res) => {
   // Параметр deviceCount в API — это extraDevices (legacy имя сохранено для совместимости фронта).
   const effectiveExtras = Math.min(Math.max(0, deviceCount ?? 0), tariff.maxExtraDevices);
 
+  // В single-mode ручная выдача переиспользует активную каноническую запись.
+  // Если такой записи нет, сохраняем старое поведение создания новой подписки.
+  let conversionPolicy: AdminSubscriptionConversionPolicy | null = null;
+  if (!(await getSystemConfig()).multiSubscriptionsEnabled) {
+    try {
+      conversionPolicy = await buildAdminSubscriptionConversionPolicy(clientId, {
+        targetTariffId: tariffId,
+        priceOptionId: tariffPriceOptionId,
+        customDurationDays,
+      }, { allowMissingSource: true });
+    } catch (error) {
+      if (error instanceof AdminConversionError) return res.status(error.status).json({ message: error.message });
+      throw error;
+    }
+  }
+
   let paymentId: string | null = null;
   if (createPaymentRecord) {
     const orderId = `admin-grant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2661,7 +2996,46 @@ adminRouter.post("/clients/:id/grant-tariff", async (req, res) => {
     }
   }
 
-  // админская выдача = НОВАЯ подписка клиенту (НЕ подарок).
+  if (conversionPolicy) {
+    const result = await applyAdminSubscriptionConversion(req, conversionPolicy, {
+      extraDevices: effectiveExtras,
+      trafficLimitBytes: tariff.trafficLimitBytes != null && Number(tariff.trafficLimitBytes) > 0
+        && trafficLimitOverride !== undefined && trafficLimitOverride !== null
+        ? BigInt(trafficLimitOverride)
+        : tariff.trafficLimitBytes,
+      note,
+    });
+    if (!result.ok) {
+      if (paymentId) {
+        await prisma.payment.update({
+          where: { id: paymentId },
+          data: { status: "FAILED", metadata: JSON.stringify({ grantedBy: adminId, note: note ?? null, kind: "admin_grant", error: result.error }) },
+        }).catch(() => { /* ignore */ });
+      }
+      return res.status(result.status >= 400 ? result.status : 500).json({ ok: false, message: result.error });
+    }
+    if (paymentId) {
+      await prisma.payment.update({
+        where: { id: paymentId },
+        data: { subscriptionId: conversionPolicy.source.id },
+      }).catch(() => { /* ignore */ });
+      try {
+        const { notifyTariffActivated } = await import("../notification/telegram-notify.service.js");
+        await notifyTariffActivated(clientId, paymentId);
+      } catch (e) {
+        console.error("[admin/grant-tariff] notify client failed:", e);
+      }
+    }
+    return res.json({
+      ok: true,
+      paymentId,
+      subscriptionId: conversionPolicy.source.id,
+      subscriptionIndex: conversionPolicy.source.subscriptionIndex,
+      tariff: { id: tariff.id, name: tariff.name, durationDays: conversionPolicy.targetDays },
+    });
+  }
+
+  // Fallback без активного источника: админская выдача = НОВАЯ подписка клиенту (НЕ подарок).
   // можно переопределить trafficLimitBytes (только если у тарифа не безлимит).
   // Применяется ТОЛЬКО для лимитных тарифов: если у тарифа уже безлимит — override игнорируем.
   const hasTariffLimit = tariff.trafficLimitBytes != null && Number(tariff.trafficLimitBytes) > 0;
@@ -2794,59 +3168,53 @@ adminRouter.post("/subscriptions/:subId/grant-extend", asyncRoute(async (req, re
     select: { id: true, ownerId: true, subscriptionIndex: true, tariffId: true, remnawaveUuid: true },
   });
   if (!sub) return res.status(404).json({ message: "Подписка не найдена" });
-  if (!sub.remnawaveUuid) return res.status(400).json({ message: "Подписка не привязана к Remnawave" });
 
-  const effectiveTariffId = body.data.tariffId ?? sub.tariffId;
+  const explicitSource = (await getSystemConfig()).multiSubscriptionsEnabled === true;
+  const canonicalSource = explicitSource ? null : await findAdminCanonicalSubscription(sub.ownerId, new Date());
+  if (!explicitSource && !canonicalSource) return res.status(404).json({ message: "Активная каноническая подписка не найдена" });
+  if (explicitSource && !sub.remnawaveUuid) return res.status(400).json({ message: "Подписка не привязана к Remnawave" });
+
+  const effectiveTariffId = body.data.tariffId ?? canonicalSource?.tariffId ?? sub.tariffId;
   if (!effectiveTariffId) {
     return res.status(400).json({ message: "У подписки нет тарифа — укажите tariffId для продления" });
   }
-  const tariff = await prisma.tariff.findUnique({
-    where: { id: effectiveTariffId },
-    include: { priceOptions: { orderBy: [{ sortOrder: "asc" }, { durationDays: "asc" }] } },
-  });
-  if (!tariff) return res.status(404).json({ message: "Тариф не найден" });
 
-  let selectedOption: { id: string; durationDays: number; price: number } | undefined;
-  if (body.data.tariffPriceOptionId) {
-    const opt = tariff.priceOptions.find((o) => o.id === body.data.tariffPriceOptionId);
-    if (!opt) return res.status(400).json({ message: "Опция цены не найдена в этом тарифе" });
-    selectedOption = { id: opt.id, durationDays: opt.durationDays, price: opt.price };
-  } else if (tariff.priceOptions.length > 0) {
-    const sorted = [...tariff.priceOptions].sort((a, b) => a.price - b.price);
-    selectedOption = { id: sorted[0].id, durationDays: sorted[0].durationDays, price: sorted[0].price };
-  }
-  // Нестандартный срок: подменяем длительность выбранной опции (цена admin_grant всё равно 0).
-  if (body.data.customDurationDays) {
-    selectedOption = {
-      id: selectedOption?.id ?? "",
-      durationDays: body.data.customDurationDays,
-      price: selectedOption?.price ?? tariff.price,
-    };
+  let policy: AdminSubscriptionConversionPolicy;
+  try {
+    policy = (await buildAdminSubscriptionConversionPolicy(sub.ownerId, {
+      targetTariffId: effectiveTariffId,
+      priceOptionId: body.data.tariffPriceOptionId,
+      customDurationDays: body.data.customDurationDays,
+      ...(explicitSource ? { subscriptionId: sub.id } : {}),
+    }, { explicitSource }))!;
+  } catch (error) {
+    if (error instanceof AdminConversionError) return res.status(error.status).json({ message: error.message });
+    throw error;
   }
 
   const adminId = (req as unknown as { adminId: string }).adminId;
-  const effectiveDays = selectedOption?.durationDays ?? tariff.durationDays;
+  const tariff = policy.target;
 
   let paymentId: string | null = null;
   if (body.data.createPaymentRecord ?? true) {
     try {
       const payment = await createPayment({
         data: {
-          clientId: sub.ownerId,
+          clientId: policy.source.ownerId,
           orderId: `admin-extend-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           amount: 0,
           currency: tariff.currency,
           status: "PAID",
           provider: "admin_grant",
           tariffId: tariff.id,
-          tariffPriceOptionId: selectedOption?.id || null,
-          subscriptionId: sub.id,
+          tariffPriceOptionId: policy.selectedOption?.id || null,
+          subscriptionId: policy.source.id,
           paidAt: new Date(),
           metadata: JSON.stringify({
             grantedBy: adminId,
             note: body.data.note ?? null,
             kind: "admin_grant",
-            extendsSecondarySubId: sub.id,
+            extendsSecondarySubId: policy.source.id,
             customDurationDays: body.data.customDurationDays ?? null,
           }),
         },
@@ -2858,19 +3226,10 @@ adminRouter.post("/subscriptions/:subId/grant-extend", asyncRoute(async (req, re
     }
   }
 
-  const result = await extendSecondarySubscription(sub.id, sub.ownerId, {
-    id: tariff.id,
-    durationDays: effectiveDays,
-    trafficLimitBytes: tariff.trafficLimitBytes,
-    deviceLimit: tariff.deviceLimit,
-    includedDevices: tariff.includedDevices,
-    pricePerExtraDevice: tariff.pricePerExtraDevice,
-    maxExtraDevices: tariff.maxExtraDevices,
-    deviceDiscountTiers: tariff.deviceDiscountTiers,
-    internalSquadUuids: tariff.internalSquadUuids,
-    trafficResetMode: tariff.trafficResetMode ?? undefined,
-    price: selectedOption?.price ?? tariff.price,
-  }, selectedOption);
+  const result = await applyAdminSubscriptionConversion(req, policy, {
+    auditKind: "subscription.grant_extend",
+    note: body.data.note,
+  });
 
   if (!result.ok) {
     if (paymentId) {
@@ -2882,18 +3241,10 @@ adminRouter.post("/subscriptions/:subId/grant-extend", asyncRoute(async (req, re
     return res.status(result.status >= 400 ? result.status : 500).json({ ok: false, message: result.error });
   }
 
-  await lockTrialAfterSubscription(sub.ownerId);
-
-  await logAdmin(req, "subscription.grant_extend", { type: "subscription", id: sub.id }, {
-    tariffId: tariff.id,
-    days: effectiveDays,
-    note: body.data.note ?? null,
-  });
-
   if (paymentId) {
     try {
       const { notifyTariffActivated } = await import("../notification/telegram-notify.service.js");
-      await notifyTariffActivated(sub.ownerId, paymentId);
+      await notifyTariffActivated(policy.source.ownerId, paymentId);
     } catch (e) {
       console.error("[admin/grant-extend] notify client failed:", e);
     }
@@ -2902,9 +3253,9 @@ adminRouter.post("/subscriptions/:subId/grant-extend", asyncRoute(async (req, re
   return res.json({
     ok: true,
     paymentId,
-    subscriptionId: sub.id,
-    subscriptionIndex: sub.subscriptionIndex,
-    tariff: { id: tariff.id, name: tariff.name, durationDays: effectiveDays },
+    subscriptionId: policy.source.id,
+    subscriptionIndex: policy.source.subscriptionIndex,
+    tariff: { id: tariff.id, name: tariff.name, durationDays: policy.targetDays },
   });
 }));
 
@@ -2927,55 +3278,31 @@ adminRouter.post("/subscriptions/:subId/convert-trial", asyncRoute(async (req, r
   });
   if (!sub) return res.status(404).json({ message: "Подписка не найдена" });
   if (!sub.trialId) return res.status(400).json({ message: "Подписка не является trial" });
-  if (!sub.remnawaveUuid) return res.status(400).json({ message: "Trial не привязан к Remnawave" });
 
-  const tariff = await prisma.tariff.findUnique({
-    where: { id: body.data.tariffId },
-    include: { priceOptions: { orderBy: [{ sortOrder: "asc" }, { durationDays: "asc" }] } },
-  });
-  if (!tariff) return res.status(404).json({ message: "Тариф не найден" });
-
-  let selectedOption: { id: string; durationDays: number; price: number } | undefined;
-  if (body.data.tariffPriceOptionId) {
-    const option = tariff.priceOptions.find((item) => item.id === body.data.tariffPriceOptionId);
-    if (!option) return res.status(400).json({ message: "Опция цены не найдена в этом тарифе" });
-    selectedOption = { id: option.id, durationDays: option.durationDays, price: option.price };
-  } else if (tariff.priceOptions.length > 0) {
-    const option = [...tariff.priceOptions].sort((a, b) => a.durationDays - b.durationDays)[0]!;
-    selectedOption = { id: option.id, durationDays: option.durationDays, price: option.price };
+  let policy: AdminSubscriptionConversionPolicy;
+  try {
+    policy = (await buildAdminSubscriptionConversionPolicy(sub.ownerId, {
+      targetTariffId: body.data.tariffId,
+      priceOptionId: body.data.tariffPriceOptionId,
+      subscriptionId: sub.id,
+    }, { explicitSource: true }))!;
+  } catch (error) {
+    if (error instanceof AdminConversionError) return res.status(error.status).json({ message: error.message });
+    throw error;
   }
-
-  const effectiveDays = selectedOption?.durationDays ?? tariff.durationDays;
-  const result = await extendSecondarySubscription(sub.id, sub.ownerId, {
-    id: tariff.id,
-    durationDays: effectiveDays,
-    trafficLimitBytes: tariff.trafficLimitBytes,
-    trafficLimitMode: tariff.trafficLimitMode,
-    meteredSquadUuid: tariff.meteredSquadUuid,
-    deviceLimit: tariff.deviceLimit,
-    includedDevices: tariff.includedDevices,
-    pricePerExtraDevice: tariff.pricePerExtraDevice,
-    maxExtraDevices: tariff.maxExtraDevices,
-    deviceDiscountTiers: tariff.deviceDiscountTiers,
-    internalSquadUuids: tariff.internalSquadUuids,
-    trafficResetMode: tariff.trafficResetMode ?? undefined,
-    price: selectedOption?.price ?? tariff.price,
-  }, selectedOption, undefined, false, true); // convertMode=true: бесплатный переход с trial
+  const tariff = policy.target;
+  const result = await applyAdminSubscriptionConversion(req, policy, {
+    auditKind: "subscription.convert_trial",
+    note: body.data.note,
+  });
 
   if (!result.ok) return res.status(result.status >= 400 ? result.status : 500).json({ ok: false, message: result.error });
-  await lockTrialAfterSubscription(sub.ownerId);
-  await logAdmin(req, "subscription.convert_trial", { type: "subscription", id: sub.id }, {
-    tariffId: tariff.id,
-    days: effectiveDays,
-    convertedDays: result.convertedDays ?? 0,
-    note: body.data.note ?? null,
-  });
   return res.json({
     ok: true,
-    subscriptionId: sub.id,
-    subscriptionIndex: sub.subscriptionIndex,
+    subscriptionId: policy.source.id,
+    subscriptionIndex: policy.source.subscriptionIndex,
     convertedDays: result.convertedDays ?? 0,
-    tariff: { id: tariff.id, name: tariff.name, durationDays: effectiveDays },
+    tariff: { id: tariff.id, name: tariff.name, durationDays: policy.targetDays },
   });
 }));
 

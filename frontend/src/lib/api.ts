@@ -1127,6 +1127,30 @@ export const api = {
     });
   },
 
+  async previewAdminSubscriptionConversion(
+    token: string,
+    clientId: string,
+    payload: AdminSubscriptionConversionRequest,
+  ): Promise<AdminSubscriptionConversionPreview> {
+    return request(`/admin/clients/${encodeURIComponent(clientId)}/subscription-conversion/preview`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+      token,
+    });
+  },
+
+  async applyAdminSubscriptionConversion(
+    token: string,
+    clientId: string,
+    payload: AdminSubscriptionConversionRequest,
+  ): Promise<AdminSubscriptionConversionResult> {
+    return request(`/admin/clients/${encodeURIComponent(clientId)}/subscription-conversion/apply`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+      token,
+    });
+  },
+
   async clientRemnaSquadAdd(token: string, clientId: string, squadUuid: string): Promise<unknown> {
     return request(`/admin/clients/${clientId}/remna/squads/add`, { method: "POST", body: JSON.stringify({ squadUuid }), token });
   },
@@ -3754,6 +3778,30 @@ export interface AdminClientSubscriptionItem {
   expireAt: string | null;
   createdAt: string;
 }
+
+export interface AdminSubscriptionConversionRequest {
+  targetTariffId: string;
+  priceOptionId?: string;
+  customDurationDays?: number;
+  subscriptionId?: string;
+  sourceRevision?: string;
+  note?: string;
+}
+
+export interface AdminSubscriptionConversionPreview {
+  subscriptionId: string;
+  subscriptionIndex: number;
+  currentTariff: { id: string | null; name: string; durationDays: number; price: number };
+  targetTariff: { id: string; name: string; durationDays: number; price: number };
+  remainingDays: number;
+  convertedDays: number;
+  totalDays: number;
+  commissionPercent: number;
+  direction: string;
+  sourceRevision: string;
+}
+
+export type AdminSubscriptionConversionResult = AdminSubscriptionConversionPreview & { ok: true };
 
 export type AdminSubscriptionRemnaResponse = {
   response?: RemnaUserFull;
