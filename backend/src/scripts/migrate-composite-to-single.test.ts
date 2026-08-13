@@ -179,8 +179,16 @@ const duplicateRows = [
 ];
 
 test("duplicate cleanup is explicit and dry-run by default", () => {
-  assert.deepEqual(parseDuplicateCleanupArgs(["--cleanup-duplicates"]), { cleanupDuplicates: true, apply: false, dryRun: true });
-  assert.deepEqual(parseDuplicateCleanupArgs(["--cleanup-duplicates", "--apply"]), { cleanupDuplicates: true, apply: true, dryRun: false });
+  assert.deepEqual(parseDuplicateCleanupArgs(["--cleanup-duplicates"]), { cleanupDuplicates: true, apply: false, dryRun: true, username: null });
+  assert.deepEqual(parseDuplicateCleanupArgs(["--cleanup-duplicates", "--apply"]), { cleanupDuplicates: true, apply: true, dryRun: false, username: null });
+});
+
+test("duplicate cleanup can target one normalized client username", async () => {
+  const args = parseDuplicateCleanupArgs(["--cleanup-duplicates", "--username", "@Vssarovv"]);
+  assert.equal(args.username, "vssarovv");
+
+  const result = await runDuplicateCleanup(args, { listSubscriptions: async () => duplicateRows as any });
+  assert.deepEqual(result.inventory.map((client) => client.clientUsername), ["vssarovv"]);
 });
 
 test("duplicate inventory includes client and subscription identity and special preservation decisions", async () => {

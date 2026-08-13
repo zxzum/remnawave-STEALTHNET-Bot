@@ -13,7 +13,7 @@ export type CutoverInventory = {
   oldUuids: string[]; canonicalUuid: string | null; blockers: string[];
 };
 
-export type DuplicateCleanupArgs = { cleanupDuplicates: boolean; apply: boolean; dryRun: boolean };
+export type DuplicateCleanupArgs = { cleanupDuplicates: boolean; apply: boolean; dryRun: boolean; username: string | null };
 export type DuplicateCleanupSubscription = {
   clientId: string; ownerId: string; subscriptionId: string; id: string; subscriptionIndex: number; index: number;
   tariffId: string | null; tariffName: string | null; tariff: string | null;
@@ -30,7 +30,10 @@ type DuplicateCleanupDeletion = { deleted: boolean; failures?: Array<{ error?: s
 export function parseDuplicateCleanupArgs(args: string[]): DuplicateCleanupArgs {
   const cleanupDuplicates = args.includes("--cleanup-duplicates");
   const apply = cleanupDuplicates && args.includes("--apply");
-  return { cleanupDuplicates, apply, dryRun: !apply || args.includes("--dry-run") };
+  const usernameIndex = args.indexOf("--username");
+  const username = usernameIndex < 0 ? null : normalizedUsername(args[usernameIndex + 1]);
+  if (usernameIndex >= 0 && !username) throw new Error("--username requires a non-empty username");
+  return { cleanupDuplicates, apply, dryRun: !apply || args.includes("--dry-run"), username };
 }
 
 function normalizedUsername(value: unknown): string | null {
@@ -176,13 +179,15 @@ export async function runDuplicateCleanup(args: DuplicateCleanupArgs, dependenci
   writeJournal?: (kind: string, payload: Record<string, unknown>) => Promise<void>;
 }, now = new Date()) {
   const rows = await dependencies.listSubscriptions();
-  const inventory = buildDuplicateCleanupInventory(rows, now);
+  const fullInventory = buildDuplicateCleanupInventory(rows, now);
+  const inventory = args.username ? fullInventory.filter((client) => client.clientUsername === args.username) : fullInventory;
   const planHash = computeDuplicateCleanupPlanHash(inventory);
   const blocked = inventory.filter((client) => client.blockers.length);
   if (!args.apply || args.dryRun) return { mutated: false, inventory, planHash, results: [] as Array<{ clientId: string; subscriptionId: string; status: string; error?: string }> };
   if (blocked.length) throw new Error(`Duplicate cleanup blocked: ${blocked.map((client) => `${client.clientId}:${client.blockers.join(",")}`).join(";")}`);
 
-  const reread = buildDuplicateCleanupInventory(await dependencies.listSubscriptions(), now);
+  const rereadFull = buildDuplicateCleanupInventory(await dependencies.listSubscriptions(), now);
+  const reread = args.username ? rereadFull.filter((client) => client.clientUsername === args.username) : rereadFull;
   const rereadHash = computeDuplicateCleanupPlanHash(reread);
   if (rereadHash !== planHash) throw new Error(`Duplicate cleanup plan changed before apply: ${planHash} != ${rereadHash}`);
 
