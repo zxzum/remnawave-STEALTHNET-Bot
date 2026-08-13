@@ -210,6 +210,24 @@ export const TEMPLATES: TemplateDef[] = [
     wired: false,
   },
   {
+    key: "ticket_reply",
+    label: "Ответ в тикете",
+    description: "Уведомление клиенту о новом ответе поддержки",
+    variables: [
+      { name: "ticketSubject", example: "Не подключается", required: true },
+      { name: "replyPreview", example: "Проверьте подключение ещё раз", required: true },
+      { name: "ticketUrl", example: "https://vpn.example/cabinet/tickets", required: true },
+      { name: "serviceName", example: "Лазейка ВПН" },
+    ],
+    defaultSubject: "Новый ответ в тикете — {{serviceName}}",
+    defaultBody: layout({
+      heading: "Новый ответ поддержки",
+      intro: "В тикете <b style=\"color:#0f172a;\">{{ticketSubject}}</b> появилось новое сообщение.",
+      inner: infoBox(row("Ответ", "{{replyPreview}}")) + button("{{ticketUrl}}", "Открыть тикет") + linkFallback("{{ticketUrl}}"),
+    }),
+    wired: true,
+  },
+  {
     key: "trial_expiring",
     label: "Заканчивается пробный период",
     description: "Одно письмо за выбранное число часов до окончания пробного доступа",

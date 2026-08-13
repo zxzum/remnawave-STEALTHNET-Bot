@@ -9,6 +9,8 @@ import { proxyFetch } from "../proxy-util/proxy-fetch.js";
 import { getProxyUrl } from "../proxy-util/get-proxy-url.js";
 import { remnaGetUser } from "../remna/remna.client.js";
 import { extractRemnaSubscriptionUrl } from "../subscription/subscription-url.js";
+import { isMailConfigured, mailConfigFromSystem, sendEmail, type SmtpConfig } from "../mail/mail.service.js";
+import { renderEmailTemplate } from "../email-templates/email-templates.service.js";
 import { readFile } from "node:fs/promises";
 
 /** Inline keyboard with a single "Back to menu" button for client notifications. */
@@ -134,6 +136,74 @@ export async function sendTelegramToUser(
   opts?: TelegramUserSendOptions,
 ): Promise<void> {
   await sendTelegramToUserChecked(telegramId, text, messageThreadId, replyMarkup, opts);
+}
+
+type TicketReplyConfig = Parameters<typeof mailConfigFromSystem>[0] & {
+  publicAppUrl?: string | null;
+  serviceName?: string | null;
+};
+
+type TicketReplyDeliveryDeps = {
+  sendTelegram: typeof sendTelegramToUser;
+  renderEmail: typeof renderEmailTemplate;
+  sendMail: (config: SmtpConfig, to: string, subject: string, body: string) => Promise<{ ok: boolean; error?: string }>;
+};
+
+export async function deliverSupportReplyToClient(
+  params: {
+    client: { id: string; telegramId: string | null; email: string | null };
+    ticket: { id: string; subject: string };
+    content: string;
+    attachmentsCount?: number;
+    config: TicketReplyConfig;
+  },
+  deps: TicketReplyDeliveryDeps = {
+    sendTelegram: sendTelegramToUser,
+    renderEmail: renderEmailTemplate,
+    sendMail: sendEmail,
+  },
+): Promise<{ telegram: boolean; email: boolean }> {
+  const baseUrl = (params.config.publicAppUrl || "").replace(/\/+$/, "");
+  const ticketUrl = baseUrl ? `${baseUrl}/cabinet/tickets` : "";
+  const fallback = params.attachmentsCount ? "В ответе прикреплены файлы." : "Получен новый ответ.";
+  const preview = params.content || fallback;
+  const telegramPreview = preview.length > 3000 ? `${preview.slice(0, 2997)}...` : preview;
+  const telegramText = [
+    "💬 <b>Новый ответ в тикете</b>",
+    "",
+    `📋 ${escapeHtml(params.ticket.subject)}`,
+    "",
+    escapeHtml(telegramPreview),
+  ].join("\n");
+  const replyMarkup = ticketUrl
+    ? { inline_keyboard: [[{ text: "🎫 Открыть тикеты", url: ticketUrl }]] }
+    : undefined;
+
+  let telegram = false;
+  let email = false;
+  await Promise.all([
+    params.client.telegramId
+      ? deps.sendTelegram(params.client.telegramId, telegramText, null, replyMarkup, { clientIdForBotToken: params.client.id })
+          .then(() => { telegram = true; })
+          .catch((error) => console.warn("[Ticket reply] Telegram notification failed", error))
+      : Promise.resolve(),
+    (async () => {
+      if (!params.client.email) return;
+      const mailConfig = mailConfigFromSystem(params.config);
+      if (!isMailConfigured(mailConfig)) return;
+      const template = await deps.renderEmail("ticket_reply", {
+        ticketSubject: escapeHtml(params.ticket.subject),
+        replyPreview: escapeHtml(preview),
+        ticketUrl,
+        serviceName: escapeHtml(params.config.serviceName || "Лазейка ВПН"),
+      });
+      if (!template) return;
+      const result = await deps.sendMail(mailConfig, params.client.email, template.subject, template.body);
+      email = result.ok;
+      if (!result.ok) console.warn("[Ticket reply] Email notification failed", result.error);
+    })().catch((error) => console.warn("[Ticket reply] Email notification failed", error)),
+  ]);
+  return { telegram, email };
 }
 
 export function getTopicIdForEvent(config: Record<string, unknown>, eventType: AdminNotificationEventType): number | null {
@@ -723,7 +793,16 @@ export async function notifyAdminsAboutSupportReply(params: {
     `🕐 ${formatDate(new Date())}`,
   ];
   if (baseUrl) lines.push(`\n🔗 <a href="${escapeHtml(`${baseUrl}/admin/tickets`)}">Открыть в админке</a>`);
-  await sendTelegramToAdminsForEvent("new_ticket", lines.join("\n"));
+  await Promise.all([
+    sendTelegramToAdminsForEvent("new_ticket", lines.join("\n")),
+    client ? deliverSupportReplyToClient({
+      client,
+      ticket,
+      content: params.content,
+      attachmentsCount: params.attachmentsCount,
+      config,
+    }) : Promise.resolve(),
+  ]);
 }
 
 export async function notifyAdminsAboutTicketStatusChange(params: {
