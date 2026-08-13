@@ -322,6 +322,16 @@ export async function registerByTelegram(body: {
   return fetchJson("/api/client/auth/register", { method: "POST", body });
 }
 
+export async function syncTelegramUsername(
+  telegramId: number,
+  telegramUsername: string,
+): Promise<{ updated: boolean }> {
+  return fetchJson("/api/public/sync-telegram-username", {
+    method: "POST",
+    body: { telegramId, telegramUsername },
+  });
+}
+
 /** запустить event-driven welcome (after_registration) */
 export async function fireOnRegistration(token: string): Promise<{ ok: boolean; rulesProcessed: number; sent: number }> {
   return fetchJson("/api/client/auth/fire-on-registration", { method: "POST", token });

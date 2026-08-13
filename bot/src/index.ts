@@ -19,6 +19,7 @@ import {
   shouldPreserveSubscriptionLink,
 } from "./subscription-access.js";
 import { shouldShowBotWelcome } from "./onboarding-policy.js";
+import { createTelegramUsernameSync } from "./telegram-username-sync.js";
 import {
   mainMenu,
   botSectionsMenu,
@@ -160,6 +161,13 @@ async function createBotWithProxy(token: string): Promise<Bot> {
 const composer = new Composer<Context>();
 const botErrorContext = new AsyncLocalStorage<Context>();
 composer.use((ctx, next) => botErrorContext.run(ctx, next));
+const syncTelegramUsername = createTelegramUsernameSync(api.syncTelegramUsername);
+composer.use(async (ctx, next) => {
+  if (ctx.from?.username) {
+    await syncTelegramUsername(ctx.from.id, ctx.from.username).catch(() => {});
+  }
+  return next();
+});
 
 function telegramErrorContext(ctx: Context | undefined): api.BotErrorReportInput["telegram"] {
   if (!ctx) return undefined;
