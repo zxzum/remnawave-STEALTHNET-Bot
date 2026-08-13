@@ -47,3 +47,11 @@ The remaining helpers invoked from activation (`extendSecondarySubscription`, `c
 - Type check: `rtk npx tsc --noEmit --pretty false` — no errors. `rtk git diff --check` — clean.
 
 Remaining Task 2: trial routes and their canonical UUID/link reuse are intentionally deferred to the next checkpoint. Helper-level transaction propagation noted above also remains deferred.
+
+## Important-fix review round
+
+- Single-mode conversion now selects the eligible owned, non-gift `subscriptionIndex=0` record before any same-tariff fallback; gifted/deletion rows remain excluded.
+- Payment activation retries require verified metadata `subscriptionActivated=true` and metadata `subscriptionId`; successful tariff, conversion, and custom paths persist both marker fields together with the Payment `subscriptionId`.
+- `/payments/balance` refunds the debit and marks the Payment `FAILED` when canonical activation throws. The selected `replaceTrialSubId` is retained in `tariffMeta`.
+- Verification: focused canonical/balance/tariff suites — 21 passed; `npx tsc --noEmit --pretty false` — clean; `git diff --check` — clean.
+- Commit: `2c61a6d fix: make canonical activation retries idempotent`.
