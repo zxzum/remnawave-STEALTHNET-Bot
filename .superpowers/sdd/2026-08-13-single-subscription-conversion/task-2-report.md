@@ -13,10 +13,18 @@ The first-paid-purchase bonus is calculated before the trial lock, uses trial us
 - Type check: `rtk npx tsc --noEmit --pretty false` — no errors.
 - `rtk git diff --check` — clean.
 
-## Commit
+## Round 2 fix
 
-Pending final commit in this checkpoint.
+- Replaced the client-row `FOR UPDATE` with `pg_advisory_xact_lock(hashtext(clientId))`. The transaction now remains open around the full callback without contending with the callback's existing global Prisma writes on another connection.
+- Bonus metadata persistence is now required before trial usage is marked; a failed payment update returns a 500 and leaves the trial lock untouched so a retry cannot lose the bonus.
+- Added an injected-transaction behavioral test proving lock → operation → commit ordering.
+
+## Verification
+
+- Focused canonical suite: `rtk npx tsx --test src/modules/subscription/canonical-activation.test.ts` — 7 passed.
+- Type check: `rtk npx tsc --noEmit --pretty false` — no errors.
+- `rtk git diff --check` — clean.
 
 ## Remaining Task 2 / concern
 
-`balance-payment.contract.test.ts` and `trial-conversion.test.ts` still contain the pre-existing route assertions that intentionally remain RED: `/payments/balance` still owns its duplicated activation branch, and trial routes still need canonical UUID reuse. Defaults/seed changes were not touched per checkpoint scope. The transaction callback currently exposes the requested `Prisma.TransactionClient` interface, while the broader route/service migration must move all activation reads/writes onto that transaction in the next checkpoint.
+`balance-payment.contract.test.ts` and `trial-conversion.test.ts` still contain the pre-existing route assertions that intentionally remain RED: `/payments/balance` still owns its duplicated activation branch, and trial routes still need canonical UUID reuse. Defaults/seed changes were not touched per checkpoint scope. The activation callback still uses existing global Prisma calls; the advisory lock avoids self-deadlock, while broader transaction-client propagation remains a later migration concern.

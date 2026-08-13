@@ -7,7 +7,7 @@ process.env.JWT_SECRET ??= "test-secret-that-is-long-enough-for-validation";
 process.env.REMNA_API_URL = "https://remna.test";
 process.env.REMNA_ADMIN_TOKEN = "test-token";
 
-const { selectCanonicalSubscription } = await import("../tariff/tariff-activation.service.js");
+const { selectCanonicalSubscription, withClientSubscriptionLock } = await import("../tariff/tariff-activation.service.js");
 
 test("canonical selection prefers owned index zero over a newer secondary", () => {
   const selected = selectCanonicalSubscription([
@@ -30,9 +30,45 @@ test("activation exposes a database-backed client lock and canonical resolver", 
   const source = await readFile(new URL("../tariff/tariff-activation.service.ts", import.meta.url), "utf8");
   assert.match(source, /export async function withClientSubscriptionLock/);
   assert.match(source, /Prisma\.TransactionClient/);
-  assert.match(source, /FOR UPDATE/);
+  assert.match(source, /pg_advisory_xact_lock\(hashtext\(/);
+  assert.doesNotMatch(source, /FOR UPDATE/);
   assert.match(source, /export async function resolveCanonicalSubscription/);
   assert.match(source, /subscriptionIndex:\s*0/);
+});
+
+test("client lock orders advisory lock, operation, and commit", async () => {
+  const events: string[] = [];
+  const fakeTx = {
+    $queryRaw: async () => {
+      events.push("lock");
+      return [];
+    },
+  } as any;
+  const result = await withClientSubscriptionLock("client-1", async (tx) => {
+    assert.equal(tx, fakeTx);
+    events.push("operation");
+    return "done";
+  }, {
+    transaction: async (callback) => {
+      const value = await callback(fakeTx);
+      events.push("commit");
+      return value;
+    },
+  });
+  assert.equal(result, "done");
+  assert.deepEqual(events, ["lock", "operation", "commit"]);
+});
+
+test("bonus metadata persistence is required before the trial lock", async () => {
+  const source = await readFile(new URL("../tariff/tariff-activation.service.ts", import.meta.url), "utf8");
+  const activation = source.slice(source.indexOf("async function activateTariffByPaymentIdUnlocked"));
+  const update = activation.indexOf("await prisma.payment.update({");
+  const mark = activation.indexOf("markTrialUsedForPaidPurchase");
+  assert.ok(update >= 0 && mark > update, `update=${update}, mark=${mark}`);
+  const persistenceBlock = activation.slice(update, mark);
+  assert.doesNotMatch(persistenceBlock, /\.catch\(\(\) => \{\}\)/);
+  assert.match(persistenceBlock, /catch \(error\)/);
+  assert.match(persistenceBlock, /return \{ ok: false/);
 });
 
 test("paid activation computes the first-purchase bonus before marking trial usage", async () => {

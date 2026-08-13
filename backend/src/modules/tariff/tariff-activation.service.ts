@@ -70,12 +70,21 @@ export function selectCanonicalSubscription<T extends CanonicalSubscriptionCandi
 }
 
 /** Serialize all reads/writes belonging to one client's subscription state. */
+type SubscriptionLockDependencies = {
+  transaction?: <R>(callback: (tx: Prisma.TransactionClient) => Promise<R>) => Promise<R>;
+};
+
 export async function withClientSubscriptionLock<T>(
   clientId: string,
   operation: (tx: Prisma.TransactionClient) => Promise<T>,
+  dependencies: SubscriptionLockDependencies = {},
 ): Promise<T> {
-  return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT id FROM clients WHERE id = ${clientId} FOR UPDATE`;
+  const transaction = dependencies.transaction ?? (<R>(callback: (tx: Prisma.TransactionClient) => Promise<R>) => prisma.$transaction(callback));
+  return transaction(async (tx) => {
+    // Transaction-scoped advisory lock: activation callbacks currently use the
+    // shared Prisma client, so a row lock on this transaction would self-block
+    // their writes on another connection.
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${clientId}))`;
     return operation(tx);
   });
 }
@@ -1251,10 +1260,15 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string): Promise<Act
         });
     paymentMetadata.firstPaidTrialBonusDays = firstPaidTrialBonusDays;
     payment.metadata = JSON.stringify(paymentMetadata);
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: { metadata: payment.metadata },
-    }).catch(() => {});
+    try {
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: { metadata: payment.metadata },
+      });
+    } catch (error) {
+      console.error("[trial-lock] failed to persist paid bonus", payment.id, error);
+      return { ok: false, error: "Не удалось сохранить бонус пробного периода", status: 500 };
+    }
 
     try {
       await markTrialUsedForPaidPurchase(client.id);
