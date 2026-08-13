@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mainMenu, type BotButtonConfig } from "./keyboard.js";
+import { MAIN_MENU_REPLY_TEXT, mainMenu, persistentMainMenuKeyboard, type BotButtonConfig } from "./keyboard.js";
 import * as keyboard from "./keyboard.js";
 
 const buttons: BotButtonConfig[] = [
@@ -83,6 +83,14 @@ test("главное меню явно обрабатывает отсутств
   assert.equal(callbacks(buildMain({ renewTariffId: null }))[3]![0], "menu:renew");
   assert.equal(labels(buildMain({ supportUrl: null }))[2]!.includes("🛠 Поддержка"), false);
   assert.deepEqual(labels(buildMain({ isAdmin: true })).at(-1), ["⚙️ Админ-панель"]);
+});
+
+test("постоянная клавиатура всегда держит кнопку главного меню", () => {
+  assert.deepEqual(persistentMainMenuKeyboard(), {
+    keyboard: [[{ text: MAIN_MENU_REPLY_TEXT }]],
+    resize_keyboard: true,
+    is_persistent: true,
+  });
 });
 
 test("меню бота показывает четыре раздела и возврат на главную", () => {

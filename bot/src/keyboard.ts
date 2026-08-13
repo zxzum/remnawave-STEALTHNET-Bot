@@ -16,6 +16,15 @@ interface InlineButton {
 type WebAppButton = { text: string; web_app: { url: string }; icon_custom_emoji_id?: string; style?: ButtonStyle };
 type UrlButton = { text: string; url: string; icon_custom_emoji_id?: string; style?: ButtonStyle };
 export type InlineMarkup = { inline_keyboard: (InlineButton | WebAppButton | UrlButton)[][] };
+export const MAIN_MENU_REPLY_TEXT = "🏠 Главное меню";
+
+export function persistentMainMenuKeyboard() {
+  return {
+    keyboard: [[{ text: MAIN_MENU_REPLY_TEXT }]],
+    resize_keyboard: true as const,
+    is_persistent: true as const,
+  };
+}
 
 export type BotButtonConfig = { id: string; visible: boolean; label: string; order: number; style?: string; iconCustomEmojiId?: string; onePerRow?: boolean };
 

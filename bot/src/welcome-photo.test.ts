@@ -10,9 +10,9 @@ test("welcome photo is uploaded by the bot instead of fetched by Telegram", asyn
     /const banner = screenBannerUrl\(config, "welcome"\);\s*if \(banner\) \{\s*const sent = await ctx\.replyWithPhoto\(banner/s,
   );
   assert.doesNotMatch(source, /media:\s*banner/);
-  assert.match(source, /api\.getScreenAsset\("welcome"\)/);
+  assert.match(source, /api\.getScreenAsset\(screen\)/);
   assert.match(source, /const image = await api\.getOnboardingAsset\("welcome\.png"\)\.catch\(\(\) => null\);/);
-  assert.match(source, /new InputFile\(image, "welcome\.png"\)/);
+  assert.match(source, /new InputFile\(image, `\$\{screen\}\.png`\)/);
 });
 
 test("bot has a single error reporter for Telegram API failures", async () => {
@@ -37,4 +37,13 @@ test("returning-user menu keeps onboarding first and reuses renewal payment flow
   assert.match(source, /if \(data === "menu:info"\)/);
   assert.match(source, /if \(data === "menu:renew"\)/);
   assert.match(source, /data\.startsWith\("pay_tariff:"\)/);
+});
+
+test("start and the persistent button always send a fresh main screen", async () => {
+  const source = await readFile(new URL("./index.ts", import.meta.url), "utf8");
+
+  assert.match(source, /async function handleStart\(ctx: Context, payload: string\)/);
+  assert.match(source, /composer\.command\("start", \(ctx\) => handleStart\(ctx, ctx\.match\?\.trim\(\) \|\| ""\)\)/);
+  assert.match(source, /composer\.hears\(MAIN_MENU_REPLY_TEXT, \(ctx\) => handleStart\(ctx, ""\)\)/);
+  assert.match(source, /renderCommandScreen\([\s\S]*?"welcome",[\s\S]*?entities,[\s\S]*?true,[\s\S]*?\)/);
 });

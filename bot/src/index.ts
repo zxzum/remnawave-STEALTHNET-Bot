@@ -65,6 +65,8 @@ import {
   mySubsListButtons,
   subDetailButtons,
   tariffActionChoiceButtons,
+  MAIN_MENU_REPLY_TEXT,
+  persistentMainMenuKeyboard,
   type InlineMarkup,
   type InnerEmojiIds,
   type BotMenuSection,
@@ -723,13 +725,14 @@ async function renderCommandScreen(
   config: { publicAppUrl?: string | null } | null | undefined,
   screen: string,
   entities?: CustomEmojiEntity[],
+  forceNew = false,
 ): Promise<void> {
   const caption = text.length > TELEGRAM_CAPTION_MAX ? text.slice(0, TELEGRAM_CAPTION_MAX - 3) + "..." : text;
   const captionEntities = text.length > TELEGRAM_CAPTION_MAX && entities ? entities.filter((e) => e.offset + e.length <= TELEGRAM_CAPTION_MAX - 3) : entities;
   const banner = screenBannerUrl(config, screen);
   const image = banner ? await api.getScreenAsset(screen).catch(() => null) : null;
   const previous = lastBotScreens.get(userId);
-  if (previous && activeTelegramApi && image) {
+  if (!forceNew && previous && activeTelegramApi && image) {
     await activeTelegramApi.editMessageMedia(previous.chatId, previous.messageId, {
       type: "photo", media: new InputFile(image, `${screen}.png`), caption, caption_entities: captionEntities?.length ? captionEntities : undefined,
     }, { reply_markup: markup });
@@ -2084,12 +2087,13 @@ function parseStartPayload(payload: string): {
 // повтор от одного и того же tgid в течение 2 сек тихо игнорируется. Защищает
 // DB/Remna от лишних запросов и Telegram-API от спама ответов.
 const startThrottle = new Map<number, number>();
+const persistentMainMenuUsers = new Set<number>();
 setInterval(() => {
   const cutoff = Date.now() - 60 * 1000;
   for (const [k, v] of startThrottle) if (v < cutoff) startThrottle.delete(k);
 }, 60 * 1000).unref?.();
 
-composer.command("start", async (ctx) => {
+async function handleStart(ctx: Context, payload: string): Promise<void> {
   const from = ctx.from;
   if (!from) return;
   const now = Date.now();
@@ -2098,7 +2102,12 @@ composer.command("start", async (ctx) => {
   startThrottle.set(from.id, now);
   const telegramId = String(from.id);
   const telegramUsername = from.username ?? undefined;
-  const payload = ctx.match?.trim() || "";
+  if (!persistentMainMenuUsers.has(from.id)) {
+    await ctx.reply("Главное меню всегда доступно на клавиатуре 👇", {
+      reply_markup: persistentMainMenuKeyboard(),
+    });
+    persistentMainMenuUsers.add(from.id);
+  }
 
   // Сбрасываем состояние рассылки, чтобы баннер/фото не «залипало»
   lastBroadcastMessage.delete(from.id);
@@ -2397,8 +2406,6 @@ composer.command("start", async (ctx) => {
       .find((tariff) => tariff.id === primarySubscription?.tariffId) ?? null;
     const text = buildMainMenuSummary({ subscription: primarySubscription, tariff: currentTariff });
     const entities: CustomEmojiEntity[] = [];
-    const caption = text.length > TELEGRAM_CAPTION_MAX ? text.slice(0, TELEGRAM_CAPTION_MAX - 3) + "..." : text;
-    const captionEntities = text.length > TELEGRAM_CAPTION_MAX && entities.length ? entities.filter((e) => e.offset + e.length <= TELEGRAM_CAPTION_MAX - 3) : entities;
     const markup = mainMenu({
       showTrial: false,
       showVpn: (allSubsRes.items?.length ?? 0) > 0,
@@ -2427,31 +2434,15 @@ composer.command("start", async (ctx) => {
         console.error("[/start rich] failed, fallback to plain:", richErr instanceof Error ? richErr.message : richErr);
       }
     }
-    if (!richMenuSent) {
-      const previous = lastBotScreens.get(from.id);
-      const image = await api.getScreenAsset("welcome").catch(() => null);
-      if (previous && activeTelegramApi && image) {
-        await activeTelegramApi.editMessageMedia(previous.chatId, previous.messageId, { type: "photo", media: new InputFile(image, "welcome.png"), caption, caption_entities: captionEntities.length ? captionEntities : undefined }, { reply_markup: markup }).catch(() => {});
-      } else if (image) {
-        const sent = await ctx.replyWithPhoto(new InputFile(image, "welcome.png"), { caption, caption_entities: captionEntities.length ? captionEntities : undefined, reply_markup: markup });
-        if (sent?.message_id) lastBotScreens.set(from.id, { chatId: sent.chat.id, messageId: sent.message_id });
-      } else {
-        const welcomeImage = await api.getOnboardingAsset("welcome.png").catch(() => null);
-        if (welcomeImage) {
-          const opts = { caption, caption_entities: captionEntities.length ? captionEntities : undefined, reply_markup: markup };
-          const sent = await ctx.replyWithPhoto(new InputFile(welcomeImage, "welcome.png"), opts);
-          if (sent?.message_id) lastBotScreens.set(from.id, { chatId: sent.chat.id, messageId: sent.message_id });
-        } else {
-          const sent = await ctx.reply(text, { entities: entities.length ? entities : undefined, reply_markup: markup });
-          if (sent?.message_id) lastBotScreens.set(from.id, { chatId: sent.chat.id, messageId: sent.message_id });
-        }
-      }
-    }
+    if (!richMenuSent) await renderCommandScreen(ctx, from.id, text, markup, config, "welcome", entities, true);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Ошибка входа";
     await ctx.reply(`❌ ${msg}`);
   }
-});
+}
+
+composer.command("start", (ctx) => handleStart(ctx, ctx.match?.trim() || ""));
+composer.hears(MAIN_MENU_REPLY_TEXT, (ctx) => handleStart(ctx, ""));
 
 // ——— /link КОД — привязка Telegram к аккаунту (код из кабинета на сайте)
 composer.command("link", async (ctx) => {
