@@ -65,6 +65,46 @@ test("admin subscription grants permanently consume the client's trial", async (
   assert.match(attachRemna, /lockTrialAfterSubscription\(clientId\)/);
 });
 
+test("admin conversion exposes one policy for preview and apply", async () => {
+  const source = await readFile(adminUrl, "utf8");
+  assert.match(source, /function buildAdminSubscriptionConversionPolicy/);
+  assert.match(source, /adminRouter\.post\("\/clients\/:id\/subscription-conversion\/preview"/);
+  assert.match(source, /adminRouter\.post\("\/clients\/:id\/subscription-conversion\/apply"/);
+  assert.match(source, /sourceRevision/);
+  assert.match(source, /status\(409\)/);
+  assert.match(source, /logAdmin\(req, "subscription\.convert_admin"/);
+});
+
+test("admin conversion uses canonical single mode and explicit multi mode", async () => {
+  const source = await readFile(adminUrl, "utf8");
+  const conversion = source.slice(
+    source.indexOf("function buildAdminSubscriptionConversionPolicy"),
+    source.indexOf("const attachRemnaSchema"),
+  );
+  assert.match(conversion, /selectCanonicalSubscription/);
+  assert.match(conversion, /multiSubscriptionsEnabled/);
+  assert.match(conversion, /subscriptionId/);
+  assert.match(conversion, /expireAt/);
+  assert.match(conversion, /subscriptionIndex/);
+});
+
+test("admin conversion delegates conversion and exposes downgrade day policy", async () => {
+  const source = await readFile(adminUrl, "utf8");
+  const conversion = source.slice(
+    source.indexOf("function buildAdminSubscriptionConversionPolicy"),
+    source.indexOf("const attachRemnaSchema"),
+  );
+  assert.match(conversion, /extendSecondarySubscription[\s\S]*convertMode:\s*true/);
+  assert.doesNotMatch(conversion, /createAdditionalSubscription/);
+  assert.doesNotMatch(conversion, /remnawaveUuid\s*:/);
+  assert.doesNotMatch(conversion, /remnawaveShortUuid\s*:/);
+  assert.match(conversion, /quoteConvertedDays|computeConvertedDays/);
+  assert.match(conversion, /commissionPercent|commission/);
+  assert.match(conversion, /remainingDays/);
+  assert.match(conversion, /convertedDays/);
+  assert.match(conversion, /totalDays/);
+});
+
 test("empty clients keep all tabs and never render @null", async () => {
   const source = await readFile(clientsUrl, "utf8");
   assert.doesNotMatch(source, /\(editing\.remnawaveUuid \|\| secondarySubs\.length > 0\) &&/);
