@@ -30,7 +30,7 @@ import {
 } from "../notification/telegram-notify.service.js";
 import { formatBotErrorNotification } from "../notification/telegram-error-notification.js";
 import { requireClientAuth } from "./client.middleware.js";
-import { remnaCreateUser, remnaUpdateUser, isRemnaConfigured, remnaGetUser, remnaGetUserByUsername, remnaGetUserByEmail, remnaGetUserByTelegramId, extractRemnaUuid, remnaUsernameFromClient, remnaGetUserHwidDevices, remnaDeleteUserHwidDevice, remnaRevokeUserSubscription } from "../remna/remna.client.js";
+import { remnaCreateUser, remnaUpdateUser, isRemnaConfigured, remnaGetUser, remnaGetUserByUsername, remnaGetUserByEmail, remnaGetUserByTelegramId, extractRemnaUuid, remnaUsernameFromClient, remnaGetUserHwidDevices, remnaDeleteUserHwidDevice } from "../remna/remna.client.js";
 import { isSmtpConfigured, isMailConfigured, mailConfigFromSystem, sendEmail } from "../mail/mail.service.js";
 import { renderEmailTemplate } from "../email-templates/email-templates.service.js";
 import { signClientPasswordResetToken, verifyClientPasswordResetToken } from "../auth/auth.service.js";
@@ -3637,66 +3637,6 @@ clientRouter.post("/subscriptions/cooldown-check", async (req, res) => {
     };
   }));
   return res.json({ items });
-});
-
-/**
- * POST /api/client/subscription/:type/:id/reissue
- * «Обновление подписки» (скрин 8 эталона) — перевыпуск subscription URL.
- *
- * Что делает: вызывает Remnawave POST /api/users/{uuid}/actions/revoke,
- * который генерирует новый shortUuid → старая ссылка перестаёт работать,
- * выдаётся новая. Срок (expireAt), тариф, лимиты, устройства — НЕ меняются.
- *
- * type = "root"      → `id` это clientId, берём client.remnawaveUuid
- * type = "secondary" → `id` это secondarySubscription.id, берём её remnawaveUuid
- *
- * Зачем: клиент мог поделиться ссылкой / его конфиг засветился. Даём перевыпустить.
- */
-clientRouter.post("/subscription/:type/:id/reissue", async (req, res) => {
-  if (!isRemnaConfigured()) return res.status(503).json({ message: "Remna API не настроен" });
-  const subType = req.params.type;
-  const subId = req.params.id;
-  if (subType !== "root" && subType !== "secondary") {
-    return res.status(400).json({ message: "Неверный тип подписки" });
-  }
-  const clientId = (req as unknown as { clientId: string }).clientId;
-
-  // резолвим подписку через унифицированную таблицу.
-  // type=root → ищем primary (subscriptionIndex=0). type=secondary → ищем по id.
-  const sub = subType === "root"
-    ? await prisma.subscription.findUnique({
-        where: { ownerId_subscriptionIndex: { ownerId: clientId, subscriptionIndex: 0 } },
-        select: { id: true, ownerId: true, giftedToClientId: true, remnawaveUuid: true },
-      })
-    : await prisma.subscription.findUnique({
-        where: { id: subId },
-        select: { id: true, ownerId: true, giftedToClientId: true, remnawaveUuid: true },
-      });
-  if (!sub) return res.status(404).json({ message: "Подписка не найдена" });
-  if (sub.ownerId !== clientId && sub.giftedToClientId !== clientId) {
-    return res.status(403).json({ message: "Нет доступа" });
-  }
-  if (!sub.remnawaveUuid) {
-    return res.status(404).json({ message: "Подписка не привязана к Remnawave" });
-  }
-  try {
-    const result = await remnaRevokeUserSubscription(sub.remnawaveUuid);
-    if (result.error) {
-      return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
-    }
-    const fresh = await remnaGetUser(sub.remnawaveUuid);
-    if (fresh.error) {
-      return res.status(fresh.status >= 400 ? fresh.status : 500).json({ message: fresh.error });
-    }
-    return res.json({
-      ok: true,
-      degraded: false,
-      subscriptionUrl: extractRemnaSubscriptionUrl(fresh.data),
-    });
-  } catch (e) {
-    console.error("[reissue] error:", e);
-    return res.status(500).json({ message: e instanceof Error ? e.message : "Ошибка обновления" });
-  }
 });
 
 /**

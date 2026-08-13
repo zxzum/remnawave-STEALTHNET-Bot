@@ -2365,6 +2365,40 @@ export const api = {
     return request(`/client/tariff-conversion-preview?${q.toString()}`, { token });
   },
 
+  async clientSubscriptionConversionQuote(
+    token: string,
+    data: { subscriptionId: string; tariffId: string; priceOptionId?: string | null },
+  ): Promise<ManualConversionQuote> {
+    return request("/client/subscription-conversion/quote", {
+      method: "POST",
+      body: JSON.stringify({ ...data, priceOptionId: data.priceOptionId ?? null }),
+      token,
+    });
+  },
+
+  async clientSubscriptionConversion(
+    token: string,
+    quoteToken: string,
+  ): Promise<ManualConversionResult> {
+    return request("/client/subscription-conversion", {
+      method: "POST",
+      body: JSON.stringify({ quoteToken }),
+      token,
+    });
+  },
+
+  async reissueSubscription(
+    token: string,
+    type: "root" | "secondary",
+    id: string,
+  ): Promise<{ ok: boolean; subscriptionUrl: string | null; message?: string }> {
+    return request(`/client/subscription/${type}/${encodeURIComponent(id)}/reissue`, {
+      method: "POST",
+      body: JSON.stringify({ confirmed: true }),
+      token,
+    });
+  },
+
   /** Оплата опции (доп. трафик/устройства/сервер) с баланса.
    *  targetSubscriptionId — к какой подписке применить (на верхнем уровне body, как в schema). */
   async clientPayOptionByBalance(
@@ -5283,6 +5317,37 @@ export interface TariffConversionPreview {
     keep: { totalDevices: number; convertedDays: number; totalDays: number; extraCost?: number };
     drop: { totalDevices: number; convertedDays: number; totalDays: number; extraCost?: number };
   };
+}
+
+export interface ManualConversionQuote {
+  quoteToken: string;
+  subscriptionId: string;
+  tariffId: string;
+  priceOptionId: string | null;
+  sourceExpireAt: string;
+  sourceRevision: string;
+  currentTariff: { id: string | null; name: string | null };
+  targetTariff: { id: string; name: string };
+  remainingDays: number;
+  rawConvertedDays: number;
+  rounding: "ceil" | "floor" | "none";
+  direction: "same" | "trial" | "upgrade" | "downgrade" | "equal" | "none";
+  commissionPercent: number;
+  convertedDays: number;
+  totalDays: number;
+}
+
+export interface ManualConversionResult {
+  subscriptionId: string;
+  tariffId: string;
+  priceOptionId: string | null;
+  direction: ManualConversionQuote["direction"];
+  commissionPercent: number;
+  convertedDays: number;
+  totalDays: number;
+  remnawaveUuid: string | null;
+  remnawaveShortUuid: string | null;
+  subscriptionUrl: string | null;
 }
 
 export type PublicTariff = {
