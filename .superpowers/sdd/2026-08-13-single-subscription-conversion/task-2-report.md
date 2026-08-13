@@ -62,3 +62,9 @@ Remaining Task 2: trial routes and their canonical UUID/link reuse are intention
 - Single-mode canonical lookup now reuses `selectCanonicalSubscription`: active eligible rows win over expired rows, then index `0` wins among equally active records, with deterministic expiry fallback. This preserves an active secondary UUID when a stale index-zero row remains.
 - Verification: focused canonical/balance/tariff suites — 23 passed; `npx tsc --noEmit --pretty false` — clean; `git diff --check` — clean.
 - Commit: `1c45424 fix: preserve activation marker after trial cleanup`.
+
+## Final cleanup rollback-hole fix
+
+- Gift cleanup after new tariff activation and all custom-build trial cleanup now run through `bestEffortTrialCleanup` after `persistActivation`; custom cleanup no longer runs before Remnawave creation.
+- Verification: focused canonical/balance/tariff suites — 24 passed; `npx tsc --noEmit --pretty false` — clean; `git diff --check` — clean.
+- Commit: `c4df082 fix: make new activation cleanup best effort`.
