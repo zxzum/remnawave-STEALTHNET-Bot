@@ -1112,7 +1112,7 @@ export async function findConvertibleSubscription(
   tariffId: string,
   /** Мульти-подписки включены (глобально). Если false — single-режим для ЛЮБОГО тарифа:
    *  любая покупка находит существующую подписку клиента для замены. */
-  multiSubEnabled: boolean = true,
+  multiSubEnabled: boolean = false,
 ): Promise<{ id: string; subscriptionIndex: number; tariffId: string | null; tariffName: string | null; expireAt: Date | null; currentPricePerDay: number | null; trialId: string | null; /** покупается ТОТ ЖЕ тариф → это продление (стек дней), а не конвертация */ sameTariff: boolean } | null> {
   const tariff = await prisma.tariff.findUnique({
     where: { id: tariffId },
@@ -1402,7 +1402,7 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string, tx: Prisma.T
     if (!isGiftPurchase) {
       // Глобальный тумблер мульти-подписок. Выкл → single-режим для любого тарифа:
       // покупка другого тарифа конвертирует существующую каноническую подписку.
-      const multiSubEnabled = ((await getSystemConfig().catch(() => null)) as { multiSubscriptionsEnabled?: boolean } | null)?.multiSubscriptionsEnabled ?? true;
+      const multiSubEnabled = ((await getSystemConfig().catch(() => null)) as { multiSubscriptionsEnabled?: boolean } | null)?.multiSubscriptionsEnabled ?? false;
       const convertible = await findConvertibleSubscription(client.id, tariff.id, multiSubEnabled);
       if (convertible) {
         // юзер выбирает судьбу доп. устройств при конвертации:

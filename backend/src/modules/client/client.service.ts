@@ -690,8 +690,9 @@ async function loadSystemConfigFromDb() {
     skipEmailVerification: map.skip_email_verification === "true" || map.skip_email_verification === "1",
     onboardingEmailRequired: map.onboarding_email_required === "true" || map.onboarding_email_required === "1",
     onboarding2faEnabled: map.onboarding_2fa_enabled !== "false" && map.onboarding_2fa_enabled !== "0",
-    // Default TRUE (текущее поведение — мульти-подписки). Выкл только если явно "false".
-    multiSubscriptionsEnabled: (map.multi_subscriptions_enabled ?? "true").trim() !== "false",
+    // Default FALSE: single-subscription activation is the safe canonical path.
+    // The admin toggle still enables multi-subscriptions explicitly.
+    multiSubscriptionsEnabled: (map.multi_subscriptions_enabled ?? "false").trim() !== "false",
     passwordResetEnabled: map.password_reset_enabled === "true" || map.password_reset_enabled === "1",
     /** Master switch для антибот-фильтра. По умолчанию включён. */
     signupProtectionEnabled: (map.signup_protection_enabled ?? "true").trim() !== "false",
@@ -1307,7 +1308,7 @@ export async function getPublicConfig(_forCloneBot?: { markupPercent?: number | 
     skipEmailVerification: full.skipEmailVerification ?? false,
     onboardingEmailRequired: full.onboardingEmailRequired ?? false,
     onboarding2faEnabled: full.onboarding2faEnabled ?? true,
-    multiSubscriptionsEnabled: full.multiSubscriptionsEnabled ?? true,
+    multiSubscriptionsEnabled: full.multiSubscriptionsEnabled ?? false,
     passwordResetEnabled: full.passwordResetEnabled ?? false,
     // фронту нужен флаг — настроен ли SMTP.
     // Если SMTP не настроен или skipEmailVerification=true → email привязывается

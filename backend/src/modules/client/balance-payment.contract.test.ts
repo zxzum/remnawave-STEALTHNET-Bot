@@ -10,7 +10,7 @@ test("main balance payment records Payment before activation and compensates fai
   const body = source.slice(mainStart, mainEnd);
   const debit = body.indexOf("const debit = await prisma.client.updateMany");
   const payment = body.indexOf("payment = await createPayment");
-  const activation = body.indexOf("let activateResult");
+  const activation = body.indexOf("const activateResult = await activateTariffByPaymentId");
 
   assert.ok(routeStart > 0 && mainStart > routeStart && mainEnd > mainStart);
   assert.ok(debit > 0 && debit < payment && payment < activation);
@@ -29,4 +29,18 @@ test("balance activation delegates to the canonical payment activation path", as
   assert.doesNotMatch(body, /findConvertibleSubscription/);
   assert.doesNotMatch(body, /extendSecondarySubscription/);
   assert.doesNotMatch(body, /consolidateToSingleSubscription/);
+});
+
+test("single-subscription mode defaults to disabled multi-subscriptions", async () => {
+  const clientService = await readFile(new URL("./client.service.ts", import.meta.url), "utf8");
+  const seed = await readFile(new URL("../../scripts/seed-system-settings.ts", import.meta.url), "utf8");
+  const route = await readFile(new URL("./client.routes.ts", import.meta.url), "utf8");
+  const activation = await readFile(new URL("../tariff/tariff-activation.service.ts", import.meta.url), "utf8");
+
+  assert.match(clientService, /multiSubscriptionsEnabled: \(map\.multi_subscriptions_enabled \?\? "false"\)/);
+  assert.match(clientService, /multiSubscriptionsEnabled: full\.multiSubscriptionsEnabled \?\? false/);
+  assert.match(seed, /\["multi_subscriptions_enabled", "false"\]/);
+  assert.doesNotMatch(route, /multiSubscriptionsEnabled[^\n]*\?\? true/);
+  assert.doesNotMatch(activation, /multiSubscriptionsEnabled[^\n]*\?\? true/);
+  assert.match(activation, /multiSubEnabled: boolean = false/);
 });

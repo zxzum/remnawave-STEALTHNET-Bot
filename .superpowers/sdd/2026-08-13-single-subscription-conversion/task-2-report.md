@@ -37,3 +37,13 @@ The first-paid-purchase bonus is calculated before the trial lock, uses trial us
 - Type check: `rtk npx tsc --noEmit --pretty false` — no errors. `rtk git diff --check` — clean.
 
 The remaining helpers invoked from activation (`extendSecondarySubscription`, `createAdditionalSubscription`, trial cleanup/consolidation, and traffic entitlement) retain their existing global Prisma dependencies in this narrow checkpoint; their optional transaction propagation is deferred to the next service migration. No route/default/trial changes or UUID/reissue behavior were added.
+
+## Checkpoint B — balance and defaults
+
+- RED: the new balance/default contract initially failed: the balance handler still contained direct `createAdditionalSubscription`/`findConvertibleSubscription`/`extendSecondarySubscription`/`consolidateToSingleSubscription` paths, and the config/seed fallbacks were still multi-subscription enabled by default.
+- GREEN: after atomic debit and PAID `Payment` creation, `/payments/balance` now calls `activateTariffByPaymentId(payment.id)`. Refund-on-failure, promo usage, referral rewards, discount burn, notifications, response shape, and balance reporting remain in the route. The duplicated activation branch and direct activation helpers were removed.
+- Defaults now resolve `multiSubscriptionsEnabled` to `false` when unset, `multi_subscriptions_enabled=false` is seeded, and the admin toggle remains authoritative. `findConvertibleSubscription` and preview/activation fallbacks also use `false`.
+- Focused verification: `DATABASE_URL=... JWT_SECRET=... rtk npx tsx --test src/modules/client/balance-payment.contract.test.ts src/modules/subscription/canonical-activation.test.ts` — 11 passed.
+- Type check: `rtk npx tsc --noEmit --pretty false` — no errors. `rtk git diff --check` — clean.
+
+Remaining Task 2: trial routes and their canonical UUID/link reuse are intentionally deferred to the next checkpoint. Helper-level transaction propagation noted above also remains deferred.

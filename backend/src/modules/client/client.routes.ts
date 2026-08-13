@@ -35,7 +35,7 @@ import { isSmtpConfigured, isMailConfigured, mailConfigFromSystem, sendEmail } f
 import { renderEmailTemplate } from "../email-templates/email-templates.service.js";
 import { signClientPasswordResetToken, verifyClientPasswordResetToken } from "../auth/auth.service.js";
 import { createPlategaTransaction, isPlategaConfigured } from "../platega/platega.service.js";
-import { activateTariffForClient, activateTariffByPaymentId, findConvertibleSubscription } from "../tariff/tariff-activation.service.js";
+import { activateTariffByPaymentId, findConvertibleSubscription } from "../tariff/tariff-activation.service.js";
 import { upsertSubscriptionByRemnaUuid } from "../subscription/subscription.helpers.js";
 import { quoteConvertedDays } from "../subscription/subscription-change.policy.js";
 import { extractRemnaSubscriptionUrl } from "../subscription/subscription-url.js";
@@ -68,9 +68,7 @@ import { configuredAssetUrl } from "./bot-assets.routes.js";
 import { toClientTrafficQuota } from "../squad-traffic/squad-traffic.client.js";
 import { applyTrafficEntitlement } from "../squad-traffic/traffic-entitlement.service.js";
 import {
-  deleteSeparateTrialSubscriptions,
   isClientTrialBlocked,
-  markTrialUsedForPaidPurchase,
   restoreTrialAfterLegacyFailure,
 } from "../trial/trial-purchase-lock.service.js";
 import { EMAIL_VERIFICATION_IP_WINDOW_MS, getEmailRegistrationRateLimit } from "./email-registration-policy.js";
@@ -1951,7 +1949,7 @@ clientRouter.get("/tariff-conversion-preview", async (req, res) => {
   if (!tariffId) return res.status(400).json({ message: "tariffId обязателен" });
 
   const cfgMS = await getSystemConfig().catch(() => null);
-  const multiSubEnabled = (cfgMS as { multiSubscriptionsEnabled?: boolean } | null)?.multiSubscriptionsEnabled ?? true;
+  const multiSubEnabled = (cfgMS as { multiSubscriptionsEnabled?: boolean } | null)?.multiSubscriptionsEnabled ?? false;
   const convertible = await findConvertibleSubscription(client.id, tariffId, multiSubEnabled);
   if (!convertible) return res.json({ willConvert: false });
   // Single-режим: сколько ДРУГИХ подписок клиента удалится при консолидации (кроме конвертируемой).
@@ -4562,144 +4560,16 @@ clientRouter.post("/payments/balance", async (req, res) => {
     return res.status(status).json({ message });
   };
 
-  try {
-    await markTrialUsedForPaidPurchase(clientRaw.id);
-  } catch (error) {
-    console.error("[trial-lock] failed to mark balance purchase", clientRaw.id, error);
-    return failBalancePayment(500, "Не удалось зафиксировать использованный пробный период");
-  }
-
-  // УНИФИЦИРОВАННАЯ покупка балансом.
-  //
-  // 1. extendsSecondarySubId → явное продление конкретной подписки.
-  // 2. ИНАЧЕ → ВСЕГДА новая подписка через createAdditionalSubscription.
-  //    Старая ветка `activateTariffForClient` (которая продлевала Subscription[0]) удалена,
-  //    потому что: «обычная покупка тарифа» должна создавать НОВУЮ подписку, а не складывать
-  //    дни в primary. Хочешь продлить — нажми «Продлить подписку» (передаст extendsSecondarySubId).
-  let activateResult: { ok: true; subscriptionId?: string; convertedDays?: number } | { ok: false; error: string; status: number };
-  let isExtendingSecondary = false;
-  // покупка сконвертировала существующую подписку
-  // (режим «одна подписка из категории») вместо создания новой.
-  let isConverted = false;
-  // имя старого тарифа для админ-уведомления о конвертации.
-  let convertedFromTariffName: string | null = null;
-  let convertedDaysForNotify: number | null = null;
-  let createdSubscriptionId: string | null = null;
-  let trialToTariff = false;
-  // Глобальный тумблер мульти-подписок (single-режим при выкл). Объявлен на уровне
-  // хендлера — нужен и в конверт-ветке, и в сообщении/консолидации ниже.
-  const multiSubEnabledBal = ((await getSystemConfig().catch(() => null)) as { multiSubscriptionsEnabled?: boolean } | null)?.multiSubscriptionsEnabled ?? true;
-
-  try {
-    if (extendsSecondarySubId) {
-    const sec = await prisma.subscription.findUnique({
-      where: { id: extendsSecondarySubId },
-      select: { ownerId: true, giftedToClientId: true, trialId: true },
-    });
-    if (!sec || (sec.ownerId !== clientRaw.id && sec.giftedToClientId !== clientRaw.id)) {
-      return failBalancePayment(403, "Доп. подписка не принадлежит вам");
-    }
-    const { extendSecondarySubscription } = await import("../tariff/tariff-activation.service.js");
-    activateResult = await extendSecondarySubscription(
-      extendsSecondarySubId,
-      clientRaw.id,
-      tariff,
-      selectedOption ? { id: selectedOption.id, durationDays: selectedOption.durationDays, price: selectedOption.price } : undefined,
-      requestedExtras,
-      // «продлить без устройств» — обработка внутри extendSecondarySubscription
-      // (обнуление счётчиков + кик HWID), отдельный helper-вызов ниже больше не нужен.
-      removeExtrasOnActivate === true,
-    );
-    isExtendingSecondary = true;
-    createdSubscriptionId = extendsSecondarySubId;
-    trialToTariff = sec.trialId != null;
-  } else {
-    void asAdditional;
-    // режим «одна подписка из категории»: если тариф из
-    // single-категории и у клиента уже есть подписка с тарифом этой категории —
-    // КОНВЕРТИРУЕМ её (pro-rata остатка + смена тарифа/сквадов), а не создаём вторую.
-    // Балансовый путь активирует напрямую (мимо activateTariffByPaymentId), поэтому
-    // конверт-ветка нужна и здесь.
-    const { findConvertibleSubscription, extendSecondarySubscription } = await import("../tariff/tariff-activation.service.js");
-    const convertible = await findConvertibleSubscription(clientRaw.id, tariff.id, multiSubEnabledBal);
-    if (convertible) {
-      activateResult = await extendSecondarySubscription(
-        convertible.id,
-        clientRaw.id,
-        tariff,
-        selectedOption ? { id: selectedOption.id, durationDays: selectedOption.durationDays, price: selectedOption.price } : undefined,
-        requestedExtras,
-        // юзер выбрал убрать доп. устройства при конвертации —
-        // их остаточная ценность уйдёт в дни нового тарифа.
-        removeExtrasOnActivate === true,
-        // тот же тариф → продление (стек); другой → convert (мульти вкл) / hardReplace (мульти выкл, дни сгорают).
-        /* convertMode */ multiSubEnabledBal && !convertible.sameTariff,
-        /* hardReplace */ !multiSubEnabledBal && !convertible.sameTariff,
-      );
-      isConverted = activateResult.ok && !convertible.sameTariff;
-      isExtendingSecondary = isExtendingSecondary || (activateResult.ok && convertible.sameTariff);
-      createdSubscriptionId = convertible.id;
-      trialToTariff = convertible.trialId != null;
-      if (isConverted) {
-        convertedFromTariffName = convertible.tariffName;
-        convertedDaysForNotify = activateResult.ok ? (activateResult.convertedDays ?? null) : null;
-      }
-    } else {
-      // покупка при активном триале ЗАМЕНЯЕТ его полностью
-      // (триал удаляется вместе с Remna-юзером). Выбор триала — replaceTrialSubId.
-      const { replaceTrialOnPurchase } = await import("../tariff/tariff-activation.service.js");
-      trialToTariff = (await replaceTrialOnPurchase(clientRaw.id, replaceTrialSubId ?? null)) != null;
-      // Любая «новая покупка тарифа» — через единый createAdditionalSubscription.
-      // Для свежего клиента она получит subscriptionIndex=0 (= главная). Для уже имеющего
-      // подписки — следующий свободный индекс. Без затирания/смешивания.
-      const { createAdditionalSubscription } = await import("../gift/gift.service.js");
-      const addResult = await createAdditionalSubscription(clientRaw.id, {
-        id: tariff.id,
-        name: tariff.name,
-        // базовая цена опции/тарифа (НЕ итог платежа): extras теперь
-        // фиксируются отдельно (extraDevicesMonthlyPrice), и customPrice/pricePerDay
-        // должны отражать чистую ставку тарифа — иначе extras задвоятся при продлении.
-        price: selectedOption?.price ?? tariff.price,
-        durationDays: selectedOption?.durationDays ?? tariff.durationDays,
-        trafficLimitBytes: tariff.trafficLimitBytes,
-        deviceLimit: tariff.deviceLimit,
-        includedDevices: tariff.includedDevices,
-        pricePerExtraDevice: tariff.pricePerExtraDevice,
-        maxExtraDevices: tariff.maxExtraDevices,
-        deviceDiscountTiers: tariff.deviceDiscountTiers,
-        internalSquadUuids: tariff.internalSquadUuids,
-        trafficResetMode: tariff.trafficResetMode ?? undefined,
-      }, { extraDevices: requestedExtras, skipConfigCheck: true });
-      activateResult = addResult.ok
-        ? { ok: true, subscriptionId: addResult.data.subscriptionId }
-        : { ok: false, error: addResult.error, status: addResult.status };
-      if (addResult.ok) createdSubscriptionId = addResult.data.subscriptionId;
-    }
-  }
-  } catch (error) {
-    console.error("[balance-purchase] activation failed:", error);
-    return failBalancePayment(500, error instanceof Error ? error.message : "Не удалось активировать тариф");
-  }
+  // The payment is already PAID and recorded. Canonical activation owns all
+  // subscription selection, trial conversion, UUID reuse, and metadata linking.
+  const activateResult = await activateTariffByPaymentId(payment.id);
   if (!activateResult.ok) {
     return failBalancePayment(activateResult.status, activateResult.error);
   }
-  await deleteSeparateTrialSubscriptions(clientRaw.id);
+  const multiSubEnabledBal = ((await getSystemConfig().catch(() => null)) as { multiSubscriptionsEnabled?: boolean } | null)?.multiSubscriptionsEnabled ?? false;
+  const isConverted = activateResult.convertedDays !== undefined;
+  const isExtendingSecondary = Boolean(extendsSecondarySubId) && !isConverted;
   // NB: списание уже сделано атомарно выше — повторного decrement тут НЕ надо.
-
-  // «продлить без устройств» теперь обрабатывается ВНУТРИ extendSecondarySubscription
-  // (removeExtrasAfter): счётчики и HWID-лимит выставляются атомарно с активацией.
-  // Отдельный removeAllExtraDevicesForSub здесь удалён — он обнулял бы и докупленные extras.
-
-  // маркер конвертации (single-категория) для отчётности.
-  if (isConverted && createdSubscriptionId) {
-    tariffMeta.convertedSubscriptionId = createdSubscriptionId;
-    if (activateResult.ok && activateResult.convertedDays != null) tariffMeta.convertedDays = activateResult.convertedDays;
-  }
-  // флаг удаления доп. устройств при активации (продление ИЛИ конвертация).
-  if (removeExtrasOnActivate === true) tariffMeta.removeExtrasOnActivate = true;
-  // T-fix (11.05.2026): маркер покупки доп. подписки балансом (без gift).
-  if (asAdditional && !extendsSecondarySubId) tariffMeta.isAdditionalSubscription = true;
-  if (trialToTariff) tariffMeta.trialToTariff = true;
 
   // Записываем использование промокода
   if (promoCodeRecord) {
@@ -4712,19 +4582,6 @@ clientRouter.post("/payments/balance", async (req, res) => {
   const { distributeReferralRewards } = await import("../referral/referral.service.js");
   await distributeReferralRewards(payment.id).catch(() => {});
 
-  // сразу после payment.create — линкуем subscriptionId
-  // (для notifyTariffActivated и админ-аналитики). Бэк-веб-хуки делают это в activateTariffByPaymentId,
-  // но в балансовой ветке мы сами создаём подписку → надо явно прокинуть.
-  if (createdSubscriptionId) {
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: {
-        subscriptionId: createdSubscriptionId,
-        metadata: Object.keys(tariffMeta).length > 0 ? JSON.stringify(tariffMeta) : null,
-      },
-    }).catch(() => {});
-  }
-
   // T-unify-purchase: красивое уведомление в TG-бот с кнопками — теперь и при оплате балансом.
   // Раньше бот сам показывал сухой текст из HTTP-ответа. Теперь шлём ту же rich-нотификацию,
   // что и при оплате картой / криптой / прочими провайдерами.
@@ -4733,10 +4590,11 @@ clientRouter.post("/payments/balance", async (req, res) => {
     console.error("[balance-purchase] notifyTariffActivated failed:", e);
   });
 
-  // уведомление админам: покупка КОНВЕРТИРОВАЛА существующую подписку (best-effort).
+  // Preserve the existing admin conversion notification; canonical activation
+  // owns the subscription identity, so the old tariff label is unavailable here.
   if (isConverted) {
     import("../notification/telegram-notify.service.js")
-      .then((m) => m.notifyAdminsAboutSubscriptionConverted(clientRaw.id, convertedFromTariffName, tariff.name, convertedDaysForNotify))
+      .then((m) => m.notifyAdminsAboutSubscriptionConverted(clientRaw.id, null, tariff.name, activateResult.convertedDays ?? null))
       .catch((e) => console.error("[balance-purchase] convert admin notify failed:", e));
   }
 
@@ -4747,16 +4605,8 @@ clientRouter.post("/payments/balance", async (req, res) => {
     await extinguishOneTimeDiscount(clientRaw.id).catch(() => {});
   }
 
-  // Single-режим (мульти выкл): оставляем РОВНО ОДНУ подписку — удаляем остальные (в т.ч. из других категорий).
-  if (!multiSubEnabledBal && createdSubscriptionId) {
-    try {
-      const { consolidateToSingleSubscription } = await import("../tariff/tariff-activation.service.js");
-      await consolidateToSingleSubscription(clientRaw.id, createdSubscriptionId);
-    } catch (e) { console.error("[balance] consolidate failed:", e); }
-  }
-
   // T7b: сообщение клиенту — конвертировано / продлено / активировано.
-  const convertedDaysMsg = (activateResult.ok && activateResult.convertedDays && activateResult.convertedDays > 0)
+  const convertedDaysMsg = (activateResult.convertedDays && activateResult.convertedDays > 0)
     ? ` Остаток прежней подписки конвертирован: +${activateResult.convertedDays} дн.`
     : "";
   const okMessage = isConverted
