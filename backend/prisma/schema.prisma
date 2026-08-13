@@ -1032,6 +1032,7 @@ model Subscription {
   remnawaveUuid            String?                        @map("remnawave_uuid")
   remnawaveUsername        String?                        @map("remnawave_username")
   remnawaveShortUuid       String?                        @map("remnawave_short_uuid")
+  linkRotatedAt            DateTime?                      @map("link_rotated_at")
   syncStatus               SubscriptionSyncStatus         @default(SYNCED) @map("sync_status")
   syncAttempts             Int                            @default(0) @map("sync_attempts")
   syncError                String?                        @map("sync_error") @db.Text
