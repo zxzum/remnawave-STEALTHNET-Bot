@@ -92,41 +92,11 @@ Run the Step 2 command. Expected: all selected tests pass.
 - Consumes: unchanged `LandingTariff.description` and `TariffPlan.emojiLine` strings from Task 1.
 - Produces: rendered descriptions using CSS `white-space: pre-wrap`.
 
-- [ ] **Step 1: Add a failing source contract check**
-
-Extend `frontend/scripts/lazeyka-landing.test.mjs` to read the rendered sources and require the whitespace styles:
-
-```js
-import { readFile } from "node:fs/promises";
-
-test("renders tariff descriptions with preserved whitespace", async () => {
-  const [landingCss, cabinet] = await Promise.all([
-    readFile(new URL("../src/pages/lazeyka-landing.css", import.meta.url), "utf8"),
-    readFile(new URL("../src/cabinet/pages/Tariffs.tsx", import.meta.url), "utf8"),
-  ]);
-  assert.match(landingCss, /\.plan__pick>small\{[^}]*white-space:pre-wrap/);
-  assert.match(landingCss, /\.plain-plan span\{[^}]*white-space:pre-wrap/);
-  assert.doesNotMatch(cabinet, /emojiLine\.join/);
-  assert.equal((cabinet.match(/whitespace-pre-wrap/g) ?? []).length, 2);
-});
-```
-
-- [ ] **Step 2: Run the contract check and verify it fails**
-
-Run:
-
-```bash
-cd frontend
-node --experimental-strip-types --test scripts/lazeyka-landing.test.mjs
-```
-
-Expected: failure because neither surface currently applies `pre-wrap` and cabinet calls `emojiLine.join(...)`.
-
-- [ ] **Step 3: Apply native whitespace rendering**
+- [ ] **Step 1: Apply native whitespace rendering**
 
 Add `white-space:pre-wrap` to `.plan__pick>small` and `.plain-plan span` in `lazeyka-landing.css`. In both cabinet description elements, render `{plan.emojiLine}` directly and add Tailwind's `whitespace-pre-wrap` class.
 
-- [ ] **Step 4: Run focused tests and the production build**
+- [ ] **Step 2: Run focused tests and the production build**
 
 Run:
 
@@ -138,13 +108,13 @@ npm run build
 
 Expected: tests and build exit with status 0.
 
-- [ ] **Step 5: Validate the rendered flow in Browser**
+- [ ] **Step 3: Validate the rendered flow in Browser**
 
 The flow under test is: landing tariff card and `/cabinet/tariffs` -> description containing line breaks, a blank line, and repeated spaces -> the same whitespace is visible without overflow.
 
 Start the existing Vite app, then verify page identity, meaningful DOM, no framework overlay, console health, desktop and mobile screenshots, and the tariff-card interaction. Do not commit screenshots or temporary browser data.
 
-- [ ] **Step 6: Commit the implementation**
+- [ ] **Step 4: Commit the implementation**
 
 ```bash
 git add frontend/scripts/lazeyka-landing.test.mjs frontend/src/cabinet/model.test.mjs frontend/src/pages/lazeyka-landing-model.ts frontend/src/pages/lazeyka-landing.css frontend/src/cabinet/model.ts frontend/src/cabinet/pages/Tariffs.tsx
