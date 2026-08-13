@@ -133,6 +133,16 @@ test("trial cleanup errors cannot undo a successful activation marker", async ()
   assert.equal(markerPersisted, true);
 });
 
+test("gift trial cleanup after activation is best effort", async () => {
+  const source = await readFile(new URL("../tariff/tariff-activation.service.ts", import.meta.url), "utf8");
+  const activation = source.slice(source.indexOf("async function activateTariffByPaymentIdUnlocked"));
+  assert.doesNotMatch(activation, /if \(isGiftPurchase\) await deleteSeparateTrialSubscriptions\(client\.id\)/);
+  assert.match(activation, /bestEffortTrialCleanup\("delete-gift-trials"/);
+  const custom = activation.slice(activation.indexOf("const customBuild = parseCustomBuildMetadata"));
+  assert.doesNotMatch(custom.slice(0, custom.indexOf("const result = await createAdditionalSubscription")), /deleteSeparateTrialSubscriptions/);
+  assert.match(custom, /await persistActivation\(result\.data\.subscriptionId\);[\s\S]*bestEffortTrialCleanup\("delete-after-custom-activation"/);
+});
+
 test("activation retries require a verified success marker and subscription id", async () => {
   const source = await readFile(new URL("../tariff/tariff-activation.service.ts", import.meta.url), "utf8");
   const activation = source.slice(source.indexOf("async function activateTariffByPaymentIdUnlocked"));

@@ -1522,7 +1522,9 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string, tx: Prisma.T
     if (result.ok) {
       await applyTrafficEntitlement(result.data.subscriptionId, entitlement, "NEW_PURCHASE");
       await persistActivation(result.data.subscriptionId, replacedTrialId ? { trialToTariff: true } : {});
-      if (isGiftPurchase) await deleteSeparateTrialSubscriptions(client.id);
+      if (isGiftPurchase) {
+        await bestEffortTrialCleanup("delete-gift-trials", () => deleteSeparateTrialSubscriptions(client.id));
+      }
       await resetOneTimeDiscount();
       // Single-режим: подчищаем любые прочие подписки клиента (оставляем эту).
       const cfgMs2 = await getSystemConfig().catch(() => null);
@@ -1535,10 +1537,8 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string, tx: Prisma.T
 
   const customBuild = parseCustomBuildMetadata(payment.metadata);
   if (customBuild) {
-    if (!isGiftPurchase) await deleteSeparateTrialSubscriptions(client.id);
     const result = await createAdditionalSubscription(client.id, customBuild, { purchasedAsGift: isGiftPurchase, skipConfigCheck: true });
     if (result.ok) {
-      if (isGiftPurchase) await deleteSeparateTrialSubscriptions(client.id);
       await applyTrafficEntitlement(result.data.subscriptionId, {
         tariffId: null,
         mode: "REMNAWAVE",
@@ -1547,6 +1547,7 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string, tx: Prisma.T
         trafficLimitBytes: customBuild.trafficLimitBytes,
       }, "NEW_PURCHASE");
       await persistActivation(result.data.subscriptionId);
+      await bestEffortTrialCleanup("delete-after-custom-activation", () => deleteSeparateTrialSubscriptions(client.id));
       // Single-режим: кастом-билд, как и обычная покупка, оставляет ОДНУ подписку.
       // Не для подарков (иначе консолидация снесла бы реальные подписки клиента).
       if (!isGiftPurchase) {
