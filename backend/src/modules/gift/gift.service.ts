@@ -171,6 +171,69 @@ type CreateAdditionalSubscriptionDependencies = {
   lookupByUsername: typeof remnaGetUserByUsername;
 };
 
+const giftTariffSelect = {
+  id: true,
+  name: true,
+  durationDays: true,
+  trafficLimitBytes: true,
+  price: true,
+  currency: true,
+  deviceLimit: true,
+  includedDevices: true,
+  pricePerExtraDevice: true,
+  maxExtraDevices: true,
+  deviceDiscountTiers: true,
+  internalSquadUuids: true,
+  trafficResetMode: true,
+  trafficLimitMode: true,
+  meteredSquadUuid: true,
+} as const;
+
+async function findCanonicalRecipientSubscription(recipientRootClientId: string) {
+  const canonical = await prisma.subscription.findUnique({
+    where: { ownerId_subscriptionIndex: { ownerId: recipientRootClientId, subscriptionIndex: 0 } },
+    include: { tariff: { select: giftTariffSelect } },
+  });
+  if (!canonical || canonical.deletionRequestedAt || canonical.purchasedAsGift || canonical.giftStatus || canonical.giftedToClientId || !canonical.remnawaveUuid) {
+    return null;
+  }
+  if (canonical.expireAt && canonical.expireAt <= new Date()) return null;
+  return canonical;
+}
+
+type CanonicalRecipientSubscription = NonNullable<Awaited<ReturnType<typeof findCanonicalRecipientSubscription>>>;
+
+function giftDurationDays(subscription: { createdAt: Date; expireAt: Date | null; tariff?: { durationDays: number } | null }): number {
+  if (subscription.expireAt) {
+    return Math.max(1, Math.round((subscription.expireAt.getTime() - subscription.createdAt.getTime()) / 86_400_000));
+  }
+  return Math.max(1, subscription.tariff?.durationDays ?? 1);
+}
+
+async function extendGiftIntoCanonicalSubscription(
+  canonical: CanonicalRecipientSubscription,
+  gift: { tariffId: string | null; expireAt: Date | null; createdAt: Date; tariff: CanonicalRecipientSubscription["tariff"] },
+  recipientRootClientId: string,
+) {
+  const { extendSecondarySubscription } = await import("../tariff/tariff-activation.service.js");
+  const tariff = gift.tariff;
+  return extendSecondarySubscription(canonical.id, recipientRootClientId, {
+    id: tariff?.id ?? gift.tariffId ?? undefined,
+    durationDays: giftDurationDays(gift),
+    trafficLimitBytes: tariff?.trafficLimitBytes ?? null,
+    deviceLimit: tariff?.deviceLimit ?? null,
+    includedDevices: tariff?.includedDevices ?? undefined,
+    pricePerExtraDevice: tariff?.pricePerExtraDevice ?? undefined,
+    maxExtraDevices: tariff?.maxExtraDevices ?? undefined,
+    deviceDiscountTiers: tariff?.deviceDiscountTiers ?? undefined,
+    internalSquadUuids: tariff?.internalSquadUuids ?? [],
+    trafficResetMode: tariff?.trafficResetMode ?? undefined,
+    trafficLimitMode: tariff?.trafficLimitMode ?? undefined,
+    meteredSquadUuid: tariff?.meteredSquadUuid ?? null,
+    price: tariff?.price ?? undefined,
+  }, undefined, undefined, false, canonical.tariffId !== gift.tariffId);
+}
+
 const createAdditionalSubscriptionDependencies: CreateAdditionalSubscriptionDependencies = {
   isConfigured: isRemnaConfigured,
   loadConfig: getSystemConfig,
@@ -691,7 +754,7 @@ export async function redeemGiftCode(
     include: {
       subscription: {
         // подгружаем durationDays + trafficLimitBytes + цену для рендера.
-        include: { tariff: { select: { id: true, name: true, durationDays: true, trafficLimitBytes: true, price: true, currency: true } } },
+        include: { tariff: { select: giftTariffSelect } },
       },
     },
   });
@@ -739,11 +802,18 @@ export async function redeemGiftCode(
     return { ok: false, error: "Получатель не найден", status: 404 };
   }
 
-  // Проверяем лимит у получателя
-  const recipientSubCount = await prisma.subscription.count({
-    where: { ownerId: recipientRootClientId, deletionRequestedAt: null },
-  });
-  if (recipientSubCount >= config.maxAdditionalSubscriptions) {
+  const multiSubscriptionsEnabled = config.multiSubscriptionsEnabled === true;
+  const canonical = !multiSubscriptionsEnabled
+    ? await findCanonicalRecipientSubscription(recipientRootClientId)
+    : null;
+
+  // Проверяем лимит у получателя только для legacy multi-mode flow.
+  const recipientSubCount = multiSubscriptionsEnabled
+    ? await prisma.subscription.count({
+        where: { ownerId: recipientRootClientId, deletionRequestedAt: null },
+      })
+    : 0;
+  if (multiSubscriptionsEnabled && recipientSubCount >= config.maxAdditionalSubscriptions) {
     return {
       ok: false,
       error: `У получателя уже максимум дополнительных подписок (${config.maxAdditionalSubscriptions})`,
@@ -751,15 +821,7 @@ export async function redeemGiftCode(
     };
   }
 
-  // дубль-проверка по tariffId УБРАНА.
-  // Раньше блокировала активацию подарка если у получателя уже была подписка с этим тарифом
-  // → нельзя было подарить второй раз тому же человеку. Теперь подарок активируется
-  // как ОТДЕЛЬНАЯ дополнительная подписка (без ограничений по tariffId).
-  // Ограничение по maxAdditionalSubscriptions (выше) остаётся — нельзя превышать лимит подписок.
   const sub = giftCode.subscription;
-
-  // Определяем новый индекс у получателя
-  const newIndex = await getNextSubscriptionIndex(recipientRootClientId);
 
   // Главная дыра в редеме: $transaction([code.update, sub.update]) — НЕ лок.
   // Это просто два SQL'а в одной транзе. Параллельные /redeem с одним кодом
@@ -781,21 +843,39 @@ export async function redeemGiftCode(
     return { ok: false, error: "Код уже использован", status: 400 };
   }
 
-  // Теперь безопасно перепривязываем подписку — других претендентов нет.
-  // сбрасываем purchasedAsGift=false — после redeem подписка
-  // у получателя считается «своей», а не «подарочной для передачи». Иначе она показывалась
-  // бы в «🎁 Мои подарки» получателя с лейблом «(подарена)» — что неверно.
+  let resultingSubscriptionIndex = canonical?.subscriptionIndex ?? 0;
   try {
-    await prisma.subscription.update({
-      where: { id: giftCode.subscriptionId },
-      data: {
-        ownerId: recipientRootClientId,
-        subscriptionIndex: newIndex,
-        giftStatus: "GIFTED",
-        giftedToClientId: recipientRootClientId,
-        purchasedAsGift: false,
-      },
-    });
+    if (canonical) {
+      const result = await extendGiftIntoCanonicalSubscription(canonical, sub, recipientRootClientId);
+      if (!result.ok) throw new Error(result.error);
+      const deletion = await deleteSingleSubscription(giftCode.subscriptionId);
+      if (!deletion.deleted) throw new Error(deletion.failures[0]?.error ?? "Не удалось удалить подарочный резерв");
+    } else {
+      const newIndex = multiSubscriptionsEnabled ? await getNextSubscriptionIndex(recipientRootClientId) : 0;
+      resultingSubscriptionIndex = newIndex;
+      await prisma.subscription.update({
+        where: { id: giftCode.subscriptionId },
+        data: {
+          ownerId: recipientRootClientId,
+          subscriptionIndex: newIndex,
+          giftStatus: "GIFTED",
+          giftedToClientId: recipientRootClientId,
+          purchasedAsGift: false,
+        },
+      });
+      if (!multiSubscriptionsEnabled) {
+        await prisma.client.update({
+          where: { id: recipientRootClientId },
+          data: {
+            remnawaveUuid: sub.remnawaveUuid,
+            currentTariffId: sub.tariffId,
+            currentPricePerDay: sub.tariff?.price != null && sub.tariff.durationDays > 0
+              ? sub.tariff.price / sub.tariff.durationDays
+              : null,
+          },
+        });
+      }
+    }
   } catch (err) {
     // Что-то пошло не так после claim — возвращаем код в ACTIVE,
     // чтобы юзер мог ретраить.
@@ -803,10 +883,16 @@ export async function redeemGiftCode(
       where: { id: giftCode.id },
       data: { status: "ACTIVE", redeemedById: null, redeemedAt: null },
     }).catch(() => {});
-    throw err;
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Не удалось активировать подарок",
+      status: 502,
+    };
   }
 
-  if (sub.remnawaveUuid) {
+  const resultingSubscriptionId = canonical?.id ?? giftCode.subscriptionId;
+
+  if (!canonical && sub.remnawaveUuid) {
     const binding = await bindGiftSubscriptionIdentity(giftCode.subscriptionId, {
       ...(recipient.telegramId?.trim() ? { telegramId: Number(recipient.telegramId) } : {}),
       ...(recipient.email?.trim() ? { email: recipient.email.trim() } : {}),
@@ -818,12 +904,12 @@ export async function redeemGiftCode(
   }
 
   // Логируем для обеих сторон
-  await logGiftEvent(giftCode.creatorId, "GIFT_SENT", giftCode.subscriptionId, {
+  await logGiftEvent(giftCode.creatorId, "GIFT_SENT", resultingSubscriptionId, {
     code: giftCode.code,
     recipientId: recipientRootClientId,
     tariffName: sub.tariff?.name ?? null,
   });
-  await logGiftEvent(recipientRootClientId, "GIFT_RECEIVED", giftCode.subscriptionId, {
+  await logGiftEvent(recipientRootClientId, "GIFT_RECEIVED", resultingSubscriptionId, {
     code: giftCode.code,
     senderId: giftCode.creatorId,
     tariffName: sub.tariff?.name ?? null,
@@ -872,7 +958,7 @@ export async function redeemGiftCode(
   // получаем subscriptionUrl чтобы передать получателю.
   let subscriptionUrl: string | null = null;
   const updatedSub = await prisma.subscription.findUnique({
-    where: { id: giftCode.subscriptionId },
+    where: { id: resultingSubscriptionId },
     select: { remnawaveUuid: true },
   });
   if (updatedSub?.remnawaveUuid) {
@@ -888,8 +974,8 @@ export async function redeemGiftCode(
   return {
     ok: true,
     data: {
-      subscriptionId: giftCode.subscriptionId,
-      subscriptionIndex: newIndex,
+      subscriptionId: resultingSubscriptionId,
+      subscriptionIndex: resultingSubscriptionIndex,
       giftMessage: giftCode.giftMessage ?? null,
       creatorTelegramId: creator?.telegramId ?? null,
       tariffName: sub.tariff?.name ?? null,
