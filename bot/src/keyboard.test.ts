@@ -32,19 +32,16 @@ function labels(markup: ReturnType<typeof mainMenu>): string[][] {
   return markup.inline_keyboard.map((row) => row.map((button) => button.text));
 }
 
-function buildMain(showTrial: boolean) {
+function buildMain(overrides: Record<string, unknown> = {}) {
   return mainMenu({
-    showTrial,
+    showTrial: false,
     showVpn: true,
-    showGift: true,
     appUrl: "https://bot.lazeika.xyz",
-    botButtons: buttons,
-    hasSupportLinks: true,
-    showProxy: true,
-    showSingbox: true,
-    showExtraOptions: true,
-    buttonsPerRow: 1,
-  });
+    supportUrl: "https://t.me/lazeyka_support_bot",
+    renewTariffId: "tariff-standard",
+    isAdmin: false,
+    ...overrides,
+  } as Parameters<typeof mainMenu>[0]);
 }
 
 type MenuFactory = (options: Parameters<typeof mainMenu>[0]) => ReturnType<typeof mainMenu>;
@@ -54,32 +51,38 @@ function callbacks(markup: ReturnType<typeof mainMenu>): (string | null)[][] {
   return markup.inline_keyboard.map((row) => row.map((button) => "callback_data" in button ? button.callback_data : null));
 }
 
-test("главное меню содержит только согласованные смысловые ряды", () => {
-  assert.deepEqual(labels(buildMain(true)), [
-    ["🔐 Войти в кабинет"],
-    ["🎁 Попробовать бесплатно"],
-    ["📋 Мои подписки"],
-    ["🔗 Реферальная система"],
-    ["🆘 Поддержка"],
-    ["ⓘ О сервисе"],
+test("главное меню плоское и ведёт прямо в mini-app", () => {
+  const markup = buildMain();
+  assert.deepEqual(labels(markup), [
+    ["👤 ВОЙТИ В КАБИНЕТ"],
+    ["💳 Тарифы", "🔑 Мои ключи"],
+    ["🤝 Рефералка", "🛠 Поддержка"],
+    ["🔄 Продлить", "ℹ️ Инфо"],
   ]);
-});
-
-test("использованный или недоступный пробник исчезает, а приглашение друзей остаётся", () => {
-  assert.deepEqual(labels(buildMain(false)), [
-    ["🔐 Войти в кабинет"],
-    ["📋 Мои подписки"],
-    ["🔗 Реферальная система"],
-    ["🆘 Поддержка"],
-    ["ⓘ О сервисе"],
-  ]);
-});
-
-test("главное меню использует цветовую иерархию кнопок", () => {
   assert.deepEqual(
-    buildMain(true).inline_keyboard.map((row) => row.map((button) => ("style" in button ? button.style : undefined))),
-    [["primary"], ["primary"], [undefined], [undefined], [undefined], [undefined]],
+    markup.inline_keyboard.map((row) => row.map((button) =>
+      "web_app" in button ? button.web_app.url : "url" in button ? button.url : button.callback_data
+    )),
+    [
+      ["https://bot.lazeika.xyz/cabinet"],
+      ["https://bot.lazeika.xyz/cabinet/tariffs", "https://bot.lazeika.xyz/cabinet/subscribe"],
+      ["https://bot.lazeika.xyz/cabinet/referral", "https://t.me/lazeyka_support_bot"],
+      ["pay_tariff:tariff-standard:r", "menu:info"],
+    ],
   );
+});
+
+test("главное меню использует согласованные цвета", () => {
+  assert.deepEqual(
+    buildMain({ isAdmin: true }).inline_keyboard.map((row) => row.map((button) => ("style" in button ? button.style : undefined))),
+    [["success"], ["primary", "primary"], ["primary", "primary"], ["primary", "primary"], ["primary"]],
+  );
+});
+
+test("главное меню явно обрабатывает отсутствие тарифа, support и права админа", () => {
+  assert.equal(callbacks(buildMain({ renewTariffId: null }))[3]![0], "menu:renew");
+  assert.equal(labels(buildMain({ supportUrl: null }))[2]!.includes("🛠 Поддержка"), false);
+  assert.deepEqual(labels(buildMain({ isAdmin: true })).at(-1), ["⚙️ Админ-панель"]);
 });
 
 test("меню бота показывает четыре раздела и возврат на главную", () => {

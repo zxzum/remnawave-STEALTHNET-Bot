@@ -195,6 +195,9 @@ export type MenuOptions = {
   buttonsPerRow?: 1 | 2;
   /** URL страницы подписки Remna (если задан — кнопка VPN ведёт туда) */
   remnaSubscriptionUrl?: string | null;
+  supportUrl?: string | null;
+  renewTariffId?: string | null;
+  isAdmin?: boolean;
 };
 
 function resolveMenuButtons(opts: MenuOptions): BotButtonConfig[] {
@@ -280,26 +283,28 @@ function menuButtonNode(b: BotButtonConfig, opts: MenuOptions): InlineButton | W
   return callback ? btn(b.label, callback, styleForBtn, iconId) : null;
 }
 
-/** Главное меню с фиксированными смысловыми рядами. Настройки названия, видимости,
- * цвета и эмодзи продолжают браться из botButtons. */
+/** Плоское главное меню: весь пользовательский функционал, кроме продления, живёт в Mini App. */
 export function mainMenu(opts: MenuOptions): InlineMarkup {
-  const buttons = resolveMenuButtons(opts);
-  const byId = new Map(buttons.map((button) => [button.id, button]));
-  const layout = [
-    ["cabinet"],
-    ["trial"],
-    ["my_subs"],
-    ["referral"],
-    ["support"],
-    ["about"],
-  ];
-  const rows = layout
-    .map((ids) => ids.map((id) => byId.get(id)).filter((button): button is BotButtonConfig => Boolean(button)))
-    .map((row) => row.map((button) => menuButtonNode({
-      ...button,
-      style: button.style === "" ? "" : (button.style || "primary"),
-    }, opts)).filter((node): node is InlineButton | WebAppButton | UrlButton => Boolean(node)))
-    .filter((row) => row.length > 0);
+  const base = opts.appUrl?.trim().replace(/\/$/, "") ?? "";
+  const web = (text: string, path: string, style: ButtonStyle = "primary"): WebAppButton => ({
+    text,
+    web_app: { url: `${base}${path}` },
+    style,
+  });
+  const rows: InlineMarkup["inline_keyboard"] = [];
+  if (base) {
+    rows.push([web("👤 ВОЙТИ В КАБИНЕТ", "/cabinet", "success")]);
+    rows.push([web("💳 Тарифы", "/cabinet/tariffs"), web("🔑 Мои ключи", "/cabinet/subscribe")]);
+    rows.push([
+      web("🤝 Рефералка", "/cabinet/referral"),
+      ...(opts.supportUrl ? [{ text: "🛠 Поддержка", url: opts.supportUrl, style: "primary" as const }] : []),
+    ]);
+  }
+  rows.push([
+    btn("🔄 Продлить", opts.renewTariffId ? `pay_tariff:${opts.renewTariffId}:r` : "menu:renew", "primary"),
+    btn("ℹ️ Инфо", "menu:info", "primary"),
+  ]);
+  if (opts.isAdmin) rows.push([btn("⚙️ Админ-панель", "admin:menu", "primary")]);
   return { inline_keyboard: rows };
 }
 
