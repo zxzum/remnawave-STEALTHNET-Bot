@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const { minimumEligibleTrialBonus, quoteConvertedDays } = await import("./subscription-change.policy.js");
@@ -96,4 +97,62 @@ test("conversion is unavailable for expired or invalid value", () => {
     sameTariff: false,
     isTrial: false,
   }).allowed, false);
+});
+
+test("downgrade can round to zero days while retaining the downgrade direction", () => {
+  assert.deepEqual(quoteConvertedDays({
+    remainingDays: 1,
+    oldPricePerDay: 10.1,
+    newPricePerDay: 10,
+    sameTariff: false,
+    isTrial: false,
+  }), {
+    allowed: true,
+    direction: "downgrade",
+    convertedDays: 0,
+    commissionPercent: 5,
+  });
+});
+
+test("invalid target prices are denied even for same-tariff and trial inputs", () => {
+  assert.equal(quoteConvertedDays({
+    remainingDays: 8,
+    oldPricePerDay: 10,
+    newPricePerDay: 0,
+    sameTariff: true,
+    isTrial: false,
+  }).allowed, false);
+
+  assert.equal(quoteConvertedDays({
+    remainingDays: 8,
+    oldPricePerDay: null,
+    newPricePerDay: 0,
+    sameTariff: false,
+    isTrial: true,
+  }).allowed, false);
+});
+
+test("negative and non-positive trial durations are ignored by the bonus", () => {
+  assert.equal(minimumEligibleTrialBonus({
+    activeTrialDurations: [7, -3, 0, Number.NaN],
+    trialEverUsed: false,
+    subscriptionEverExisted: false,
+    priorPaidPurchase: false,
+  }), 7);
+});
+
+test("tariff conversion preview uses the shared quote policy in single mode", async () => {
+  const source = await readFile(new URL("../client/client.routes.ts", import.meta.url), "utf8");
+  const routeStart = source.indexOf('clientRouter.get("/tariff-conversion-preview"');
+  const routeEnd = source.indexOf("clientRouter.", routeStart + 1);
+  const body = source.slice(routeStart, routeEnd > routeStart ? routeEnd : undefined);
+
+  assert.ok(routeStart >= 0);
+  assert.match(source, /from "\.\.\/subscription\/subscription-change\.policy\.js"/);
+  assert.match(body, /quoteConvertedDays\(/);
+  assert.match(body, /sameTariff:/);
+  assert.match(body, /isTrial:/);
+  assert.doesNotMatch(body, /mode:\s*"replace"/);
+  assert.doesNotMatch(body, /convertedDays:\s*0/);
+  assert.doesNotMatch(body, /computeConvertedDays\(/);
 });

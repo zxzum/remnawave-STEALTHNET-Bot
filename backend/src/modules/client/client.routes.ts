@@ -35,8 +35,9 @@ import { isSmtpConfigured, isMailConfigured, mailConfigFromSystem, sendEmail } f
 import { renderEmailTemplate } from "../email-templates/email-templates.service.js";
 import { signClientPasswordResetToken, verifyClientPasswordResetToken } from "../auth/auth.service.js";
 import { createPlategaTransaction, isPlategaConfigured } from "../platega/platega.service.js";
-import { activateTariffForClient, activateTariffByPaymentId, findConvertibleSubscription, computeConvertedDays } from "../tariff/tariff-activation.service.js";
+import { activateTariffForClient, activateTariffByPaymentId, findConvertibleSubscription } from "../tariff/tariff-activation.service.js";
 import { upsertSubscriptionByRemnaUuid } from "../subscription/subscription.helpers.js";
+import { quoteConvertedDays } from "../subscription/subscription-change.policy.js";
 import { extractRemnaSubscriptionUrl } from "../subscription/subscription-url.js";
 import { removeAllExtraDevicesForSub } from "../subscription/extras.helper.js";
 import { saveRedirectAndBuildUrl } from "../payment-redirect/payment-redirect.util.js";
@@ -1994,6 +1995,16 @@ clientRouter.get("/tariff-conversion-preview", async (req, res) => {
     const keepCostForPeriod = extDevices > 0 && purchasedDays > 0
       ? Math.round(extMonthly * (purchasedDays / 30) * 100) / 100
       : 0;
+    const sameTariffQuote = quoteConvertedDays({
+      remainingDays,
+      oldPricePerDay: convertible.currentPricePerDay != null
+        ? convertible.currentPricePerDay + (extDevices > 0 ? extMonthly / 30 : 0)
+        : (extDevices > 0 ? extMonthly / 30 : null),
+      newPricePerDay: newBasePerDay + (extDevices > 0 ? extMonthly / 30 : 0),
+      sameTariff: true,
+      isTrial: false,
+    });
+    const sameTariffConvertedDays = sameTariffQuote.allowed ? sameTariffQuote.convertedDays : 0;
     return res.json({
       willConvert: true,
       mode: "extend",
@@ -2006,17 +2017,17 @@ clientRouter.get("/tariff-conversion-preview", async (req, res) => {
         isTrial: false,
       },
       remainingDays,
-      convertedDays: remainingDays,
+      convertedDays: sameTariffConvertedDays,
       purchasedDays,
-      totalDays: purchasedDays + remainingDays,
+      totalDays: purchasedDays + sameTariffConvertedDays,
       extras: extDevices > 0 ? {
         extraDevices: extDevices,
         extraDevicesMonthlyPrice: extMonthly,
         newIncludedDevices: Math.max(1, tariff.includedDevices ?? 1),
         /** «сохранить»: доплата за устройства на купленный период. */
-        keep: { totalDevices: Math.max(1, tariff.includedDevices ?? 1) + extDevices, convertedDays: remainingDays, totalDays: purchasedDays + remainingDays, extraCost: keepCostForPeriod },
+        keep: { totalDevices: Math.max(1, tariff.includedDevices ?? 1) + extDevices, convertedDays: sameTariffConvertedDays, totalDays: purchasedDays + sameTariffConvertedDays, extraCost: keepCostForPeriod },
         /** «убрать»: без доплаты, устройств меньше. */
-        drop: { totalDevices: Math.max(1, tariff.includedDevices ?? 1), convertedDays: remainingDays, totalDays: purchasedDays + remainingDays, extraCost: 0 },
+        drop: { totalDevices: Math.max(1, tariff.includedDevices ?? 1), convertedDays: sameTariffConvertedDays, totalDays: purchasedDays + sameTariffConvertedDays, extraCost: 0 },
       } : undefined,
     });
   }
@@ -2024,42 +2035,22 @@ clientRouter.get("/tariff-conversion-preview", async (req, res) => {
   // та же математика, что в extendSecondarySubscription(convertMode):
   // полная старая ставка = база + устройства; при «убрать» вся ценность уходит в дни
   // чистого тарифа, при «оставить» — в дни тарифа с устройствами.
-  // Глобальный single-режим (мульти-подписки выкл): смена тарифа = ЖЁСТКАЯ замена.
-  // Старая подписка обнуляется, остаток дней СГОРАЕТ, новая с нуля на выбранный тариф.
-  if (!multiSubEnabled && convertible.trialId == null) {
-    return res.json({
-      willConvert: true,
-      mode: "replace",
-      othersToRemove,
-      subscription: {
-        id: convertible.id,
-        index: convertible.subscriptionIndex,
-        tariffName: convertible.tariffName,
-        expireAt: convertible.expireAt?.toISOString() ?? null,
-        isTrial: convertible.trialId != null,
-      },
-      remainingDays,
-      convertedDays: 0,
-      purchasedDays,
-      totalDays: purchasedDays,
-    });
-  }
-
   const extrasPerDay = extraDevices > 0 ? extrasMonthly / 30 : 0;
   const oldFullPerDay = convertible.currentPricePerDay != null
     ? convertible.currentPricePerDay + extrasPerDay
     : (extrasPerDay > 0 ? extrasPerDay : null);
-  const convertedDaysDrop = computeConvertedDays({
+  const quoteForExtras = (keepExtras: boolean) => quoteConvertedDays({
     remainingDays,
     oldPricePerDay: oldFullPerDay,
-    newPricePerDay: newBasePerDay,
+    newPricePerDay: newBasePerDay + (keepExtras ? extrasPerDay : 0),
+    sameTariff: false,
+    isTrial: convertible.trialId != null,
   });
-  const convertedDaysKeep = extraDevices > 0
-    ? computeConvertedDays({
-        remainingDays,
-        oldPricePerDay: oldFullPerDay,
-        newPricePerDay: newBasePerDay + extrasPerDay,
-      })
+  const convertedDaysDropQuote = quoteForExtras(false);
+  const convertedDaysDrop = convertedDaysDropQuote.allowed ? convertedDaysDropQuote.convertedDays : 0;
+  const convertedDaysKeepQuote = quoteForExtras(true);
+  const convertedDaysKeep = extraDevices > 0 && convertedDaysKeepQuote.allowed
+    ? convertedDaysKeepQuote.convertedDays
     : convertedDaysDrop;
 
   const newIncludedDevices = Math.max(1, tariff.includedDevices ?? 1);

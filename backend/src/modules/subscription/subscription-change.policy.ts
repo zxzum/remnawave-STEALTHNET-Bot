@@ -44,6 +44,9 @@ export function quoteConvertedDays(input: ConversionInput): ConversionQuote {
     : 0;
   if (remaining === 0) return deniedQuote();
 
+  const newPrice = input.newPricePerDay;
+  if (!Number.isFinite(newPrice) || newPrice <= 0) return deniedQuote();
+
   if (input.sameTariff || input.isTrial) {
     return {
       allowed: true,
@@ -54,8 +57,7 @@ export function quoteConvertedDays(input: ConversionInput): ConversionQuote {
   }
 
   const oldPrice = input.oldPricePerDay;
-  const newPrice = input.newPricePerDay;
-  if (!Number.isFinite(oldPrice) || (oldPrice ?? 0) <= 0 || !Number.isFinite(newPrice) || newPrice <= 0) {
+  if (!Number.isFinite(oldPrice) || (oldPrice ?? 0) <= 0) {
     return deniedQuote();
   }
 
