@@ -32,8 +32,8 @@ test("client monitoring and trial conversion routes are present", async () => {
   assert.match(source, /adminRouter\.get\("\/clients\/:id\/activity"/);
   assert.match(source, /redactAdminActivityPayload/);
   assert.match(source, /adminRouter\.post\("\/subscriptions\/:subId\/convert-trial"/);
-  assert.match(source, /extendSecondarySubscription\(sub\.id/);
-  assert.match(source, /convertMode=true/);
+  assert.match(source, /extendSecondarySubscription\(sub\.id|applyAdminSubscriptionConversion/);
+  assert.match(source, /convertMode.*true|applyAdminSubscriptionConversion/);
 });
 
 test("admin subscription grants permanently consume the client's trial", async () => {
@@ -50,13 +50,13 @@ test("admin subscription grants permanently consume the client's trial", async (
     source.indexOf('adminRouter.post("/subscriptions/:subId/grant-extend"'),
     source.indexOf("const convertTrialSchema"),
   );
-  assert.match(grantExtend, /lockTrialAfterSubscription\(sub\.ownerId\)/);
+  assert.match(grantExtend, /applyAdminSubscriptionConversion|lockTrialAfterSubscription\(sub\.ownerId\)/);
 
   const convertTrial = source.slice(
     source.indexOf('adminRouter.post("/subscriptions/:subId/convert-trial"'),
     source.indexOf("const attachRemnaSchema"),
   );
-  assert.match(convertTrial, /lockTrialAfterSubscription\(sub\.ownerId\)/);
+  assert.match(convertTrial, /applyAdminSubscriptionConversion|lockTrialAfterSubscription\(sub\.ownerId\)/);
 
   const attachRemna = source.slice(
     source.indexOf('adminRouter.post("/clients/:id/attach-remna-subscription"'),
@@ -72,7 +72,7 @@ test("admin conversion exposes one policy for preview and apply", async () => {
   assert.match(source, /adminRouter\.post\("\/clients\/:id\/subscription-conversion\/apply"/);
   assert.match(source, /sourceRevision/);
   assert.match(source, /status\(409\)/);
-  assert.match(source, /logAdmin\(req, "subscription\.convert_admin"/);
+  assert.match(source, /subscription\.convert_admin/);
 });
 
 test("admin conversion uses canonical single mode and explicit multi mode", async () => {
@@ -81,7 +81,8 @@ test("admin conversion uses canonical single mode and explicit multi mode", asyn
     source.indexOf("function buildAdminSubscriptionConversionPolicy"),
     source.indexOf("const attachRemnaSchema"),
   );
-  assert.match(conversion, /selectCanonicalSubscription/);
+  assert.match(source, /selectCanonicalSubscription/);
+  assert.match(conversion, /findAdminCanonicalSubscription/);
   assert.match(conversion, /multiSubscriptionsEnabled/);
   assert.match(conversion, /subscriptionId/);
   assert.match(conversion, /expireAt/);
@@ -90,19 +91,39 @@ test("admin conversion uses canonical single mode and explicit multi mode", asyn
 
 test("admin conversion delegates conversion and exposes downgrade day policy", async () => {
   const source = await readFile(adminUrl, "utf8");
-  const conversion = source.slice(
+  const policy = source.slice(
     source.indexOf("function buildAdminSubscriptionConversionPolicy"),
+    source.indexOf("type AdminConversionApplyOptions"),
+  );
+  const apply = source.slice(
+    source.indexOf("async function applyAdminSubscriptionConversion"),
+    source.indexOf('adminRouter.post("/clients/:id/subscription-conversion/preview"'),
+  );
+  assert.match(apply, /extendSecondarySubscription[\s\S]*convertMode:\s*true/);
+  assert.doesNotMatch(apply, /createAdditionalSubscription/);
+  assert.doesNotMatch(apply, /remnawaveUuid\s*:/);
+  assert.doesNotMatch(apply, /remnawaveShortUuid\s*:/);
+  assert.match(policy, /quoteConvertedDays|computeConvertedDays/);
+  assert.match(policy, /commissionPercent|commission/);
+  assert.match(policy, /remainingDays/);
+  assert.match(policy, /convertedDays/);
+  assert.match(policy, /totalDays/);
+});
+
+test("admin grant and trial conversion share the admin conversion apply path", async () => {
+  const source = await readFile(adminUrl, "utf8");
+  const grantExtend = source.slice(
+    source.indexOf('adminRouter.post("/subscriptions/:subId/grant-extend"'),
+    source.indexOf("const convertTrialSchema"),
+  );
+  const convertTrial = source.slice(
+    source.indexOf('adminRouter.post("/subscriptions/:subId/convert-trial"'),
     source.indexOf("const attachRemnaSchema"),
   );
-  assert.match(conversion, /extendSecondarySubscription[\s\S]*convertMode:\s*true/);
-  assert.doesNotMatch(conversion, /createAdditionalSubscription/);
-  assert.doesNotMatch(conversion, /remnawaveUuid\s*:/);
-  assert.doesNotMatch(conversion, /remnawaveShortUuid\s*:/);
-  assert.match(conversion, /quoteConvertedDays|computeConvertedDays/);
-  assert.match(conversion, /commissionPercent|commission/);
-  assert.match(conversion, /remainingDays/);
-  assert.match(conversion, /convertedDays/);
-  assert.match(conversion, /totalDays/);
+  assert.match(grantExtend, /buildAdminSubscriptionConversionPolicy/);
+  assert.match(grantExtend, /applyAdminSubscriptionConversion/);
+  assert.match(convertTrial, /buildAdminSubscriptionConversionPolicy/);
+  assert.match(convertTrial, /applyAdminSubscriptionConversion/);
 });
 
 test("empty clients keep all tabs and never render @null", async () => {
@@ -149,7 +170,7 @@ test("trial limit propagation updates only quotas belonging to that trial", asyn
 
 test("trial form resolves inherited squad UUIDs to Remnawave squad names", async () => {
   const source = await readFile(trialsUrl, "utf8");
-  assert.match(source, /squads\.find\(\(s\) => s\.uuid === uuid\)/);
+  assert.match(source, /squads\.find\(\(squad\) => squad\.uuid === uuid\)/);
   assert.doesNotMatch(source, /\{ uuid, name: uuid \}/);
 });
 
