@@ -7,6 +7,7 @@ import {
   groupDevicesBySubscription,
   mapSubscription,
   mapTariffGroups,
+  conversionTargets,
   quoteTariff,
   resolveOptionalNav,
   resolvePaymentUrl,
@@ -44,6 +45,30 @@ test("maps public tariff options and computes extra devices like the backend", (
   assert.equal(plan.durationOptions[1].id, "year");
   assert.equal(plan.traffic, "100 ГБ");
   assert.deepEqual(quoteTariff(plan, 365, 3), { base: 3000, extras: 2920, total: 5920, discountPercent: 20 });
+});
+
+test("lists every other tariff as a manual conversion target", () => {
+  const groups = mapTariffGroups([
+    { id: "g1", name: "VPN", emoji: "🚀", tariffs: [
+      {
+        id: "current", name: "Стандарт", description: null, durationDays: 30, price: 200,
+        currency: "rub", deviceLimit: 3, includedDevices: 3, pricePerExtraDevice: 0,
+        maxExtraDevices: 0, deviceDiscountTiers: [], priceOptions: [],
+      },
+      {
+        id: "target-1", name: "Оптимальный", description: null, durationDays: 30, price: 300,
+        currency: "rub", deviceLimit: 3, includedDevices: 3, pricePerExtraDevice: 0,
+        maxExtraDevices: 0, deviceDiscountTiers: [], priceOptions: [],
+      },
+    ] },
+    { id: "g2", name: "Другие", emoji: "✨", tariffs: [{
+      id: "target-2", name: "Обычный ВПН", description: null, durationDays: 30, price: 100,
+      currency: "rub", deviceLimit: 1, includedDevices: 1, pricePerExtraDevice: 0,
+      maxExtraDevices: 0, deviceDiscountTiers: [], priceOptions: [],
+    }] },
+  ]);
+
+  assert.deepEqual(conversionTargets(groups, "current").map((plan) => plan.id), ["target-1", "target-2"]);
 });
 
 test("preserves tariff description whitespace for cabinet rendering", () => {

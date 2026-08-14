@@ -29,7 +29,7 @@ import {
 } from "lucide-react";
 import { cn } from "../lib/cn";
 import { useApp } from "../store/AppContext";
-import { quoteTariff, resolvePaymentUrl, type TariffPlan } from "../model";
+import { conversionTargets, quoteTariff, resolvePaymentUrl, type CabinetSubscription, type TariffGroup, type TariffPlan } from "../model";
 import { preparePaymentRedirect } from "@/lib/open-payment-url";
 
 function durationPrice(plan: TariffPlan, days: number, extraDevices: number) {
@@ -798,6 +798,194 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
 }
 
 /* ---------------- Строка тарифа ---------------- */
+
+export function ManualConversionDialog({
+  open,
+  onOpenChange,
+  source,
+  tariffGroups,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  source: CabinetSubscription;
+  tariffGroups: TariffGroup[];
+}) {
+  const { reload, toast } = useApp();
+  const { state, refreshProfile } = useClientAuth();
+  const [targetId, setTargetId] = useState<string | null>(null);
+  const [quote, setQuote] = useState<ManualConversionQuote | null>(null);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+  const [quoting, setQuoting] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const targets = useMemo(() => conversionTargets(tariffGroups, source.tariffId), [source.tariffId, tariffGroups]);
+  const target = targets.find((plan) => plan.id === targetId) ?? null;
+  const option = target?.durationOptions[0] ?? null;
+
+  useEffect(() => {
+    if (!open) {
+      setTargetId(null);
+      setQuote(null);
+      setQuoteError(null);
+      setQuoting(false);
+      setApplying(false);
+      return;
+    }
+    setTargetId((current) => current && targets.some((plan) => plan.id === current) ? current : targets[0]?.id ?? null);
+  }, [open, targets]);
+
+  useEffect(() => {
+    if (!open || !state.token || !target || !option) {
+      setQuote(null);
+      setQuoteError(target ? "У выбранного тарифа нет доступного срока" : null);
+      setQuoting(false);
+      return;
+    }
+    let current = true;
+    setQuoting(true);
+    setQuote(null);
+    setQuoteError(null);
+    void api.clientSubscriptionConversionQuote(state.token, {
+      subscriptionId: source.id,
+      tariffId: target.id,
+      priceOptionId: option.id,
+    }).then((nextQuote) => {
+      if (current) setQuote(nextQuote);
+    }).catch((cause) => {
+      if (current) setQuoteError(cause instanceof Error ? cause.message : "Для этого тарифа конвертация недоступна");
+    }).finally(() => {
+      if (current) setQuoting(false);
+    });
+    return () => { current = false; };
+  }, [open, option, source.id, state.token, target]);
+
+  const apply = async () => {
+    if (!state.token || !quote || applying) return;
+    setApplying(true);
+    try {
+      const result = await api.clientSubscriptionConversion(state.token, quote.quoteToken);
+      await Promise.all([reload(), refreshProfile()]);
+      toast({
+        title: "Тариф изменён",
+        description: `Остаток пересчитан: ${result.totalDays} дн.${result.commissionPercent > 0 ? " Комиссия 5% учтена." : ""}`,
+        variant: "success",
+      });
+      onOpenChange(false);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 409) {
+        setQuote(null);
+        setQuoteError("Расчёт устарел. Выберите тариф ещё раз.");
+      } else {
+        setQuoteError(cause instanceof Error ? cause.message : "Не удалось выполнить конвертацию");
+      }
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  return (
+    <Dialog.Root open={open} onOpenChange={(nextOpen) => { if (!applying) onOpenChange(nextOpen); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay asChild>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="fixed inset-0 z-50 bg-ink-950/70 backdrop-blur-md"
+          />
+        </Dialog.Overlay>
+        <Dialog.Content asChild>
+          <motion.div
+            initial={{ opacity: 0, y: 28, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ type: "spring", stiffness: 320, damping: 28 }}
+            className="glass-strong fixed inset-x-3 top-1/2 z-50 mx-auto max-h-[90dvh] w-[calc(100%-1.5rem)] max-w-lg -translate-y-1/2 overflow-y-auto rounded-4xl p-6 sm:inset-x-0 sm:w-[calc(100%-2rem)] sm:p-7"
+          >
+            <Dialog.Close disabled={applying} className="absolute top-4 right-4 grid h-8 w-8 place-items-center rounded-xl text-fog-500 transition-colors hover:bg-white/8 hover:text-white disabled:opacity-50">
+              <X className="h-4 w-4" />
+            </Dialog.Close>
+            <Dialog.Title className="pr-9 text-2xl font-extrabold">Конвертация подписки</Dialog.Title>
+            <Dialog.Description className="mt-2 text-sm leading-relaxed text-fog-500">
+              Выберите тариф — остаток будет пересчитан без создания новой ссылки.
+            </Dialog.Description>
+
+            <div className="mt-5 rounded-3xl border border-white/8 bg-white/3 p-4">
+              <p className="text-xs font-bold tracking-wider text-fog-600 uppercase">Текущая подписка</p>
+              <div className="mt-1 flex items-baseline justify-between gap-3">
+                <span className="font-bold">{source.name}</span>
+                <span className="text-sm font-semibold text-fog-400">{source.daysLeft} дн.</span>
+              </div>
+            </div>
+
+            <p className="mt-5 mb-2 text-sm font-bold">Целевой тариф</p>
+            {targets.length > 0 ? (
+              <div className="grid max-h-56 gap-2 overflow-y-auto pr-1">
+                {targets.map((plan) => {
+                  const selected = plan.id === targetId;
+                  const firstOption = plan.durationOptions[0];
+                  return (
+                    <button
+                      key={plan.id}
+                      type="button"
+                      onClick={() => { setTargetId(plan.id); setQuote(null); setQuoteError(null); }}
+                      className={cn(
+                        "flex items-center gap-3 rounded-2xl border p-3 text-left transition-all",
+                        selected ? "border-accent-400/55 bg-accent-500/12 shadow-neon-blue" : "border-white/8 bg-white/3 hover:border-accent-400/30",
+                      )}
+                    >
+                      <span className="icon-tile h-10 w-10 rounded-xl"><RefreshCw className="h-4 w-4" /></span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-bold">{plan.name}</span>
+                        <span className="mt-0.5 block text-xs text-fog-500">
+                          {firstOption ? `${firstOption.days} дн. · ${formatMoney(firstOption.price, plan.currency)}` : "Срок не настроен"}
+                        </span>
+                      </span>
+                      {plan.popular && <span className="chip chip-amber text-[10px]">Рекомендуем</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="rounded-2xl border border-white/8 bg-white/3 p-4 text-sm text-fog-500">Других тарифов пока нет.</p>
+            )}
+
+            {quoting && <p className="mt-4 text-sm text-fog-500">Считаем новый срок…</p>}
+            {quoteError && !quoting && <p className="mt-4 rounded-2xl border border-red-400/20 bg-red-500/10 p-3 text-sm text-red-200">{quoteError}</p>}
+            {quote && !quoting && (
+              <div className="mt-4 rounded-3xl border border-accent-400/30 bg-accent-500/8 p-4">
+                <p className="text-sm font-bold">Расчёт конвертации</p>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                  <span className="text-fog-500">Текущий тариф</span>
+                  <span className="text-right font-semibold">{quote.currentTariff.name ?? source.name}</span>
+                  <span className="text-fog-500">Целевой тариф</span>
+                  <span className="text-right font-semibold">{quote.targetTariff.name}</span>
+                  <span className="text-fog-500">Остаток</span>
+                  <span className="text-right font-semibold">{quote.remainingDays} дн.</span>
+                  <span className="text-fog-500">После пересчёта</span>
+                  <span className="text-right font-semibold">{quote.convertedDays} дн.</span>
+                  {quote.commissionPercent > 0 && <>
+                    <span className="text-fog-500">Комиссия</span>
+                    <span className="text-right font-semibold text-amber-glow">5%</span>
+                  </>}
+                  <span className="text-fog-500">Итого</span>
+                  <span className="text-right font-bold text-accent-300">{quote.totalDays} дн.</span>
+                </div>
+              </div>
+            )}
+
+            <button
+              type="button"
+              disabled={!quote || quoting || applying}
+              onClick={() => void apply()}
+              className="btn-primary mt-5 w-full justify-center disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              {applying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {applying ? "Конвертируем…" : "Конвертировать подписку"}
+            </button>
+          </motion.div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
 
 function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; index: number }) {
   const startingOption = plan.durationOptions.reduce((best, option) => option.price < best.price ? option : best, plan.durationOptions[0]);
