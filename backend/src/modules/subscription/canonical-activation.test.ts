@@ -44,10 +44,19 @@ test("activation exposes a database-backed client lock and canonical resolver", 
   assert.match(source, /subscriptionIndex:\s*0/);
 });
 
+test("advisory activation locks use executeRaw for PostgreSQL void results", async () => {
+  const source = await readFile(new URL("../tariff/tariff-activation.service.ts", import.meta.url), "utf8");
+  const lockStart = source.indexOf("export async function withClientSubscriptionLock");
+  const lockEnd = source.indexOf("export async function", lockStart + 1);
+  const lock = source.slice(lockStart, lockEnd > lockStart ? lockEnd : undefined);
+  assert.match(lock, /tx\.\$executeRaw`SELECT pg_advisory_xact_lock/);
+  assert.doesNotMatch(lock, /tx\.\$queryRaw`SELECT pg_advisory_xact_lock/);
+});
+
 test("client lock orders advisory lock, operation, and commit", async () => {
   const events: string[] = [];
   const fakeTx = {
-    $queryRaw: async () => {
+    $executeRaw: async () => {
       events.push("lock");
       return [];
     },
