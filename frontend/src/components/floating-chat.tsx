@@ -112,14 +112,12 @@ function TelegramSupportCta({ href }: { href: string }) {
   );
 }
 
-const ChatSwitcher = ({ activeChat, setActiveChat, aiUnread, supportUnread, isFloating = false, showAiTab = true }: any) => {
+const ChatSwitcher = ({ activeChat, setActiveChat, aiUnread, supportUnread, showAiTab = true }: any) => {
   if (!showAiTab) {
     return (
       <div className={cn(
         "relative flex p-1 w-full sm:w-auto sm:min-w-[200px]",
-        isFloating
-          ? "bg-ink-950/70 backdrop-blur-md rounded-2xl border border-violet-glow/30 shadow-[0_14px_36px_-20px_rgba(167,139,250,0.9)] pointer-events-auto"
-          : "bg-ink-950/60 backdrop-blur-sm border border-violet-glow/20 rounded-xl"
+        "bg-ink-950/60 backdrop-blur-sm border border-violet-glow/20 rounded-xl"
       )}>
         <button
           onClick={() => setActiveChat("support")}
@@ -138,9 +136,7 @@ const ChatSwitcher = ({ activeChat, setActiveChat, aiUnread, supportUnread, isFl
   return (
   <div className={cn(
     "relative flex p-1 w-full sm:w-auto sm:min-w-[320px]",
-    isFloating 
-      ? "bg-ink-950/70 backdrop-blur-md rounded-2xl border border-violet-glow/30 shadow-[0_14px_36px_-20px_rgba(167,139,250,0.9)] pointer-events-auto"
-      : "bg-ink-950/60 backdrop-blur-sm border border-violet-glow/20 rounded-xl"
+    "bg-ink-950/60 backdrop-blur-sm border border-violet-glow/20 rounded-xl"
   )}>
     <button
       onClick={() => setActiveChat("ai")}
@@ -225,7 +221,7 @@ const ChatHeader = ({ activeChat, setActiveChat, isExpanded, setIsExpanded, setI
 
     {/* Chat Switcher */}
     {showAiTab && (
-      <div className="flex sm:justify-center px-4 pt-1.5 pb-2 sm:pt-2 sm:pb-3 shrink-0 bg-ink-950/25 border-b border-violet-glow/20">
+      <div className="sticky top-4 z-30 flex sm:justify-center px-4 pt-1.5 pb-2 sm:pt-2 sm:pb-3 shrink-0 bg-ink-950/80 backdrop-blur-md border-b border-violet-glow/20">
         <ChatSwitcher activeChat={activeChat} setActiveChat={setActiveChat} aiUnread={aiUnread} supportUnread={supportUnread} showAiTab={showAiTab} />
       </div>
     )}
@@ -713,11 +709,6 @@ export function FloatingChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const [aiLoading, setAiLoading] = useState(false);
-  const [isScrolled, setIsScrolled] = useState(false);
-
-  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    setIsScrolled(e.currentTarget.scrollTop > 100);
-  };
 
   // Poll for support unread count (skip if tickets are disabled to avoid 404)
   const refreshUnread = () => {
@@ -764,7 +755,6 @@ export function FloatingChat() {
       if (activeChat === "ai") {
         setAiUnread(0);
       }
-      setIsScrolled(false);
       scrollToBottom();
     }
   }, [isOpen, activeChat, aiChats]);
@@ -857,26 +847,8 @@ export function FloatingChat() {
                   {/* AI Messages */}
                   <div 
                     className="flex-1 overflow-y-auto min-h-0 bg-gradient-to-b from-violet-900/12 via-transparent to-sky-900/10 scroll-smooth custom-scrollbar flex flex-col relative"
-                    onScroll={handleScroll}
                   >
                     <ChatHeader {...headerProps} />
-                    
-                    {/* Floating Switcher */}
-                    <div className="sticky top-4 z-30 flex justify-center pointer-events-none px-4 w-full h-0 overflow-visible">
-                      <AnimatePresence>
-                        {isScrolled && (
-                          <motion.div
-                            initial={{ opacity: 0, y: -20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -20 }}
-                            transition={{ duration: 0.2 }}
-                            className="pointer-events-auto w-full sm:w-auto"
-                          >
-                            <ChatSwitcher {...headerProps} isFloating={true} />
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
 
                     <div className="p-4 space-y-4 flex-1">
                       <AnimatePresence mode="popLayout">
