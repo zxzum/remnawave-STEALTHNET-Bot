@@ -1054,7 +1054,7 @@ export function parsePlategaMethods(raw: string | undefined): PlategaMethodConfi
       if (label.trim() === "СПБ") label = "СБП";
       const id = typeof x.id === "number" ? x.id : Number(x.id) || 2;
       return {
-        id: id === 11 && label.trim().toLowerCase() === "карты" ? 10 : id,
+        id: id === 11 ? 10 : id,
         enabled: Boolean(x.enabled),
         label,
       };

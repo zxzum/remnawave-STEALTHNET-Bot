@@ -122,14 +122,19 @@ export async function createPlategaTransaction(
       return { error: `Platega: ${msg}` };
     }
 
-    const paymentUrl = (data.redirect as string) || (data.url as string) || (data.paymentUrl as string);
-    const transactionId = (data.transactionId as string) || (data.id as string);
+    const paymentUrl = [data.redirect, data.url, data.paymentUrl]
+      .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+    const transactionId = [data.transactionId, data.id]
+      .find((value): value is string => typeof value === "string" && value.trim().length > 0);
 
     if (!paymentUrl) {
       return { error: "Platega не вернул ссылку на оплату" };
     }
+    if (!transactionId) {
+      return { error: "Platega не вернул идентификатор транзакции" };
+    }
 
-    return { paymentUrl, transactionId: transactionId || "" };
+    return { paymentUrl: paymentUrl.trim(), transactionId: transactionId.trim() };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return { error: `Platega: ${message}` };

@@ -382,7 +382,7 @@ plategaWebhooksRouter.post("/platega", async (req, res) => {
       await notifyPlategaPaymentEvent({ kind: "callback_failed", paymentId: payment.id, transactionId, details: apiTransaction.error, callbackAvailable: true }).catch(() => {});
       return res.status(503).json({ message: "Unable to verify transaction" });
     }
-    const apiMismatch = validatePlategaTransaction(apiTransaction, payment);
+    const apiMismatch = validatePlategaTransaction(apiTransaction, payment, true);
     if (apiMismatch) {
       ack(409, "rejected_payload", `API ${apiMismatch}`, payment.id);
       await notifyPlategaPaymentEvent({ kind: "callback_failed", paymentId: payment.id, transactionId, details: `Platega API ${apiMismatch}` }).catch(() => {});

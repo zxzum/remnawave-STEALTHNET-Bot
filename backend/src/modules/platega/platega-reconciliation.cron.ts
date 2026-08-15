@@ -67,7 +67,7 @@ export async function reconcilePendingPlategaPayments(limit = 10): Promise<{ che
   for (const payment of payments) {
     if (!payment.externalId) continue;
     const transaction = await getPlategaTransactionStatus(credentials, payment.externalId);
-    if ("error" in transaction || validatePlategaTransaction(transaction, payment)) continue;
+    if ("error" in transaction || validatePlategaTransaction(transaction, payment, true)) continue;
     const status = transaction.status.toUpperCase();
     if (SUCCESS.has(status)) {
       const result = await completePlategaPayment(payment.id);
