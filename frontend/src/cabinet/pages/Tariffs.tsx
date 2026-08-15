@@ -818,7 +818,8 @@ export function ManualConversionDialog({
   const [quoting, setQuoting] = useState(false);
   const [applying, setApplying] = useState(false);
   const targets = useMemo(() => conversionTargets(tariffGroups, source.tariffId), [source.tariffId, tariffGroups]);
-  const target = targets.find((plan) => plan.id === targetId) ?? null;
+  const selectedTargetId = targetId ?? targets[0]?.id ?? null;
+  const target = targets.find((plan) => plan.id === selectedTargetId) ?? null;
   const option = target?.durationOptions[0] ?? null;
 
   useEffect(() => {
@@ -830,7 +831,7 @@ export function ManualConversionDialog({
       setApplying(false);
       return;
     }
-    setTargetId((current) => current && targets.some((plan) => plan.id === current) ? current : targets[0]?.id ?? null);
+    setTargetId((current) => current && targets.some((plan) => plan.id === current) ? current : null);
   }, [open, targets]);
 
   useEffect(() => {
@@ -917,9 +918,9 @@ export function ManualConversionDialog({
 
             <p className="mt-5 mb-2 text-sm font-bold">Целевой тариф</p>
             {targets.length > 0 ? (
-              <div className="grid max-h-56 gap-2 overflow-y-auto pr-1">
+              <div className="-mx-4 grid max-h-64 gap-2 overflow-y-auto px-4 py-3">
                 {targets.map((plan) => {
-                  const selected = plan.id === targetId;
+                  const selected = plan.id === selectedTargetId;
                   const firstOption = plan.durationOptions[0];
                   return (
                     <button
@@ -947,10 +948,18 @@ export function ManualConversionDialog({
               <p className="rounded-2xl border border-white/8 bg-white/3 p-4 text-sm text-fog-500">Других тарифов пока нет.</p>
             )}
 
-            {quoting && <p className="mt-4 text-sm text-fog-500">Считаем новый срок…</p>}
-            {quoteError && !quoting && <p className="mt-4 rounded-2xl border border-red-400/20 bg-red-500/10 p-3 text-sm text-red-200">{quoteError}</p>}
-            {quote && !quoting && (
-              <div className="mt-4 rounded-3xl border border-accent-400/30 bg-accent-500/8 p-4">
+            <div className="mt-4 min-h-52">
+              {target && (quoting || (!quote && !quoteError)) && (
+                <div className="h-52 animate-pulse rounded-3xl border border-white/8 bg-white/3 p-4" aria-label="Считаем новый срок" aria-busy="true">
+                  <div className="h-5 w-40 rounded-lg bg-white/8" />
+                  <div className="mt-5 grid grid-cols-2 gap-3">
+                    {[0, 1, 2, 3].map((item) => <div key={item} className="h-4 rounded-md bg-white/6" />)}
+                  </div>
+                </div>
+              )}
+              {quoteError && !quoting && <p className="rounded-2xl border border-red-400/20 bg-red-500/10 p-3 text-sm text-red-200">{quoteError}</p>}
+              {quote && !quoting && (
+              <div className="rounded-3xl border border-accent-400/30 bg-accent-500/8 p-4">
                 <p className="text-sm font-bold">Расчёт конвертации</p>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
                   <span className="text-fog-500">Текущий тариф</span>
@@ -969,13 +978,14 @@ export function ManualConversionDialog({
                   <span className="text-right font-bold text-accent-300">{quote.totalDays} дн.</span>
                 </div>
               </div>
-            )}
+              )}
+            </div>
 
             <button
               type="button"
               disabled={!quote || quoting || applying}
               onClick={() => void apply()}
-              className="btn-primary mt-5 w-full justify-center disabled:cursor-not-allowed disabled:opacity-45"
+              className="btn-primary mt-5 w-full justify-center px-6 py-4 text-base disabled:cursor-not-allowed disabled:opacity-45"
             >
               {applying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               {applying ? "Конвертируем…" : "Конвертировать подписку"}

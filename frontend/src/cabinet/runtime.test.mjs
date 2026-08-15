@@ -57,6 +57,16 @@ test("isolates cabinet styles from admin while retaining portal styles", async (
   assert.doesNotMatch(css, /@theme/);
   assert.ok(main.indexOf('import "./index.css"') < main.indexOf('import "./cabinet.css"'));
   assert.doesNotMatch(app, /import "@\/cabinet\.css"/);
+  assert.match(css, /\[role="dialog"\]\[data-state="closed"\]/);
+  assert.match(css, /cabinet-dialog-close 180ms/);
+});
+
+test("conversion dialog reserves its quote space and does not clip the selected glow", async () => {
+  const tariffs = await readFile(new URL("./pages/Tariffs.tsx", import.meta.url), "utf8");
+  assert.match(tariffs, /selectedTargetId = targetId \?\? targets\[0\]\?\.id/);
+  assert.match(tariffs, /-mx-4 grid max-h-64 gap-2 overflow-y-auto px-4 py-3/);
+  assert.match(tariffs, /mt-4 min-h-52/);
+  assert.match(tariffs, /px-6 py-4 text-base/);
 });
 
 test("contains no prototype mock imports", async () => {

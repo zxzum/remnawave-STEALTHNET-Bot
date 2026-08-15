@@ -11,6 +11,7 @@ const {
   verifyManualConversionQuote,
   isManualConversionQuoteStale,
   assertRemnawaveIdentityPreserved,
+  sameTariffCategory,
 } = await import("./subscription-conversion.routes.js");
 
 const baseInput = {
@@ -132,9 +133,17 @@ test("manual conversion preserves the exact Remnawave identity and link", () => 
   }));
 });
 
+test("manual conversion stays inside the source tariff section", () => {
+  assert.equal(sameTariffCategory("vpn", "vpn"), true);
+  assert.equal(sameTariffCategory("vpn", "proxy"), false);
+  assert.equal(sameTariffCategory(undefined, "vpn"), false);
+});
+
 test("manual conversion route never reissues a subscription", async () => {
   const source = await readFile(new URL("./subscription-conversion.routes.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /remnaRevokeUserSubscription/);
   assert.match(source, /withClientSubscriptionLock/);
   assert.match(source, /ManualConversionError\(409/);
+  assert.match(source, /sameTariffCategory\(source\.tariff\?\.categoryId, target\.categoryId\)/);
+  assert.match(source, /только между тарифами одного раздела/);
 });

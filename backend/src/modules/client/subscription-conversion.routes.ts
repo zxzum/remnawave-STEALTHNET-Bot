@@ -187,7 +187,7 @@ const sourceSelect = {
   currentPricePerDay: true,
   extraDevices: true,
   extraDevicesMonthlyPrice: true,
-  tariff: { select: { name: true } },
+  tariff: { select: { name: true, categoryId: true } },
   trial: { select: { tariffId: true, convertEnabled: true, convertAllTariffs: true, convertTariffIds: true } },
 } as const;
 
@@ -202,6 +202,7 @@ const targetSelect = {
   trafficLimitMode: true,
   meteredSquadUuid: true,
   includedDevices: true,
+  categoryId: true,
   priceOptions: {
     select: { id: true, durationDays: true, price: true },
     orderBy: { sortOrder: "asc" },
@@ -260,17 +261,28 @@ function targetPricePerDay(
   return base + extrasPerDay;
 }
 
-async function assertConvertible(clientId: string, source: NonNullable<Awaited<ReturnType<typeof loadSource>>>, targetId: string) {
+export function sameTariffCategory(sourceCategoryId: string | null | undefined, targetCategoryId: string | null): boolean {
+  return sourceCategoryId === targetCategoryId;
+}
+
+async function assertConvertible(
+  clientId: string,
+  source: NonNullable<Awaited<ReturnType<typeof loadSource>>>,
+  target: NonNullable<Awaited<ReturnType<typeof loadTarget>>>,
+) {
+  if (source.tariffId && !sameTariffCategory(source.tariff?.categoryId, target.categoryId)) {
+    throw new ManualConversionError(400, "Конвертация доступна только между тарифами одного раздела");
+  }
   const config = await getSystemConfig().catch(() => null);
   const multiSubEnabled = (config as { multiSubscriptionsEnabled?: boolean } | null)?.multiSubscriptionsEnabled ?? false;
-  const convertible = await findConvertibleSubscription(clientId, targetId, multiSubEnabled);
+  const convertible = await findConvertibleSubscription(clientId, target.id, multiSubEnabled);
   if (!convertible || convertible.id !== source.id) {
     throw new ManualConversionError(409, "Подписка изменилась. Обновите предпросмотр конвертации");
   }
   if (source.trialId && !source.trial) {
     throw new ManualConversionError(409, "Пробная подписка больше недоступна для конвертации");
   }
-  if (source.trialId && source.trial && !trialAllowsTariff(source.trial, targetId)) {
+  if (source.trialId && source.trial && !trialAllowsTariff(source.trial, target.id)) {
     throw new ManualConversionError(400, "Переход с пробного тарифа на этот тариф запрещён");
   }
 }
@@ -280,7 +292,7 @@ async function buildQuote(clientId: string, input: z.infer<typeof quoteBodySchem
   if (!source) throw new ManualConversionError(404, "Подписка не найдена");
   const target = await loadTarget(input.tariffId);
   if (!target) throw new ManualConversionError(404, "Тариф не найден");
-  await assertConvertible(clientId, source, target.id);
+  await assertConvertible(clientId, source, target);
 
   const option = selectPriceOption(target, input.priceOptionId ?? null);
   const remainingDays = source.expireAt

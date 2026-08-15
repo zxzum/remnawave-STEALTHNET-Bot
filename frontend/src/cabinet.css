@@ -229,6 +229,22 @@ body.cabinet-ui-active *::-webkit-scrollbar-thumb:hover {
   to { height: 0; }
 }
 
+@keyframes cabinet-dialog-close {
+  to { opacity: 0; }
+}
+
+body.cabinet-ui-active [role="dialog"][data-state="closed"],
+body.cabinet-ui-active [data-state="closed"][class*="backdrop-blur"] {
+  animation: cabinet-dialog-close 180ms ease-in both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.cabinet-ui-active [role="dialog"][data-state="closed"],
+  body.cabinet-ui-active [data-state="closed"][class*="backdrop-blur"] {
+    animation-duration: 1ms;
+  }
+}
+
 body.cabinet-ui-active .animate-float-slow {
   animation: float-slow 14s ease-in-out infinite;
 }

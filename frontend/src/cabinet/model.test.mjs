@@ -47,7 +47,7 @@ test("maps public tariff options and computes extra devices like the backend", (
   assert.deepEqual(quoteTariff(plan, 365, 3), { base: 3000, extras: 2920, total: 5920, discountPercent: 20 });
 });
 
-test("lists every other tariff as a manual conversion target", () => {
+test("lists manual conversion targets only from the current tariff section", () => {
   const groups = mapTariffGroups([
     { id: "g1", name: "VPN", emoji: "🚀", tariffs: [
       {
@@ -68,7 +68,8 @@ test("lists every other tariff as a manual conversion target", () => {
     }] },
   ]);
 
-  assert.deepEqual(conversionTargets(groups, "current").map((plan) => plan.id), ["target-1", "target-2"]);
+  assert.deepEqual(conversionTargets(groups, "current").map((plan) => plan.id), ["target-1"]);
+  assert.deepEqual(conversionTargets(groups, null).map((plan) => plan.id), ["current", "target-1", "target-2"]);
 });
 
 test("keeps category emoji out of tariff card descriptions", () => {
