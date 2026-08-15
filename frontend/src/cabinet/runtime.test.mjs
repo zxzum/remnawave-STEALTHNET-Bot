@@ -233,10 +233,19 @@ test("subscription link renewal is clear and opens the regular website", async (
   assert.match(keys, />Ключ доступа</);
   assert.match(keys, />VPN-подписка</);
   assert.doesNotMatch(keys, /\{active\.protocol\}/);
+  assert.match(keys, /const showEmailHint = Boolean\(state\.client && !state\.client\.email\?\.trim\(\)\)/);
+  assert.match(keys, /Важно: выполняйте обновление только при подключённом Wi-Fi/);
+  assert.match(keys, /сразу добавить подписку в Happ\/INCY/);
+  assert.match(keys, /bot\.lazeika\.xyz\/cabinet/);
+  assert.match(keys, /основная подписка будет остановлена/);
+  assert.match(keys, /доступ к Telegram пропадёт/);
+  assert.match(keys, /привяжите почту в «Профиль» → «Безопасность»/);
+  assert.match(keys, /showEmailHint &&/);
+  assert.match(keys, /max-h-\[calc\(100dvh-2rem\)\] .*overflow-y-auto/);
   assert.match(keys, /Обновить ссылку\s*<\/button>/);
   assert.match(keys, /initial=\{\{ opacity: 0, scale: 0\.94, y: 24 \}\}/);
   assert.match(keys, /text-sm leading-relaxed text-fog-300/);
-  assert.match(keys, /href=\{siteUrl\}[^>]*>\s*<ExternalLink[^>]*\/> Открыть сайт/);
+  assert.match(keys, /href=\{siteUrl\}[^>]*>\s*<ExternalLink[^>]*\/> Открыть кабинет на сайте/);
 });
 
 test("new clients see a tariff action instead of empty dashboard and keys", async () => {

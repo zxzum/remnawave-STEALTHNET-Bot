@@ -167,6 +167,7 @@ export default function Keys() {
     }
   };
   const keyUrl = reissuedUrl?.subscriptionId === active?.id ? reissuedUrl.url : active?.keyUrl ?? "";
+  const showEmailHint = Boolean(state.client && !state.client.email?.trim());
   const siteUrl = `${config?.publicAppUrl?.replace(/\/$/, "") || window.location.origin}/cabinet/subscribe?sub=${encodeURIComponent(active?.id ?? "")}`;
 
   if (!active) return (
@@ -269,17 +270,28 @@ export default function Keys() {
               initial={{ opacity: 0, scale: 0.94, y: 24 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               transition={{ type: "spring", stiffness: 320, damping: 28 }}
-              className="glass-strong fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-4xl p-6"
+              className="glass-strong fixed top-1/2 left-1/2 z-50 max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-4xl p-6"
             >
               <Dialog.Title className="pr-8 text-xl font-extrabold">Обновить ссылку?</Dialog.Title>
               <Dialog.Description className="mt-3 text-sm leading-relaxed text-fog-300">
-                Старая ссылка и конфигурации перестанут работать. После обновления добавьте новую ссылку в приложение.
+                После обновления старая ссылка и конфигурации перестанут работать. Новую ссылку нужно сразу добавить в приложение.
               </Dialog.Description>
+              <div className="mt-3 rounded-2xl border border-amber-glow/25 bg-amber-glow/10 px-4 py-3 text-sm leading-relaxed text-amber-100">
+                <p className="font-bold text-amber-200">Важно: выполняйте обновление только при подключённом Wi-Fi.</p>
+                <p className="mt-1">
+                  Это нужно, чтобы сразу добавить подписку в Happ/INCY. Без Wi-Fi новая подписка не добавится и не будет работать, а старая перестанет работать.
+                </p>
+              </div>
               <p className="mt-3 text-sm leading-relaxed text-fog-300">
-                Лучше сделать это в обычном браузере — там удобнее сразу скопировать и добавить новый ключ.
+                Рекомендуем выполнить обновление через сайт <span className="font-semibold text-fog-100">bot.lazeika.xyz/cabinet</span>: основная подписка будет остановлена, и доступ к Telegram пропадёт. В браузере кабинет останется доступен без VPN.
               </p>
+              {showEmailHint && (
+                <p className="mt-3 rounded-2xl border border-accent-400/20 bg-accent-500/10 px-4 py-3 text-sm leading-relaxed text-fog-200">
+                  Чтобы войти через браузер, сначала привяжите почту в «Профиль» → «Безопасность».
+                </p>
+              )}
               <a href={siteUrl} target="_blank" rel="noopener noreferrer" className="btn-ghost mt-4 w-full justify-center px-5 py-3.5 text-sm font-bold">
-                <ExternalLink className="h-4 w-4" /> Открыть сайт
+                <ExternalLink className="h-4 w-4" /> Открыть кабинет на сайте
               </a>
               <div className="mt-3 flex gap-2.5">
                 <Dialog.Close className="btn-ghost flex-1 justify-center px-4 py-3" disabled={reissuing}>Отмена</Dialog.Close>
