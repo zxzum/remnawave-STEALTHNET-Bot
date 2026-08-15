@@ -14,6 +14,7 @@ import {
   Zap,
   ShoppingBag,
   Gift,
+  ExternalLink,
   X,
 } from "lucide-react";
 import { useApp } from "../store/AppContext";
@@ -136,7 +137,7 @@ function DeeplinkButtons({ apps, keyUrl }: { apps: ReturnType<typeof useApp>["cl
 }
 
 export default function Keys() {
-  const { availableTrials, clientApps, subscriptions, reload, toast } = useApp();
+  const { availableTrials, clientApps, subscriptions, config, reload, toast } = useApp();
   const { state } = useClientAuth();
   const [params, setParams] = useSearchParams();
   const [reissueOpen, setReissueOpen] = useState(false);
@@ -166,6 +167,7 @@ export default function Keys() {
     }
   };
   const keyUrl = reissuedUrl?.subscriptionId === active?.id ? reissuedUrl.url : active?.keyUrl ?? "";
+  const siteUrl = `${config?.publicAppUrl?.replace(/\/$/, "") || window.location.origin}/cabinet/subscribe?sub=${encodeURIComponent(active?.id ?? "")}`;
 
   if (!active) return (
     <div className="flex flex-col gap-5">
@@ -234,7 +236,7 @@ export default function Keys() {
               <KeyRound className="h-6 w-6" />
             </div>
             <div className="min-w-0 flex-1">
-              <h2 className="text-lg font-extrabold">Основной ключ</h2>
+              <h2 className="text-lg font-extrabold">Ключ доступа</h2>
               <p className="text-sm text-fog-500">{active.protocol}</p>
             </div>
             <span className="flex items-center gap-2 text-sm font-bold text-mint-400">
@@ -251,7 +253,7 @@ export default function Keys() {
           <div className="mt-4">
             <CopyButton text={keyUrl} />
           </div>
-          <button type="button" onClick={() => setReissueOpen(true)} className="btn-ghost mt-3 w-full justify-center">
+          <button type="button" onClick={() => setReissueOpen(true)} className="btn-ghost mt-3 w-full justify-center px-5 py-3.5 text-sm font-bold">
             Обновить ссылку
           </button>
         </motion.section>
@@ -259,21 +261,33 @@ export default function Keys() {
 
       <Dialog.Root open={reissueOpen} onOpenChange={setReissueOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-ink-950/70 backdrop-blur-sm" />
-          <Dialog.Content className="glass-strong fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-4xl p-6">
-            <Dialog.Title className="pr-8 text-xl font-extrabold">Обновить ссылку?</Dialog.Title>
-            <Dialog.Description className="mt-3 text-sm leading-relaxed text-fog-300">
-              Старая ссылка и конфигурации перестанут работать. После обновления добавьте новую ссылку в приложение.
-            </Dialog.Description>
-            <p className="mt-3 text-xs leading-relaxed text-fog-500">
-              Рекомендуем выполнить это действие на обычном сайте, а не в mini-app.
-            </p>
-            <div className="mt-5 flex gap-2.5">
-              <Dialog.Close className="btn-ghost flex-1 justify-center" disabled={reissuing}>Отмена</Dialog.Close>
-              <button type="button" onClick={() => void confirmReissue()} disabled={reissuing} className="btn-primary flex-1 justify-center disabled:opacity-50">
-                {reissuing ? "Обновляем…" : "Да, обновить"}
-              </button>
-            </div>
+          <Dialog.Overlay asChild>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 z-50 bg-ink-950/70 backdrop-blur-md" />
+          </Dialog.Overlay>
+          <Dialog.Content asChild>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 24 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              transition={{ type: "spring", stiffness: 320, damping: 28 }}
+              className="glass-strong fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-4xl p-6"
+            >
+              <Dialog.Title className="pr-8 text-xl font-extrabold">Обновить ссылку?</Dialog.Title>
+              <Dialog.Description className="mt-3 text-sm leading-relaxed text-fog-300">
+                Старая ссылка и конфигурации перестанут работать. После обновления добавьте новую ссылку в приложение.
+              </Dialog.Description>
+              <p className="mt-3 text-sm leading-relaxed text-fog-300">
+                Лучше сделать это в обычном браузере — там удобнее сразу скопировать и добавить новый ключ.
+              </p>
+              <a href={siteUrl} target="_blank" rel="noopener noreferrer" className="btn-ghost mt-4 w-full justify-center px-5 py-3.5 text-sm font-bold">
+                <ExternalLink className="h-4 w-4" /> Открыть сайт
+              </a>
+              <div className="mt-3 flex gap-2.5">
+                <Dialog.Close className="btn-ghost flex-1 justify-center px-4 py-3" disabled={reissuing}>Отмена</Dialog.Close>
+                <button type="button" onClick={() => void confirmReissue()} disabled={reissuing} className="btn-primary flex-1 justify-center px-4 py-3 disabled:opacity-50">
+                  {reissuing ? "Обновляем…" : "Да, обновить"}
+                </button>
+              </div>
+            </motion.div>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

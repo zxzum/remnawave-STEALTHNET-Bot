@@ -217,6 +217,15 @@ test("keys tolerate empty application configuration", async () => {
   assert.match(keys, /apps\.length === 0/);
 });
 
+test("subscription link renewal is clear and opens the regular website", async () => {
+  const keys = await readFile(new URL("./pages/Keys.tsx", import.meta.url), "utf8");
+  assert.match(keys, />Ключ доступа</);
+  assert.match(keys, /Обновить ссылку\s*<\/button>/);
+  assert.match(keys, /initial=\{\{ opacity: 0, scale: 0\.94, y: 24 \}\}/);
+  assert.match(keys, /text-sm leading-relaxed text-fog-300/);
+  assert.match(keys, /href=\{siteUrl\}[^>]*>\s*<ExternalLink[^>]*\/> Открыть сайт/);
+});
+
 test("new clients see a tariff action instead of empty dashboard and keys", async () => {
   const dashboard = await readFile(new URL("./pages/Cabinet.tsx", import.meta.url), "utf8");
   const keys = await readFile(new URL("./pages/Keys.tsx", import.meta.url), "utf8");
