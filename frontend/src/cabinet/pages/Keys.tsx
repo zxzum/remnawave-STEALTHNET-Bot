@@ -236,10 +236,10 @@ export default function Keys() {
               <KeyRound className="h-6 w-6" />
             </div>
             <div className="min-w-0 flex-1">
-              <h2 className="text-lg font-extrabold">Ключ доступа</h2>
-              <p className="text-sm text-fog-500">{active.protocol}</p>
+              <h2 className="whitespace-nowrap text-base leading-tight font-extrabold tracking-tight sm:text-lg">Ключ доступа</h2>
+              <p className="text-sm text-fog-500">VPN-подписка</p>
             </div>
-            <span className="flex items-center gap-2 text-sm font-bold text-mint-400">
+            <span className="flex items-center gap-1.5 text-xs font-bold text-mint-400 sm:gap-2 sm:text-sm">
               <span className="status-dot" />
               Активен
             </span>

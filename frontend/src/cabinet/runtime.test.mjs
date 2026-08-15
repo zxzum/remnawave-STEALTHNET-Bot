@@ -229,7 +229,10 @@ test("keys tolerate empty application configuration", async () => {
 
 test("subscription link renewal is clear and opens the regular website", async () => {
   const keys = await readFile(new URL("./pages/Keys.tsx", import.meta.url), "utf8");
+  assert.match(keys, /whitespace-nowrap text-base leading-tight font-extrabold tracking-tight sm:text-lg/);
   assert.match(keys, />Ключ доступа</);
+  assert.match(keys, />VPN-подписка</);
+  assert.doesNotMatch(keys, /\{active\.protocol\}/);
   assert.match(keys, /Обновить ссылку\s*<\/button>/);
   assert.match(keys, /initial=\{\{ opacity: 0, scale: 0\.94, y: 24 \}\}/);
   assert.match(keys, /text-sm leading-relaxed text-fog-300/);
