@@ -7,7 +7,7 @@
  *
  *   - 📊 «Обзор»       — данные Remna user + лимиты + кнопка «Применить»
  *   - 🛡️ «Сквады»      — список internalSquads, добавить/убрать у этой подписки
- *   - ⚡ «Действия»    — Отозвать / Disable / Enable / Reset traffic / Refresh / Unlink
+ *   - ⚡ «Действия»    — конвертация / revoke / disable / enable / reset / refresh / unlink
  *
  * Все вызовы идут на `/admin/subscriptions/:subId/remna/...`. Если подписка
  * ещё не привязана к Remna (remnawaveUuid=null) — рисуется warning-плашка.
@@ -20,6 +20,8 @@ import {
   type UpdateClientRemnaPayload,
   type AdminTrafficQuotaDetail,
   type TariffRecord,
+  type AdminSubscriptionConversionPreview,
+  ApiError,
 } from "@/lib/api";
 import { fmtMsk, isoToMskInputValue, mskInputValueToIso } from "@/lib/datetime";
 import { Button } from "@/components/ui/button";
@@ -128,9 +130,10 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, tarif
   const [editForm, setEditForm] = useState<UpdateClientRemnaPayload>({});
   const [subscriptionUrl, setSubscriptionUrl] = useState(subscription.subscriptionUrl ?? "");
   const [quota, setQuota] = useState<AdminTrafficQuotaDetail | null>(null);
-  const [convertTariffId, setConvertTariffId] = useState("");
-  const [convertOptionId, setConvertOptionId] = useState("");
-  const [convertBusy, setConvertBusy] = useState(false);
+  const [conversionPreview, setConversionPreview] = useState<AdminSubscriptionConversionPreview | null>(null);
+  const [conversionBusy, setConversionBusy] = useState(false);
+  const [conversionTariffId, setConversionTariffId] = useState("");
+  const [conversionOptionId, setConversionOptionId] = useState("");
 
   const loadRemna = useCallback(async () => {
     if (!subscription.remnawaveUuid) {
@@ -226,26 +229,50 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, tarif
     api.getSubscriptionTrafficQuota(token, subscription.id).then(setQuota).catch(() => setQuota(null));
   }
 
-  async function convertTrial() {
-    if (!subscription.isTrial || !convertTariffId) return;
-    const tariff = tariffs.find((item) => item.id === convertTariffId);
-    if (!tariff || !confirm(`Перевести trial в тариф «${tariff.name}»?`)) return;
-    setConvertBusy(true);
+  async function previewConversion() {
+    if (!subscription.ownerId || !conversionTariffId) return;
+    setConversionBusy(true);
     setActionMsg(null);
     try {
-      const result = await api.convertTrialSubscription(token, subscription.id, {
-        tariffId: convertTariffId,
-        tariffPriceOptionId: convertOptionId || undefined,
+      const preview = await api.previewAdminSubscriptionConversion(token, subscription.ownerId, {
+        targetTariffId: conversionTariffId,
+        priceOptionId: conversionOptionId || undefined,
+        subscriptionId: subscription.id,
       });
-      setActionMsg(`✅ Trial переведён в «${result.tariff.name}» на ${result.tariff.durationDays} дн.`);
-      setConvertTariffId("");
-      setConvertOptionId("");
+      setConversionPreview(preview);
+    } catch (e) {
+      setConversionPreview(null);
+      setActionMsg(`❌ ${e instanceof Error ? e.message : "Ошибка preview"}`);
+    } finally {
+      setConversionBusy(false);
+    }
+  }
+
+  async function applyConversion() {
+    if (!subscription.ownerId || !conversionPreview || !conversionTariffId) return;
+    if (!confirm(`Применить конвертацию в «${conversionPreview.targetTariff.name}»?`)) return;
+    setConversionBusy(true);
+    setActionMsg(null);
+    try {
+      const result = await api.applyAdminSubscriptionConversion(token, subscription.ownerId, {
+        targetTariffId: conversionTariffId,
+        priceOptionId: conversionOptionId || undefined,
+        subscriptionId: subscription.id,
+        sourceRevision: conversionPreview.sourceRevision,
+      });
+      setActionMsg(`✅ Конвертация применена: ${result.totalDays} дн.`);
+      setConversionPreview(null);
       await loadRemna();
       onChanged?.();
     } catch (e) {
-      setActionMsg(`❌ ${e instanceof Error ? e.message : "Ошибка конвертации"}`);
+      if (e instanceof ApiError && e.status === 409) {
+        setConversionPreview(null);
+        setActionMsg("⚠️ Preview устарел — повторите расчёт");
+      } else {
+        setActionMsg(`❌ ${e instanceof Error ? e.message : "Ошибка конвертации"}`);
+      }
     } finally {
-      setConvertBusy(false);
+      setConversionBusy(false);
     }
   }
 
@@ -502,41 +529,54 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, tarif
         {/* ─── ДЕЙСТВИЯ (быстрые действия per-subscription) ───────────── */}
         <TabsContent value="actions" className="mt-3">
           <h3 className="font-semibold text-sm mb-3">Быстрые действия Remna</h3>
-          {subscription.isTrial && (
-            <div className="mb-4 rounded-2xl border border-violet-500/25 bg-violet-500/[0.06] p-4 space-y-3">
+          {subscription.ownerId && (
+            <div className="mb-4 rounded-2xl border border-sky-500/25 bg-sky-500/[0.06] p-4 space-y-3">
               <div>
-                <div className="font-semibold text-sm text-violet-300">Перевести trial в обычную подписку</div>
-                <p className="text-[11px] text-muted-foreground mt-1">Данные Remna обновятся на выбранный тариф, списания не будет.</p>
+                <div className="font-semibold text-sm text-sky-300">Конвертация тарифа</div>
+                <p className="text-[11px] text-muted-foreground mt-1">UUID и ссылка текущей подписки сохранятся.</p>
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <select
                   className="h-9 min-w-0 rounded-xl border border-white/10 bg-background/70 px-3 text-sm"
-                  value={convertTariffId}
-                  onChange={(event) => { setConvertTariffId(event.target.value); setConvertOptionId(""); }}
-                  disabled={convertBusy}
+                  value={conversionTariffId}
+                  onChange={(event) => { setConversionTariffId(event.target.value); setConversionOptionId(""); setConversionPreview(null); }}
+                  disabled={conversionBusy}
                 >
-                  <option value="">Выберите тариф</option>
+                  <option value="">Выберите целевой тариф</option>
                   {tariffs.map((tariff) => <option key={tariff.id} value={tariff.id}>{tariff.name}</option>)}
                 </select>
                 {(() => {
-                  const tariff = tariffs.find((item) => item.id === convertTariffId);
+                  const tariff = tariffs.find((item) => item.id === conversionTariffId);
                   const options = tariff?.priceOptions ?? [];
                   return options.length > 0 ? (
                     <select
                       className="h-9 min-w-0 rounded-xl border border-white/10 bg-background/70 px-3 text-sm"
-                      value={convertOptionId}
-                      onChange={(event) => setConvertOptionId(event.target.value)}
-                      disabled={convertBusy}
+                      value={conversionOptionId}
+                      onChange={(event) => { setConversionOptionId(event.target.value); setConversionPreview(null); }}
+                      disabled={conversionBusy}
                     >
-                      <option value="">Короткая опция</option>
+                      <option value="">Опция по умолчанию</option>
                       {options.map((option) => <option key={option.id} value={option.id}>{option.durationDays} дн. · {option.price}</option>)}
                     </select>
                   ) : null;
                 })()}
               </div>
-              <Button size="sm" onClick={convertTrial} disabled={convertBusy || !convertTariffId} className="rounded-xl">
-                {convertBusy ? "Конвертируем…" : "Конвертировать trial"}
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" onClick={previewConversion} disabled={conversionBusy || !conversionTariffId} className="rounded-xl">
+                  {conversionBusy ? "Считаем…" : "Показать preview"}
+                </Button>
+                {conversionPreview && <Button size="sm" onClick={applyConversion} disabled={conversionBusy} className="rounded-xl">Применить</Button>}
+              </div>
+              {conversionPreview && (
+                <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                  <span>Текущий тариф: <strong className="text-foreground">{conversionPreview.currentTariff.name}</strong></span>
+                  <span>Целевой тариф: <strong className="text-foreground">{conversionPreview.targetTariff.name}</strong></span>
+                  <span>Осталось: <strong className="text-foreground">{conversionPreview.remainingDays} дн.</strong></span>
+                  <span>Конвертировано: <strong className="text-foreground">{conversionPreview.convertedDays} дн.</strong></span>
+                  <span>Итого: <strong className="text-foreground">{conversionPreview.totalDays} дн.</strong></span>
+                  {conversionPreview.commissionPercent === 5 && <span className="text-amber-300">Комиссия downgrade: 5%</span>}
+                </div>
+              )}
             </div>
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

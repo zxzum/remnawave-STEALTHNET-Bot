@@ -29,6 +29,7 @@ const DEFAULTS: Array<[string, string]> = [
   ["auto_renew_max_retries", "3"],
   ["yookassa_recurring_enabled", "false"],
   ["gift_subscriptions_enabled", "false"],
+  ["multi_subscriptions_enabled", "false"],
   ["gift_code_expiry_hours", "72"],
   ["max_additional_subscriptions", "5"],
   ["gift_code_format_length", "12"],

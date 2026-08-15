@@ -52,3 +52,19 @@ test("eligible trial is selected before multi-sub category fallback", async () =
   assert.ok(trialQuery > 0 && trialQuery < categoryGuard);
   assert.ok(fallbackGuard > trialQuery);
 });
+
+test("trial activation has a canonical single-mode path instead of creating a second user", async () => {
+  const source = await readFile(new URL("../client/client.routes.ts", import.meta.url), "utf8");
+  const routeStart = source.indexOf('clientRouter.post("/trials/:id/activate"');
+  const routeEnd = source.indexOf("clientRouter.", routeStart + 1);
+  const body = source.slice(routeStart, routeEnd > routeStart ? routeEnd : undefined);
+  assert.match(source, /resolveCanonicalSubscription/);
+  assert.match(body, /withClientSubscriptionLock\(clientId/);
+  assert.match(body, /multiSubscriptionsEnabled/);
+  assert.match(body, /resolveCanonicalSubscription\(clientId\)/);
+  assert.match(body, /if \(singleMode/);
+  assert.match(body, /remnaUpdateUser/);
+  assert.match(body, /createAdditionalSubscription/);
+  assert.match(body, /trialId: trial\.id/);
+  assert.match(body, /let subscriptionId = canonical\?\.id/);
+});

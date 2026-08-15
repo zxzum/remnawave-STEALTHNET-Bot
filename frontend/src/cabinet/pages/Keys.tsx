@@ -19,6 +19,8 @@ import {
 import { useApp } from "../store/AppContext";
 import { CopyButton } from "../components/ui/CopyButton";
 import { cn } from "../lib/cn";
+import { useClientAuth } from "@/contexts/client-auth";
+import { api } from "@/lib/api";
 
 const appColors: Record<string, { tile: string; btn: string }> = {
   blue: {
@@ -134,8 +136,12 @@ function DeeplinkButtons({ apps, keyUrl }: { apps: ReturnType<typeof useApp>["cl
 }
 
 export default function Keys() {
-  const { availableTrials, clientApps, subscriptions } = useApp();
+  const { availableTrials, clientApps, subscriptions, reload, toast } = useApp();
+  const { state } = useClientAuth();
   const [params, setParams] = useSearchParams();
+  const [reissueOpen, setReissueOpen] = useState(false);
+  const [reissuing, setReissuing] = useState(false);
+  const [reissuedUrl, setReissuedUrl] = useState<{ subscriptionId: string; url: string } | null>(null);
   const activeId = params.get("sub") ?? subscriptions[0]?.id;
   const active = useMemo(
     () => subscriptions.find((s) => s.id === activeId) ?? subscriptions[0],
@@ -143,6 +149,23 @@ export default function Keys() {
   );
   const apps = clientApps.filter((app) => app.platforms.includes(detectPlatform()));
   const primaryApp = apps[0];
+
+  const confirmReissue = async () => {
+    if (!active || !state.token || reissuing) return;
+    setReissuing(true);
+    try {
+      const result = await api.reissueSubscription(state.token, active.source.type, active.source.id);
+      if (result.subscriptionUrl) setReissuedUrl({ subscriptionId: active.id, url: result.subscriptionUrl });
+      await reload();
+      setReissueOpen(false);
+      toast({ title: "Ссылка обновлена", description: "Добавьте новую ссылку в приложение", variant: "success" });
+    } catch (cause) {
+      toast({ title: "Не удалось обновить ссылку", description: cause instanceof Error ? cause.message : undefined, variant: "error" });
+    } finally {
+      setReissuing(false);
+    }
+  };
+  const keyUrl = reissuedUrl?.subscriptionId === active?.id ? reissuedUrl.url : active?.keyUrl ?? "";
 
   if (!active) return (
     <div className="flex flex-col gap-5">
@@ -222,17 +245,41 @@ export default function Keys() {
 
           <div className="glass-inset mt-5 flex items-center gap-3 rounded-2xl px-4 py-3.5">
             <Lock className="h-4 w-4 shrink-0 text-fog-600" />
-            <span className="truncate font-mono text-sm text-fog-300">{active.keyUrl}</span>
+            <span className="truncate font-mono text-sm text-fog-300">{keyUrl}</span>
           </div>
 
           <div className="mt-4">
-            <CopyButton text={active.keyUrl} />
+            <CopyButton text={keyUrl} />
           </div>
+          <button type="button" onClick={() => setReissueOpen(true)} className="btn-ghost mt-3 w-full justify-center">
+            Обновить ссылку
+          </button>
         </motion.section>
       </AnimatePresence>
 
+      <Dialog.Root open={reissueOpen} onOpenChange={setReissueOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-ink-950/70 backdrop-blur-sm" />
+          <Dialog.Content className="glass-strong fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-4xl p-6">
+            <Dialog.Title className="pr-8 text-xl font-extrabold">Обновить ссылку?</Dialog.Title>
+            <Dialog.Description className="mt-3 text-sm leading-relaxed text-fog-300">
+              Старая ссылка и конфигурации перестанут работать. После обновления добавьте новую ссылку в приложение.
+            </Dialog.Description>
+            <p className="mt-3 text-xs leading-relaxed text-fog-500">
+              Рекомендуем выполнить это действие на обычном сайте, а не в mini-app.
+            </p>
+            <div className="mt-5 flex gap-2.5">
+              <Dialog.Close className="btn-ghost flex-1 justify-center" disabled={reissuing}>Отмена</Dialog.Close>
+              <button type="button" onClick={() => void confirmReissue()} disabled={reissuing} className="btn-primary flex-1 justify-center disabled:opacity-50">
+                {reissuing ? "Обновляем…" : "Да, обновить"}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
       {/* Deep links */}
-      <DeeplinkButtons apps={apps} keyUrl={active.keyUrl} />
+      <DeeplinkButtons apps={apps} keyUrl={keyUrl} />
 
           {/* Warnings */}
           <div className="glass grid rounded-3xl lg:grid-cols-2">

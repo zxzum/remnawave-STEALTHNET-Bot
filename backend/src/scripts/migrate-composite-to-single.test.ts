@@ -4,7 +4,18 @@ import test from "node:test";
 process.env.DATABASE_URL ??= "postgresql://postgres:postgres@localhost:5432/stealthnet_test";
 process.env.JWT_SECRET ??= "test-secret-that-is-long-enough-for-validation";
 
-const { buildCutoverInventory, buildReplacementPayload, parseCutoverArgs, runCutoverInventory, runReplacementCutover, cleanupLegacyUsers } = await import("./migrate-composite-to-single.js");
+const {
+  buildCutoverInventory,
+  buildReplacementPayload,
+  parseCutoverArgs,
+  parseDuplicateCleanupArgs,
+  runCutoverInventory,
+  runDuplicateCleanup,
+  runReplacementCutover,
+  cleanupLegacyUsers,
+  buildDuplicateCleanupInventory,
+  computeDuplicateCleanupPlanHash,
+} = await import("./migrate-composite-to-single.js");
 
 const rows = [
   { id: "active", ownerId: "c1", createdAt: new Date("2026-01-01"), expireAt: new Date("2026-08-01"), tariffId: "t1", remnawaveUuid: "single", deletionRequestedAt: null, tariff: { internalSquadUuids: ["wl"], trafficLimitMode: "LOCAL_SQUAD" } },
@@ -146,4 +157,124 @@ test("cleanup without proof is blocked before remote mutation", async () => {
   });
   assert.equal(result.ok, false);
   assert.equal(result.error, "REPLACEMENT_NOT_VERIFIED");
+});
+
+const duplicateRows = [
+  {
+    id: "vss-old", ownerId: "vss-client", subscriptionIndex: 0, remnawaveUuid: "old-uuid", remnawaveShortUuid: "old-short", remnawaveUsername: "vss-old",
+    expireAt: new Date("2026-08-01"), deletionRequestedAt: null, syncStatus: "SYNCED", tariffId: "ordinary", tariff: { id: "ordinary", name: "Обычный ВПН" }, owner: { telegramUsername: "vssarovv" },
+  },
+  {
+    id: "vss-current", ownerId: "vss-client", subscriptionIndex: 1, remnawaveUuid: "active-uuid", remnawaveShortUuid: "active-short", remnawaveUsername: "vss-active",
+    expireAt: new Date("2026-09-01"), deletionRequestedAt: null, syncStatus: "SYNCED", tariffId: "standard", tariff: { id: "standard", name: "Стандарт" }, owner: { telegramUsername: "vssarovv" },
+  },
+  {
+    id: "sally-ordinary", ownerId: "sally-client", subscriptionIndex: 0, remnawaveUuid: "ordinary-uuid", remnawaveShortUuid: "ordinary-short", remnawaveUsername: "sally-old",
+    expireAt: new Date("2026-08-01"), deletionRequestedAt: null, syncStatus: "SYNCED", tariffId: "ordinary", tariff: { id: "ordinary", name: "Обычный ВПН" }, owner: { telegramUsername: "sallyqx" },
+  },
+  {
+    id: "sally-standard", ownerId: "sally-client", subscriptionIndex: 1, remnawaveUuid: "standard-uuid", remnawaveShortUuid: "standard-short", remnawaveUsername: "sally-standard",
+    expireAt: new Date("2026-09-01"), deletionRequestedAt: null, syncStatus: "SYNCED", tariffId: "standard", tariff: { id: "standard", name: "Стандарт" }, owner: { telegramUsername: "sallyqx" },
+  },
+];
+
+test("duplicate cleanup is explicit and dry-run by default", () => {
+  assert.deepEqual(parseDuplicateCleanupArgs(["--cleanup-duplicates"]), { cleanupDuplicates: true, apply: false, dryRun: true, username: null });
+  assert.deepEqual(parseDuplicateCleanupArgs(["--cleanup-duplicates", "--apply"]), { cleanupDuplicates: true, apply: true, dryRun: false, username: null });
+});
+
+test("duplicate cleanup can target one normalized client username", async () => {
+  const args = parseDuplicateCleanupArgs(["--cleanup-duplicates", "--username", "@Vssarovv"]);
+  assert.equal(args.username, "vssarovv");
+
+  const result = await runDuplicateCleanup(args, { listSubscriptions: async () => duplicateRows as any });
+  assert.deepEqual(result.inventory.map((client) => client.clientUsername), ["vssarovv"]);
+});
+
+test("duplicate inventory includes client and subscription identity and special preservation decisions", async () => {
+  const inventory = buildDuplicateCleanupInventory(duplicateRows as any, new Date("2026-08-13T00:00:00.000Z"));
+  const vss = inventory.find((client) => client.clientId === "vss-client");
+  const sally = inventory.find((client) => client.clientId === "sally-client");
+
+  assert.equal(vss?.status, "planned");
+  assert.deepEqual(vss?.subscriptions.map((subscription) => [subscription.subscriptionId, subscription.action, subscription.remnawaveUuid, subscription.remnawaveShortUuid, subscription.status]), [
+    ["vss-old", "delete", "old-uuid", "old-short", "EXPIRED"],
+    ["vss-current", "preserve", "active-uuid", "active-short", "ACTIVE"],
+  ]);
+  assert.equal(sally?.subscriptions.find((subscription) => subscription.tariffName === "Стандарт")?.action, "preserve");
+  assert.equal(sally?.subscriptions.find((subscription) => subscription.tariffName === "Обычный ВПН")?.action, "delete");
+});
+
+test("clients with one subscription are unchanged and never call remote deletion", async () => {
+  let deletes = 0;
+  let journals = 0;
+  const result = await runDuplicateCleanup(parseDuplicateCleanupArgs(["--cleanup-duplicates"]), {
+    listSubscriptions: async () => [duplicateRows[0]] as any,
+    deleteSubscription: async () => { deletes++; return { deleted: true, failures: [] }; },
+    writeJournal: async () => { journals++; },
+  }, new Date("2026-08-13T00:00:00.000Z"));
+
+  assert.equal(result.mutated, false);
+  assert.equal(result.inventory[0]?.status, "unchanged");
+  assert.equal(deletes, 0);
+  assert.equal(journals, 0);
+});
+
+test("duplicate cleanup plan hash is deterministic for row order", () => {
+  const first = buildDuplicateCleanupInventory(duplicateRows as any, new Date("2026-08-13T00:00:00.000Z"));
+  const second = buildDuplicateCleanupInventory([...duplicateRows].reverse() as any, new Date("2026-08-13T00:00:00.000Z"));
+  assert.equal(computeDuplicateCleanupPlanHash(first), computeDuplicateCleanupPlanHash(second));
+});
+
+test("apply rereads inventory and stops before deletion when the plan hash changes", async () => {
+  let reads = 0;
+  let deletes = 0;
+  await assert.rejects(runDuplicateCleanup(parseDuplicateCleanupArgs(["--cleanup-duplicates", "--apply"]), {
+    listSubscriptions: async () => {
+      reads++;
+      return (reads === 1 ? duplicateRows : duplicateRows.slice(0, 3)) as any;
+    },
+    deleteSubscription: async () => { deletes++; return { deleted: true, failures: [] }; },
+    writeJournal: async () => {},
+  }, new Date("2026-08-13T00:00:00.000Z")), /plan changed/i);
+  assert.equal(reads, 2);
+  assert.equal(deletes, 0);
+});
+
+test("duplicate username, unexpected count, and unclear tariff block all mutations", async () => {
+  const cases = [
+    duplicateRows.slice(0, 2).map((row) => ({ ...row, remnawaveUsername: "same-user" })),
+    [...duplicateRows.slice(0, 2), { ...duplicateRows[0], id: "vss-third", subscriptionIndex: 2 }],
+    duplicateRows.slice(0, 2).map((row) => ({ ...row, owner: { telegramUsername: "other-user" }, tariff: { id: "unknown", name: "Неясный" } })),
+  ];
+  for (const rowsToBlock of cases) {
+    let deletes = 0;
+    await assert.rejects(runDuplicateCleanup(parseDuplicateCleanupArgs(["--cleanup-duplicates", "--apply"]), {
+      listSubscriptions: async () => rowsToBlock as any,
+      deleteSubscription: async () => { deletes++; return { deleted: true, failures: [] }; },
+      writeJournal: async () => {},
+    }, new Date("2026-08-13T00:00:00.000Z")), /blocked|duplicate|unexpected|tariff/i);
+    assert.equal(deletes, 0);
+  }
+});
+
+test("apply deletes only the selected old subscription and leaves failures retryable", async () => {
+  const calls: string[] = [];
+  const result = await runDuplicateCleanup(parseDuplicateCleanupArgs(["--cleanup-duplicates", "--apply"]), {
+    listSubscriptions: async () => duplicateRows as any,
+    deleteSubscription: async (subscriptionId) => {
+      calls.push(subscriptionId);
+      return subscriptionId === "vss-old" ? { deleted: false, failures: [{ error: "upstream timeout" }] } : { deleted: true, failures: [] };
+    },
+    writeJournal: async (kind, payload) => { calls.push(`${kind}:${payload.subscriptionId}`); },
+  }, new Date("2026-08-13T00:00:00.000Z"));
+
+  assert.deepEqual(calls, [
+    "sally-ordinary",
+    "subscription.duplicate_cleanup.deleted:sally-ordinary",
+    "vss-old",
+    "subscription.duplicate_cleanup.failed:vss-old",
+  ]);
+  assert.equal(result.results.find((item) => item.subscriptionId === "vss-old")?.status, "retryable");
+  assert.equal(result.results.find((item) => item.subscriptionId === "sally-ordinary")?.status, "deleted");
 });

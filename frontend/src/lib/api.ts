@@ -1127,6 +1127,30 @@ export const api = {
     });
   },
 
+  async previewAdminSubscriptionConversion(
+    token: string,
+    clientId: string,
+    payload: AdminSubscriptionConversionRequest,
+  ): Promise<AdminSubscriptionConversionPreview> {
+    return request(`/admin/clients/${encodeURIComponent(clientId)}/subscription-conversion/preview`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+      token,
+    });
+  },
+
+  async applyAdminSubscriptionConversion(
+    token: string,
+    clientId: string,
+    payload: AdminSubscriptionConversionRequest,
+  ): Promise<AdminSubscriptionConversionResult> {
+    return request(`/admin/clients/${encodeURIComponent(clientId)}/subscription-conversion/apply`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+      token,
+    });
+  },
+
   async clientRemnaSquadAdd(token: string, clientId: string, squadUuid: string): Promise<unknown> {
     return request(`/admin/clients/${clientId}/remna/squads/add`, { method: "POST", body: JSON.stringify({ squadUuid }), token });
   },
@@ -2339,6 +2363,40 @@ export const api = {
     const q = new URLSearchParams({ tariffId: params.tariffId });
     if (params.priceOptionId) q.set("priceOptionId", params.priceOptionId);
     return request(`/client/tariff-conversion-preview?${q.toString()}`, { token });
+  },
+
+  async clientSubscriptionConversionQuote(
+    token: string,
+    data: { subscriptionId: string; tariffId: string; priceOptionId?: string | null },
+  ): Promise<ManualConversionQuote> {
+    return request("/client/subscription-conversion/quote", {
+      method: "POST",
+      body: JSON.stringify({ ...data, priceOptionId: data.priceOptionId ?? null }),
+      token,
+    });
+  },
+
+  async clientSubscriptionConversion(
+    token: string,
+    quoteToken: string,
+  ): Promise<ManualConversionResult> {
+    return request("/client/subscription-conversion", {
+      method: "POST",
+      body: JSON.stringify({ quoteToken }),
+      token,
+    });
+  },
+
+  async reissueSubscription(
+    token: string,
+    type: "root" | "secondary",
+    id: string,
+  ): Promise<{ ok: boolean; subscriptionUrl: string | null; message?: string }> {
+    return request(`/client/subscription/${type}/${encodeURIComponent(id)}/reissue`, {
+      method: "POST",
+      body: JSON.stringify({ confirmed: true }),
+      token,
+    });
   },
 
   /** Оплата опции (доп. трафик/устройства/сервер) с баланса.
@@ -3754,6 +3812,30 @@ export interface AdminClientSubscriptionItem {
   expireAt: string | null;
   createdAt: string;
 }
+
+export interface AdminSubscriptionConversionRequest {
+  targetTariffId: string;
+  priceOptionId?: string;
+  customDurationDays?: number;
+  subscriptionId?: string;
+  sourceRevision?: string;
+  note?: string;
+}
+
+export interface AdminSubscriptionConversionPreview {
+  subscriptionId: string;
+  subscriptionIndex: number;
+  currentTariff: { id: string | null; name: string; durationDays: number; price: number };
+  targetTariff: { id: string; name: string; durationDays: number; price: number };
+  remainingDays: number;
+  convertedDays: number;
+  totalDays: number;
+  commissionPercent: number;
+  direction: string;
+  sourceRevision: string;
+}
+
+export type AdminSubscriptionConversionResult = AdminSubscriptionConversionPreview & { ok: true };
 
 export type AdminSubscriptionRemnaResponse = {
   response?: RemnaUserFull;
@@ -5235,6 +5317,37 @@ export interface TariffConversionPreview {
     keep: { totalDevices: number; convertedDays: number; totalDays: number; extraCost?: number };
     drop: { totalDevices: number; convertedDays: number; totalDays: number; extraCost?: number };
   };
+}
+
+export interface ManualConversionQuote {
+  quoteToken: string;
+  subscriptionId: string;
+  tariffId: string;
+  priceOptionId: string | null;
+  sourceExpireAt: string;
+  sourceRevision: string;
+  currentTariff: { id: string | null; name: string | null };
+  targetTariff: { id: string; name: string };
+  remainingDays: number;
+  rawConvertedDays: number;
+  rounding: "ceil" | "floor" | "none";
+  direction: "same" | "trial" | "upgrade" | "downgrade" | "equal" | "none";
+  commissionPercent: number;
+  convertedDays: number;
+  totalDays: number;
+}
+
+export interface ManualConversionResult {
+  subscriptionId: string;
+  tariffId: string;
+  priceOptionId: string | null;
+  direction: ManualConversionQuote["direction"];
+  commissionPercent: number;
+  convertedDays: number;
+  totalDays: number;
+  remnawaveUuid: string | null;
+  remnawaveShortUuid: string | null;
+  subscriptionUrl: string | null;
 }
 
 export type PublicTariff = {

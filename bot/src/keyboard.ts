@@ -1223,7 +1223,7 @@ export function subDetailButtons(
     rows.push([btn(arLabel, `sub:autorenew:${type}:${id}`, undefined, undefined)]);
   }
   // Предпоследняя: «🔄 Обновить подписку».
-  rows.push([btn("🔄 Обновить подписку", `sub:reissue:${type}:${id}`, undefined, undefined)]);
+  rows.push([btn("🔄 Обновить ссылку", `sub:reissue:${type}:${id}`, undefined, undefined)]);
   // кнопка убрать ВСЕ доп. устройства (если есть).
   // По нажатию → POST /api/client/subscription/:type/:id/remove-extra-devices →
   // extraDevices=0 + hwidDeviceLimit в Remna = базовый из тарифа + жёсткий kick лишних HWID.

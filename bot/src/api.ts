@@ -451,7 +451,11 @@ export async function reissueSubscription(
   type: "root" | "secondary",
   id: string,
 ): Promise<{ ok: boolean; subscriptionUrl: string | null; message?: string }> {
-  return fetchJson(`/api/client/subscription/${type}/${encodeURIComponent(id)}/reissue`, { token, method: "POST" });
+  return fetchJson(`/api/client/subscription/${type}/${encodeURIComponent(id)}/reissue`, {
+    token,
+    method: "POST",
+    body: { confirmed: true },
+  });
 }
 
 /** Список устройств (HWID) пользователя в Remna */
@@ -687,6 +691,34 @@ export async function tariffConversionPreview(
   const q = new URLSearchParams({ tariffId: params.tariffId });
   if (params.priceOptionId) q.set("priceOptionId", params.priceOptionId);
   return fetchJson(`/api/client/tariff-conversion-preview?${q.toString()}`, { token });
+}
+
+export type ManualConversionQuote = {
+  quoteToken: string;
+  subscriptionId: string;
+  tariffId: string;
+  priceOptionId: string | null;
+  currentTariff: { id: string | null; name: string | null };
+  targetTariff: { id: string; name: string };
+  remainingDays: number;
+  rawConvertedDays: number;
+  rounding: "ceil" | "floor" | "none";
+  direction: "same" | "trial" | "upgrade" | "downgrade" | "equal" | "none";
+  commissionPercent: number;
+  convertedDays: number;
+  totalDays: number;
+};
+
+/** Получает signed quote от backend; bot не повторяет математику конвертации. */
+export async function subscriptionConversionQuote(
+  token: string,
+  data: { subscriptionId: string; tariffId: string; priceOptionId?: string | null },
+): Promise<ManualConversionQuote> {
+  return fetchJson("/api/client/subscription-conversion/quote", {
+    method: "POST",
+    body: { ...data, priceOptionId: data.priceOptionId ?? null },
+    token,
+  });
 }
 
 /** Оплата тарифа или прокси-тарифа балансом */
