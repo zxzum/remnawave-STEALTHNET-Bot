@@ -84,7 +84,7 @@ export async function withClientSubscriptionLock<T>(
     // Transaction-scoped advisory lock: activation callbacks currently use the
     // shared Prisma client, so a row lock on this transaction would self-block
     // their writes on another connection.
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${clientId}))`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${clientId}))`;
     return operation(tx);
   });
 }
