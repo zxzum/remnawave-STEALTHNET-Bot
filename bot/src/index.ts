@@ -72,6 +72,7 @@ import {
   type BotMenuSection,
 } from "./keyboard.js";
 import { t as _t, formatDays as _formatDays, setTranslations } from "./i18n.js";
+import { isRetryingGetUpdatesError } from "./telegram-error-reporting.js";
 // 54-ФЗ-чек ЮКассы: prompt «нужен ли чек», ввод email, etc.
 import {
   storePendingReceipt,
@@ -8647,7 +8648,11 @@ const botInstances: Bot[] = [];
     try {
       return await previous(method, payload, signal);
     } catch (error) {
-      reportTelegramError(error, botErrorContext.getStore(), String(method), payload);
+      if (isRetryingGetUpdatesError(String(method), error)) {
+        console.warn("[Bot] getUpdates network error; Grammy will retry in 3s");
+      } else {
+        reportTelegramError(error, botErrorContext.getStore(), String(method), payload);
+      }
       throw error;
     }
   });
