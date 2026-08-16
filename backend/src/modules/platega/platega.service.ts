@@ -8,6 +8,7 @@ import { getProxyUrl } from "../proxy-util/get-proxy-url.js";
 import { timingSafeEqual } from "node:crypto";
 
 const PLATEGA_API_BASE = "https://app.platega.io";
+const PLATEGA_ERROR_NOTIFICATION_COOLDOWN_MS = 6 * 60 * 60_000;
 
 export type PlategaConfig = {
   merchantId: string;
@@ -22,6 +23,17 @@ export type PlategaTransaction = {
   payload?: string;
   raw: Record<string, unknown>;
 };
+
+export function isPlategaErrorNotificationSuppressed(
+  lastKey: unknown,
+  lastAt: unknown,
+  currentKey: string,
+  now = Date.now(),
+): boolean {
+  if (lastKey !== currentKey || typeof lastAt !== "string") return false;
+  const timestamp = Date.parse(lastAt);
+  return Number.isFinite(timestamp) && now - timestamp < PLATEGA_ERROR_NOTIFICATION_COOLDOWN_MS;
+}
 
 function safeEqual(actual: string | undefined, expected: string): boolean {
   if (!actual) return false;

@@ -7,6 +7,7 @@ import { prisma } from "../../db.js";
 import { getSystemConfig } from "../client/client.service.js";
 import { proxyFetch } from "../proxy-util/proxy-fetch.js";
 import { getProxyUrl } from "../proxy-util/get-proxy-url.js";
+import { isPlategaErrorNotificationSuppressed } from "../platega/platega.service.js";
 import { remnaGetUser } from "../remna/remna.client.js";
 import { extractRemnaSubscriptionUrl } from "../subscription/subscription-url.js";
 import { isMailConfigured, mailConfigFromSystem, sendEmail, type SmtpConfig } from "../mail/mail.service.js";
@@ -77,6 +78,72 @@ type AdminNotificationPreferenceRow = {
   notifyNewClient: boolean;
   notifyNewTicket: boolean;
 };
+
+const anonymousPlategaErrorNotifications = new Map<string, number>();
+
+function parsePlategaNotificationMetadata(raw: string | null): Record<string, unknown> {
+  if (!raw?.trim()) return {};
+  try {
+    const value = JSON.parse(raw) as unknown;
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function plategaErrorNotificationKey(kind: string, error: string, identity: string): string {
+  return `${kind}:${identity}:${error.trim().replace(/\s+/g, " ").slice(0, 500) || "unknown"}`;
+}
+
+async function shouldNotifyPlategaError(
+  paymentId: string | null | undefined,
+  kind: string,
+  error: string,
+  identity: string,
+): Promise<boolean> {
+  const key = plategaErrorNotificationKey(kind, error, identity);
+  if (!paymentId) {
+    const previousAt = anonymousPlategaErrorNotifications.get(key);
+    const now = Date.now();
+    if (previousAt && isPlategaErrorNotificationSuppressed(key, new Date(previousAt).toISOString(), key, now)) return false;
+    anonymousPlategaErrorNotifications.set(key, now);
+    if (anonymousPlategaErrorNotifications.size > 128) {
+      const oldestKey = anonymousPlategaErrorNotifications.keys().next().value;
+      if (oldestKey) anonymousPlategaErrorNotifications.delete(oldestKey);
+    }
+    return true;
+  }
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe('SELECT "id" FROM "payments" WHERE "id" = $1 FOR UPDATE', paymentId);
+      const payment = await tx.payment.findUnique({ where: { id: paymentId }, select: { metadata: true } });
+      if (!payment) return true;
+      const metadata = parsePlategaNotificationMetadata(payment.metadata);
+      if (isPlategaErrorNotificationSuppressed(
+        metadata.plategaErrorNotificationKey,
+        metadata.plategaErrorNotificationAt,
+        key,
+      )) return false;
+      await tx.payment.update({
+        where: { id: paymentId },
+        data: {
+          metadata: JSON.stringify({
+            ...metadata,
+            plategaErrorNotificationKey: key,
+            plategaErrorNotificationAt: new Date().toISOString(),
+          }),
+        },
+      });
+      return true;
+    });
+  } catch (error) {
+    console.warn("[Telegram notify] Platega error dedup failed", error);
+    return true;
+  }
+}
 
 export type TelegramUserSendOptions = { clientIdForBotToken?: string };
 
@@ -561,6 +628,7 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
  * «активирован», и проблема всплывала только когда клиент приходил в саппорт.
  */
 export async function notifyTariffActivationFailed(clientId: string, paymentId: string, error: string): Promise<void> {
+  if (!await shouldNotifyPlategaError(paymentId, "activation_failed", error, paymentId)) return;
   const client = await prisma.client.findUnique({
     where: { id: clientId },
     select: { telegramId: true, email: true, telegramUsername: true, id: true },
@@ -591,6 +659,10 @@ export async function notifyPlategaPaymentEvent(params: {
   details?: string;
   callbackAvailable?: boolean;
 }): Promise<void> {
+  if (params.kind === "callback_failed") {
+    const identity = params.paymentId ?? params.transactionId ?? "anonymous";
+    if (!await shouldNotifyPlategaError(params.paymentId, params.kind, params.details ?? "unknown", identity)) return;
+  }
   const titles = {
     canceled: "⛔️ Платёж Platega отменён",
     callback_failed: "🚨 Callback Platega не обработан",
