@@ -4191,6 +4191,8 @@ clientRouter.post("/payments/platega", async (req, res) => {
 
   const personalDiscountMeta = personalDiscountPercent > 0 ? { personalDiscountPercent } : null;
   const paymentMetaObj: Record<string, unknown> = {};
+  // Сохраняем метод Platega (2=СБП, 11=Карты РФ, ...) — показываем в админ-уведомлении.
+  paymentMetaObj.plategaMethodId = paymentMethod;
   if (metadataExtra) Object.assign(paymentMetaObj, metadataExtra);
   if (parsed.data.asAdditional) paymentMetaObj.isAdditionalSubscription = true;
   if (parsed.data.asGift) paymentMetaObj.purchasedAsGift = true;

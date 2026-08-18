@@ -31,6 +31,15 @@ export function subscriptionExpiryMarkup(label: string, callbackData = "menu:tar
 export const SUBSCRIPTION_UPDATE_TEXT =
   "Откройте HAPP или INCY и обновите подписку: нажмите кнопку ↻ рядом с её названием. Ссылка останется прежней.";
 
+/** Fallback-названия методов Platega, если метод не найден в настройках. */
+const PLATEGA_METHOD_FALLBACK_LABELS: Record<number, string> = {
+  2: "СБП",
+  10: "Карты (CardRu)",
+  11: "Карты РФ",
+  12: "Международные карты",
+  13: "Криптовалюта",
+};
+
 function isTrialToTariffPayment(metadata: string | null): boolean {
   try {
     return JSON.parse(metadata ?? "{}").trialToTariff === true;
@@ -395,20 +404,35 @@ export type TariffAdminNotificationData = {
   amount?: number | null;
   currency?: string | null;
   provider?: string | null;
+  /** Продление существующей подписки (extendsSecondarySubId) — меняет заголовок. */
+  isRenewal?: boolean;
+  /** Доп. устройства, выбранные при покупке (payment.deviceCount). */
+  deviceCount?: number | null;
+  /** Человекочитаемый метод оплаты (например, «СБП» / «Карты РФ» для Platega). */
+  paymentMethodLabel?: string | null;
   date: Date;
 };
 
 export function buildTariffAdminNotificationText(data: TariffAdminNotificationData): string {
+  const title = data.isAdminGrant
+    ? `🎁 <b>Администратор выдал подписку</b>`
+    : data.isRenewal
+      ? `🔄 <b>Продление тарифа</b>`
+      : `📦 <b>Оплата тарифа</b>`;
   const lines = [
-    data.isAdminGrant ? `🎁 <b>Администратор выдал подписку</b>` : `📦 <b>Оплата тарифа</b>`,
+    title,
     ``,
     `👤 Клиент: ${escapeHtml(data.clientLabel)}`,
   ];
   if (data.telegramId) lines.push(`🆔 TG ID: <code>${escapeHtml(data.telegramId)}</code>`);
   lines.push(`📋 Тариф: <b>${escapeHtml(data.tariffName)}</b>`);
   if (data.durationDays) lines.push(`📅 Срок: ${data.durationDays} дн.`);
+  if (data.deviceCount != null && data.deviceCount > 0) lines.push(`📱 Доп. устройства: <b>${data.deviceCount}</b>`);
   if (!data.isAdminGrant && data.amount != null) lines.push(`💵 Сумма: <b>${formatMoney(data.amount, data.currency ?? "RUB")}</b>`);
-  if (!data.isAdminGrant && data.provider) lines.push(`🏦 Провайдер: ${escapeHtml(data.provider)}`);
+  if (!data.isAdminGrant && data.provider) {
+    const methodSuffix = data.paymentMethodLabel ? ` · ${escapeHtml(data.paymentMethodLabel)}` : "";
+    lines.push(`🏦 Провайдер: ${escapeHtml(data.provider)}${methodSuffix}`);
+  }
   lines.push(`🕐 ${formatDate(data.date)}`);
   return lines.join("\n");
 }
@@ -472,6 +496,7 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
       subscriptionId: true,
       tariffId: true,
       metadata: true,
+      deviceCount: true,
       tariff: { select: { name: true, durationDays: true, price: true, locations: true, trafficLimitBytes: true } },
       tariffPriceOption: { select: { durationDays: true } },
     },
@@ -486,10 +511,16 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
   let isGiftPurchase = false;
   let isAdminGrant = false;
   let adminNote: string | null = null;
+  let isRenewal = false;
+  let plategaMethodId: number | null = null;
   try {
     const meta = payment?.metadata ? JSON.parse(payment.metadata) as Record<string, unknown> : null;
     isGiftPurchase = meta?.purchasedAsGift === true;
     isAdminGrant = meta?.kind === "admin_grant";
+    isRenewal = typeof meta?.extendsSecondarySubId === "string" && meta.extendsSecondarySubId.length > 0;
+    if (typeof meta?.plategaMethodId === "number" && Number.isFinite(meta.plategaMethodId)) {
+      plategaMethodId = meta.plategaMethodId;
+    }
     if (typeof meta?.note === "string" && meta.note.trim()) {
       adminNote = meta.note.trim();
     }
@@ -608,6 +639,14 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
     if (trialToTariff && botToken) await sendSubscriptionUpdateGuides(client.telegramId, botToken);
   }
   const durationDays = payment?.tariffPriceOption?.durationDays ?? payment?.tariff?.durationDays;
+  // Метод оплаты: label из настроек Platega, иначе — известные id.
+  let paymentMethodLabel: string | null = null;
+  if (plategaMethodId != null) {
+    const notifyCfg = await getSystemConfig();
+    paymentMethodLabel = notifyCfg.plategaMethods?.find((m) => m.id === plategaMethodId)?.label
+      ?? PLATEGA_METHOD_FALLBACK_LABELS[plategaMethodId]
+      ?? null;
+  }
   await sendTelegramToAdminsForEvent("tariff_payment", buildTariffAdminNotificationText({
     isAdminGrant,
     clientLabel: formatClientLabel(client),
@@ -617,6 +656,9 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
     amount: payment?.amount,
     currency: payment?.currency,
     provider: payment?.provider,
+    isRenewal,
+    deviceCount: payment?.deviceCount,
+    paymentMethodLabel,
     date: new Date(),
   }));
   return clientNotificationDelivered;

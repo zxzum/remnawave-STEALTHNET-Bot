@@ -46,3 +46,24 @@ test("new client notification identifies the referring partner", () => {
     "🤝 Партнёр: @partner (TG ID: 456)",
   );
 });
+
+test("renewal notification is distinguished and shows devices and payment method", () => {
+  const text = buildTariffAdminNotificationText({
+    isAdminGrant: false,
+    isRenewal: true,
+    clientLabel: "@client",
+    tariffName: "Optimal",
+    durationDays: 30,
+    deviceCount: 2,
+    amount: 360,
+    currency: "RUB",
+    provider: "platega",
+    paymentMethodLabel: "Карты РФ",
+    date: new Date("2026-08-18T16:23:56Z"),
+  });
+
+  assert.match(text, /Продление тарифа/);
+  assert.doesNotMatch(text, /Оплата тарифа/);
+  assert.match(text, /Доп\. устройства: <b>2<\/b>/);
+  assert.match(text, /platega · Карты РФ/);
+});
