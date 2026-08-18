@@ -12,7 +12,11 @@ test("trial reminders are scheduled at 3 hours and 30 minutes", () => {
   const now = new Date("2026-07-27T12:00:00.000Z");
   assert.equal(expiryReminderOffset(new Date("2026-07-27T15:00:00.000Z"), now), 180);
   assert.equal(expiryReminderOffset(new Date("2026-07-27T12:30:00.000Z"), now), 30);
-  assert.equal(expiryReminderOffset(new Date("2026-07-27T14:00:00.000Z"), now), null);
+  assert.equal(expiryReminderOffset(new Date("2026-07-27T14:00:00.000Z"), now), 180);
+  // Пропущенное окно догоняется: ближайший offset >= остатка; за горизонтом — null.
+  assert.equal(expiryReminderOffset(new Date("2026-07-27T12:10:00.000Z"), now), 30);
+  assert.equal(expiryReminderOffset(new Date("2026-07-27T18:00:00.000Z"), now), null);
+  assert.equal(expiryReminderOffset(new Date("2026-07-27T12:00:00.000Z"), now), null);
   assert.deepEqual(parseReminderHours("72, 24, 3, 0.5"), [4320, 1440, 180, 30]);
 });
 

@@ -31,7 +31,13 @@ export function parseReminderHours(value: string, fallback = "3, 0.5"): number[]
 
 export function expiryReminderOffset(expireAt: Date, now = new Date(), offsets = [180, 30]): number | null {
   const minutesLeft = Math.floor((expireAt.getTime() - now.getTime()) / 60_000);
-  return offsets.find((offset) => minutesLeft <= offset && minutesLeft > offset - 5) ?? null;
+  if (minutesLeft <= 0) return null;
+  // Ближайший (наименьший) offset >= оставшегося времени.
+  // Раньше было окно (offset-5, offset], ровно под тик раз в 5 минут: любой пропущенный
+  // или задержанный тик (рестарт API, долгий expiry-шаг перед уведомлениями) терял
+  // напоминание навсегда. Дедуп по expiryReminderKey гарантирует однократную отправку
+  // каждого offset'а, а пропущенное окно догоняется на следующем тике.
+  return offsets.filter((offset) => minutesLeft <= offset).sort((a, b) => a - b)[0] ?? null;
 }
 
 export function expiringSubscriptionKind(subscription: {
@@ -157,9 +163,54 @@ export async function notifyExpiringSubscriptions(now = new Date()): Promise<num
   });
   let sent = 0;
   for (const subscription of subscriptions) {
-    if (!subscription.expireAt) continue;
+    try {
+      sent += await processExpiringSubscription(subscription, now, {
+        trialOffsets,
+        paidOffsets,
+        trialEmailOffsets,
+        paidEmailOffsets,
+        config,
+      });
+    } catch (error) {
+      // Одна битая подписка/сбой отправки не должны ронять весь проход —
+      // иначе напоминания не уходят никому.
+      console.warn("[expiry reminder] subscription processing failed", {
+        subscriptionId: subscription.id,
+        error: String(error),
+      });
+    }
+  }
+  return sent;
+}
+
+async function processExpiringSubscription(
+  subscription: {
+    id: string;
+    expireAt: Date | null;
+    trialId: string | null;
+    tariffId: string | null;
+    trial: { name: string } | null;
+    tariff: { name: string } | null;
+    owner: { telegramId: string | null; email: string | null; trialUsed: boolean };
+  },
+  now: Date,
+  ctx: {
+    trialOffsets: number[];
+    paidOffsets: number[];
+    trialEmailOffsets: number[];
+    paidEmailOffsets: number[];
+    config: Awaited<ReturnType<typeof getSystemConfig>>;
+  },
+): Promise<number> {
+  const { trialOffsets, paidOffsets, trialEmailOffsets, paidEmailOffsets, config } = ctx;
+  let sent = 0;
+  {
+    if (!subscription.expireAt) return 0;
     const kind = expiringSubscriptionKind(subscription);
-    if (!kind) continue;
+    if (!kind) return 0;
+    // Реальный остаток — для текста «закончится через {{time}}», даже когда
+    // напоминание догоняет пропущенное окно.
+    const minutesLeftActual = Math.max(1, Math.floor((subscription.expireAt.getTime() - now.getTime()) / 60_000));
 
     const displayName = kind === "trial"
       ? subscription.trial?.name ?? subscription.tariff?.name ?? "Пробный период"
@@ -174,25 +225,29 @@ export async function notifyExpiringSubscriptions(now = new Date()): Promise<num
         data: { expiryReminderKey: key },
       });
       if (claimed.count > 0) {
-        if (kind === "trial") {
-          await notifyTrialExpiry(
+        const delivered = kind === "trial"
+          ? await notifyTrialExpiry(
             subscription.owner.telegramId,
             displayName,
-            telegramOffset,
+            minutesLeftActual,
             config.trialExpiryReminderText ?? DEFAULT_TRIAL_EXPIRY_TEXT,
             config.trialExpiryReminderButtonText,
-          );
-        } else {
-          await notifySubscriptionExpiry(
+          )
+          : await notifySubscriptionExpiry(
             subscription.owner.telegramId,
             subscription.id,
             displayName,
-            telegramOffset,
+            minutesLeftActual,
             config.subscriptionExpiryReminderText ?? DEFAULT_SUBSCRIPTION_EXPIRY_TEXT,
             config.subscriptionExpiryReminderButtonText,
           );
+        if (delivered) sent++;
+        else {
+          await prisma.subscription.updateMany({
+            where: { id: subscription.id, expiryReminderKey: key },
+            data: { expiryReminderKey: null },
+          });
         }
-        sent++;
       }
     }
 
@@ -268,12 +323,20 @@ export async function runSubscriptionMaintenance(
   onboardingNotifications: (now: Date) => Promise<number> = notifyIncompleteOnboarding,
 ) {
   const now = new Date();
+  // Каждый шаг изолирован: падение одного (например, недоступный Remnawave в expiry)
+  // не должно блокировать остальные — раньше исключение в первом шаге обрывало тик
+  // и напоминания о продлении не отправлялись вообще.
+  const guarded = <T>(label: string, fn: () => Promise<T>, fallback: T): Promise<T> =>
+    fn().catch((error: unknown) => {
+      console.warn(`[subscription-maintenance] step "${label}" failed`, error);
+      return fallback;
+    });
   return {
-    expiry: await expiry(200),
-    deletions: await deletions(50),
-    extraOptions: await extraOptions(50),
-    expiryNotifications: await expiryNotifications(now),
-    onboardingNotifications: await onboardingNotifications(now),
+    expiry: await guarded("expiry", () => expiry(200), { checked: 0, grace: 0, disabled: 0, failed: 0 }),
+    deletions: await guarded("deletions", () => deletions(50), { deleted: 0, failed: 0 }),
+    extraOptions: await guarded("extraOptions", () => extraOptions(50), { checked: 0, applied: 0, queued: 0, failed: 0 }),
+    expiryNotifications: await guarded("expiryNotifications", () => expiryNotifications(new Date()), 0),
+    onboardingNotifications: await guarded("onboardingNotifications", () => onboardingNotifications(new Date()), 0),
   };
 }
 

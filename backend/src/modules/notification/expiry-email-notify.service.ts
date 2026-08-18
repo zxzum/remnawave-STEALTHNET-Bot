@@ -80,7 +80,16 @@ export async function sendExpiryReminderEmail(
     );
     if (!rendered) return false;
     const result = await sendEmail(mailConfig, to.trim(), rendered.subject, rendered.body);
-    if (!result.ok) console.warn("[expiry email] send failed", result.error ?? "unknown error");
+    const details = {
+      recipient: to.trim(),
+      kind,
+      minutesLeft,
+      sentAt: new Date().toISOString(),
+      subject: rendered.subject,
+      text: rendered.body,
+    };
+    if (result.ok) console.info("[expiry reminder] Email notification", details);
+    else console.warn("[expiry reminder] Email notification failed", { ...details, error: result.error ?? "unknown error" });
     return result.ok;
   } catch (error) {
     console.warn("[expiry email] send failed", error instanceof Error ? error.message : String(error));

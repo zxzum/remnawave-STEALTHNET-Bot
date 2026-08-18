@@ -1001,13 +1001,22 @@ export async function notifyTrialExpiry(
   minutesLeft: number,
   text = DEFAULT_TRIAL_EXPIRY_TEXT,
   buttonText = "💳 Выбрать тариф",
-): Promise<void> {
-  await sendTelegramToUser(
+): Promise<boolean> {
+  const renderedText = renderExpiryReminderText(text, trialName, minutesLeft);
+  const delivered = await sendTelegramToUserChecked(
     telegramId,
-    renderExpiryReminderText(text, trialName, minutesLeft),
+    renderedText,
     undefined,
     subscriptionExpiryMarkup(buttonText),
   );
+  console[delivered ? "info" : "warn"]("[expiry reminder] Telegram trial notification", {
+    delivered,
+    recipient: telegramId,
+    minutesLeft,
+    sentAt: new Date().toISOString(),
+    text: renderedText,
+  });
+  return delivered;
 }
 
 /** Напоминание клиенту незадолго до окончания оплаченной подписки. */
@@ -1018,13 +1027,23 @@ export async function notifySubscriptionExpiry(
   minutesLeft: number,
   text = DEFAULT_SUBSCRIPTION_EXPIRY_TEXT,
   buttonText = "💳 Продлить подписку",
-): Promise<void> {
-  await sendTelegramToUser(
+): Promise<boolean> {
+  const renderedText = renderExpiryReminderText(text, tariffName, minutesLeft);
+  const delivered = await sendTelegramToUserChecked(
     telegramId,
-    renderExpiryReminderText(text, tariffName, minutesLeft),
+    renderedText,
     undefined,
     subscriptionExpiryMarkup(buttonText, `pay_tariff_ext:${subscriptionId}`),
   );
+  console[delivered ? "info" : "warn"]("[expiry reminder] Telegram subscription notification", {
+    delivered,
+    recipient: telegramId,
+    subscriptionId,
+    minutesLeft,
+    sentAt: new Date().toISOString(),
+    text: renderedText,
+  });
+  return delivered;
 }
 
 /**

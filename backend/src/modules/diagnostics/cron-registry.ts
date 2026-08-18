@@ -100,7 +100,9 @@ export function wrapCronTick(name: string, fn: () => Promise<unknown>): () => Pr
       recordCronRun(name, { ok: true, startedAt, finishedAt: new Date() });
     } catch (e) {
       recordCronRun(name, { ok: false, error: String(e), startedAt, finishedAt: new Date() });
-      throw e;
+      // НЕ пробрасываем дальше: node-cron не ловит rejection асинхронного колбэка,
+      // и необработанная ошибка уронит весь API-процесс. Ошибка уже записана в реестр.
+      console.error(`[cron] "${name}" tick failed`, e);
     }
   };
 }
