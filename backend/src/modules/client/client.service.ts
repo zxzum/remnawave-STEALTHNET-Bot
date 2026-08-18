@@ -1001,7 +1001,7 @@ function parseCategoryEmojis(raw: string | undefined): CategoryEmojis {
 export type PlategaMethodConfig = { id: number; enabled: boolean; label: string };
 const DEFAULT_PLATEGA_METHODS: PlategaMethodConfig[] = [
   { id: 2, enabled: true, label: "СБП" },
-  { id: 10, enabled: false, label: "Карты" },
+  { id: 11, enabled: false, label: "Карты РФ" },
   { id: 12, enabled: false, label: "Международный" },
   { id: 13, enabled: false, label: "Криптовалюта" },
 ];
@@ -1054,7 +1054,11 @@ export function parsePlategaMethods(raw: string | undefined): PlategaMethodConfi
       if (label.trim() === "СПБ") label = "СБП";
       const id = typeof x.id === "number" ? x.id : Number(x.id) || 2;
       return {
-        id: id === 11 ? 10 : id,
+        // id передаём как есть: у Platega 10=CardRu и 11=CardAcquiring — разные
+        // методы, и у конкретного мерчанта может быть подключён только один из них.
+        // Раньше тут был rewrite 11→10 («use CardRu»), из-за которого мерчанты
+        // с подключенным методом 11 получали от Platega "Wrong input parameters".
+        id,
         enabled: Boolean(x.enabled),
         label,
       };

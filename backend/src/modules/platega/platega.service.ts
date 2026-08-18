@@ -79,7 +79,7 @@ export function isPlategaConfigured(config: PlategaConfig | null): boolean {
 
 /**
  * Создать транзакцию в Platega, получить ссылку на оплату
- * paymentMethod: 2=СБП, 10=CardRu, 12=Международный, 13=Криптовалюта
+ * paymentMethod: 2=СБП, 11=Карты РФ (Card acquiring), 12=Международный, 13=Криптовалюта
  */
 export async function createPlategaTransaction(
   config: PlategaConfig,
