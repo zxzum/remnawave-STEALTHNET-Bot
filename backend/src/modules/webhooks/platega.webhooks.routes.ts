@@ -111,14 +111,30 @@ function parseMeta(raw: string | null): Meta {
   }
 }
 
-async function findPlategaPayment(transactionId: string): Promise<PaymentRow | null> {
+type PlategaPaymentMatch = {
+  payment: PaymentRow;
+  matchedByOrderId: boolean;
+};
+
+async function findPlategaPayment(ids: Array<string | null | undefined>): Promise<PlategaPaymentMatch | null> {
+  const candidates = [...new Set(ids.filter((id): id is string => Boolean(id)))];
+  if (!candidates.length) return null;
+
   const payments = await prisma.payment.findMany({
-    where: { provider: "platega", externalId: transactionId },
+    where: { provider: "platega", externalId: { in: candidates } },
     select: PAYMENT_SELECT,
     take: 2,
   });
-  if (payments.length > 1) throw new Error(`Duplicate Platega externalId: ${transactionId}`);
-  return payments[0] ?? null;
+  if (payments.length > 1) throw new Error(`Duplicate Platega externalId: ${candidates.join(", ")}`);
+  if (payments[0]) return { payment: payments[0], matchedByOrderId: false };
+
+  const byOrder = await prisma.payment.findMany({
+    where: { provider: "platega", orderId: { in: candidates } },
+    select: PAYMENT_SELECT,
+    take: 2,
+  });
+  if (byOrder.length > 1) throw new Error(`Duplicate Platega orderId: ${candidates.join(", ")}`);
+  return byOrder[0] ? { payment: byOrder[0], matchedByOrderId: true } : null;
 }
 
 type ActivationOutcome =
@@ -347,29 +363,70 @@ plategaWebhooksRouter.post("/platega", async (req, res) => {
       await notifyPlategaPaymentEvent({ kind: "callback_failed", details: "Platega прислал невалидный JSON" }).catch(() => {});
       return res.status(400).json({ message: "Invalid JSON" });
     }
-    const transactionId = pickFirstString(data.id, data.Id);
-    const callbackStatus = pickFirstString(data.status, data.Status)?.toUpperCase() ?? "";
-    const amountRaw = data.amount ?? data.Amount;
+    const transactionBody = data.transaction && typeof data.transaction === "object"
+      ? data.transaction as Record<string, unknown>
+      : {};
+    const nestedData = data.data && typeof data.data === "object"
+      ? data.data as Record<string, unknown>
+      : {};
+    const transactionId = pickFirstString(
+      data.id,
+      data.Id,
+      data.transactionId,
+      data.transaction_id,
+      transactionBody.id,
+      transactionBody.Id,
+      transactionBody.transactionId,
+      nestedData.id,
+      nestedData.transactionId,
+    );
+    const callbackStatus = pickFirstString(
+      data.status,
+      data.Status,
+      transactionBody.status,
+      transactionBody.Status,
+      data.state,
+      data.paymentStatus,
+      data.payment_status,
+      nestedData.status,
+      nestedData.state,
+    )?.toUpperCase() ?? "";
+    const amountRaw = data.amount ?? data.Amount ?? transactionBody.amount ?? nestedData.amount;
     const amount = typeof amountRaw === "number" ? amountRaw : typeof amountRaw === "string" ? Number(amountRaw) : undefined;
-    const currency = pickFirstString(data.currency, data.Currency) ?? undefined;
-    const payload = pickFirstString(data.payload, data.Payload) ?? undefined;
+    const currency = pickFirstString(data.currency, data.Currency, transactionBody.currency, nestedData.currency) ?? undefined;
+    const payload = pickFirstString(data.payload, data.Payload, transactionBody.payload, nestedData.payload) ?? undefined;
+    const callbackExternalId = pickFirstString(data.externalId, transactionBody.externalId, nestedData.externalId, data.invoiceId, transactionBody.invoiceId);
+    const callbackOrderId = pickFirstString(
+      data.orderId,
+      data.order_id,
+      data.order,
+      data.merchant_order_id,
+      nestedData.orderId,
+      nestedData.order_id,
+      nestedData.order,
+    );
     if (!transactionId || !callbackStatus || !Number.isFinite(amount)) {
       ack(400, "rejected_payload", "Missing id/status/amount");
       await notifyPlategaPaymentEvent({ kind: "callback_failed", transactionId, details: "Callback без обязательных id/status/amount" }).catch(() => {});
       return res.status(400).json({ message: "Invalid callback payload" });
     }
 
-    const payment = await findPlategaPayment(transactionId);
-    if (!payment) {
-      ack(200, "payment_not_found", `transaction=${transactionId}`);
-      await notifyPlategaPaymentEvent({ kind: "callback_failed", transactionId, details: "Платёж с таким transaction ID не найден" }).catch(() => {});
-      return res.status(200).json({ received: true });
+    const match = await findPlategaPayment([transactionId, callbackExternalId, callbackOrderId, payload]);
+    if (!match) {
+      // externalId is written immediately after transaction creation; a callback can still win this race.
+      // Non-2xx is required for Platega to retry the callback instead of dropping the payment.
+      ack(503, "payment_not_found", `transaction=${transactionId}`);
+      return res.status(503).json({ message: "Payment is not registered yet" });
     }
+    const payment = match.payment;
+    const paymentForValidation = payment.externalId === transactionId
+      ? payment
+      : { ...payment, externalId: transactionId };
     await auditPaymentClientBotAlignment(payment);
     const callbackTransaction: PlategaTransaction = { id: transactionId, status: callbackStatus, amount, currency, payload, raw: data };
     // Callback содержит gross amount (заказ + комиссия Platega). Точный net amount
     // ниже сверяется по авторитетному GET /transaction/{id}, где есть `comission`.
-    const callbackMismatch = validatePlategaTransaction(callbackTransaction, payment, true);
+    const callbackMismatch = validatePlategaTransaction(callbackTransaction, paymentForValidation, true);
     if (callbackMismatch) {
       ack(409, "rejected_payload", callbackMismatch, payment.id);
       await notifyPlategaPaymentEvent({ kind: "callback_failed", paymentId: payment.id, transactionId, details: `Callback ${callbackMismatch}` }).catch(() => {});
@@ -382,11 +439,18 @@ plategaWebhooksRouter.post("/platega", async (req, res) => {
       await notifyPlategaPaymentEvent({ kind: "callback_failed", paymentId: payment.id, transactionId, details: apiTransaction.error, callbackAvailable: true }).catch(() => {});
       return res.status(503).json({ message: "Unable to verify transaction" });
     }
-    const apiMismatch = validatePlategaTransaction(apiTransaction, payment, true);
+    const apiMismatch = validatePlategaTransaction(apiTransaction, paymentForValidation, true);
     if (apiMismatch) {
       ack(409, "rejected_payload", `API ${apiMismatch}`, payment.id);
       await notifyPlategaPaymentEvent({ kind: "callback_failed", paymentId: payment.id, transactionId, details: `Platega API ${apiMismatch}` }).catch(() => {});
       return res.status(409).json({ message: "Transaction does not match payment" });
+    }
+
+    if (payment.externalId !== transactionId && match.matchedByOrderId) {
+      await prisma.payment.updateMany({
+        where: { id: payment.id, provider: "platega" },
+        data: { externalId: transactionId },
+      });
     }
 
     const status = apiTransaction.status.toUpperCase();
