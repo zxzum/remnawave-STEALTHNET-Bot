@@ -584,7 +584,8 @@ export async function createPlategaPayment(
     replaceTrialSubId?: string;
   }
 ): Promise<{ paymentUrl: string; orderId: string; paymentId: string }> {
-  return fetchJson("/api/client/payments/platega", { method: "POST", body, token });
+  // Бот всегда помечает платёж источником "bot" (журнал платежей в админке).
+  return fetchJson("/api/client/payments/platega", { method: "POST", body: { ...body, source: "bot" }, token });
 }
 
 /** Создать платёж ЮMoney (оплата картой). Для тарифа — tariffId, для прокси — proxyTariffId, для опции — extraOption. */
