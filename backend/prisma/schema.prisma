@@ -325,6 +325,8 @@ model Payment {
   singboxTariffId          String?                      @map("singbox_tariff_id")
   remnawaveUserId          String?                      @map("remnawave_user_id")
   metadata                 String?                      @db.Text // JSON
+  /// Источник создания платежа: "site" | "miniapp" | "bot" (null — legacy-платежи).
+  source                   String?                      @map("source")
   extraOptionState         ExtraOptionApplicationState? @map("extra_option_state")
   extraOptionClaimToken    String?                      @map("extra_option_claim_token")
   extraOptionNextAttemptAt DateTime?                    @map("extra_option_next_attempt_at")
@@ -342,6 +344,7 @@ model Payment {
 
   @@index([clientId])
   @@index([status])
+  @@index([source])
   @@index([tariffId])
   @@index([tariffPriceOptionId])
   @@index([proxyTariffId])
@@ -1620,6 +1623,40 @@ model WebhookEvent {
   @@index([outcome, createdAt(sort: Desc)])
   @@index([createdAt(sort: Desc)])
   @@map("webhook_events")
+}
+
+/// Provider-side транзакции, подтянутые sync'ом из API платёжного провайдера
+/// (payments-log). externalId = id транзакции у провайдера (у Platega совпадает с
+/// Payment.externalId). paymentId — связь с локальным платежом, если нашли по
+/// externalId или orderId==payload. Транзакции без матча видны в журнале как kind=external.
+model ProviderTransaction {
+  id                String    @id @default(cuid())
+  /// platega | yookassa | ...
+  provider          String    @db.VarChar(20)
+  /// ID транзакции у провайдера (Platega recordId).
+  externalId        String    @map("external_id")
+  /// Статус у провайдера, как пришёл (CONFIRMED | PENDING | CANCELED | ...).
+  status            String
+  /// Метод оплаты у провайдера (SBPQR | CARD | CRYPTO | ...).
+  paymentMethod     String?   @map("payment_method")
+  amount            Float
+  currency          String
+  /// Наш orderId (Platega payload).
+  payload           String?
+  description       String?   @db.Text
+  /// Время создания транзакции у провайдера.
+  providerCreatedAt DateTime? @map("provider_created_at")
+  /// Сырой JSON записи из export API.
+  raw               String?   @db.Text
+  /// Связанный локальный Payment (если заматчили при sync).
+  paymentId         String?   @map("payment_id")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@unique([provider, externalId])
+  @@index([paymentId])
+  @@index([provider, createdAt(sort: Desc)])
+  @@map("provider_transactions")
 }
 
 /// T-autorenew (12.05.2026, WolfVPN): конструктор уведомлений автосписания.

@@ -46,6 +46,8 @@ function getSectionFromPath(normalisedPath: string): string | null {
     return "dashboard";
   }
   if (first === "payments") return "sales-report";
+  // Журнал платежей — секция «payments» (MANAGER должен иметь её в allowedSections).
+  if (first === "payments-log") return "payments";
   // доступ защищён через action,
   // не через секцию — возвращаем null чтобы requireAdminSection пропустил.
   if (first === "balance-sales") return null;

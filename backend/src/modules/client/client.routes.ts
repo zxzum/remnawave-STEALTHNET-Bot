@@ -3914,6 +3914,8 @@ const createPlategaPaymentSchema = z.object({
   proxyTariffId: z.string().min(1).optional(),
   singboxTariffId: z.string().min(1).optional(),
   promoCode: z.string().max(50).optional(),
+  // канал-источник платежа (для журнала платежей): сайт | миниапп | бот.
+  source: z.enum(["site", "miniapp", "bot"]).optional(),
   // покупка как доп. подписка — см. yookassa-схему ниже.
   asAdditional: z.boolean().optional(),
   // покупка подарочной подписки — будет создана с purchasedAsGift=true.
@@ -4214,6 +4216,7 @@ clientRouter.post("/payments/platega", async (req, res) => {
       currency: currencyToUse,
       status: "PENDING",
       provider: "platega",
+      source: parsed.data.source ?? null,
       tariffId: tariffIdToStore,
       tariffPriceOptionId: parsed.data.tariffPriceOptionId ?? null,
       deviceCount: parsed.data.deviceCount ?? null,
