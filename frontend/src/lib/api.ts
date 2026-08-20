@@ -107,6 +107,7 @@ export const MANAGER_SECTIONS: { key: string; label: string; category: ManagerSe
   { key: "geo-map", label: "Карта нод", category: "overview" },
   // Управление
   { key: "clients", label: "Клиенты", category: "management" },
+  { key: "payments", label: "Платежи", category: "management" },
   { key: "proxy", label: "Прокси", category: "management" },
   { key: "singbox", label: "Sing-box", category: "management" },
   { key: "backup", label: "Бэкапы", category: "management" },
@@ -166,6 +167,77 @@ export interface AdminListItem {
   allowedSections: string[];
   mustChangePassword?: boolean;
   createdAt?: string;
+}
+
+// ───────── Журнал платежей (/admin/payments-log) ─────────
+export type PaymentLogStatus = "PAID" | "PENDING" | "CANCELED" | "FAILED" | "REFUNDED" | string;
+export type PaymentLogSource = "site" | "miniapp" | "bot";
+
+export interface PaymentLogClient {
+  id: string;
+  telegramId: string | number | null;
+  username: string | null;
+  firstName: string | null;
+  lastName: string | null;
+}
+
+export interface PaymentLogCallback {
+  status: "success" | "failed" | "none";
+  at: string | null;
+  responseStatus: number | null;
+}
+
+export interface PaymentLogItem {
+  id: string;
+  kind: "payment" | "external";
+  provider: string | null;
+  method: string | null;
+  methodId: number | null;
+  amount: number;
+  currency: string;
+  status: PaymentLogStatus;
+  source: PaymentLogSource | null;
+  createdAt: string;
+  paidAt: string | null;
+  orderId: string | null;
+  externalId: string | null;
+  client: PaymentLogClient | null;
+  product: string;
+  callback: PaymentLogCallback;
+  description: string | null;
+}
+
+export interface PaymentsLogAggregates {
+  byCurrency: { currency: string; count: number; amount: number }[];
+  byStatus: { status: string; count: number }[];
+}
+
+export interface PaymentsLogResponse {
+  items: PaymentLogItem[];
+  total: number;
+  page: number;
+  limit: number;
+  aggregates: PaymentsLogAggregates;
+}
+
+export interface PaymentLogWebhookEvent {
+  id: string;
+  provider: string;
+  outcome: string;
+  responseStatus: number | null;
+  createdAt: string;
+}
+
+export interface PaymentLogDetail extends PaymentLogItem {
+  webhookEvents: PaymentLogWebhookEvent[];
+  metadata: Record<string, unknown> | null;
+}
+
+export interface PlategaSyncResult {
+  fetched: number;
+  created: number;
+  updated: number;
+  matched: number;
 }
 
 export type ContestPrizeType = "custom" | "balance" | "vpn_days";
@@ -513,6 +585,40 @@ export const api = {
 
   async deleteSalePayment(token: string, paymentId: string): Promise<{ ok: boolean }> {
     return request(`/admin/sales-report/${paymentId}`, { token, method: "DELETE" });
+  },
+
+  // ——— Журнал платежей (вкладка «Платежи») ———
+  async getPaymentsLog(
+    token: string,
+    page = 1,
+    limit = 20,
+    params?: {
+      search?: string;
+      provider?: string;
+      status?: string;
+      source?: string;
+      method?: string;
+      from?: string;
+      to?: string;
+    }
+  ): Promise<PaymentsLogResponse> {
+    const sp = new URLSearchParams({ page: String(page), limit: String(limit) });
+    if (params?.search?.trim()) sp.set("search", params.search.trim());
+    if (params?.provider) sp.set("provider", params.provider);
+    if (params?.status) sp.set("status", params.status);
+    if (params?.source) sp.set("source", params.source);
+    if (params?.method) sp.set("method", params.method);
+    if (params?.from) sp.set("from", params.from);
+    if (params?.to) sp.set("to", params.to);
+    return request(`/admin/payments-log?${sp.toString()}`, { token });
+  },
+
+  async getPaymentsLogItem(token: string, id: string, kind: string): Promise<PaymentLogDetail> {
+    return request(`/admin/payments-log/${encodeURIComponent(id)}?kind=${encodeURIComponent(kind)}`, { token });
+  },
+
+  async syncPlategaPayments(token: string): Promise<PlategaSyncResult> {
+    return request("/admin/payments-log/sync/platega", { method: "POST", token });
   },
 
   // отчёт продаж через баланс для девочек-менеджеров.
@@ -2282,7 +2388,9 @@ export const api = {
       replaceTrialSubId?: string;
     }
   ): Promise<{ paymentUrl: string; orderId: string; paymentId: string; discountApplied?: boolean; finalAmount?: number }> {
-    return request("/client/payments/platega", { method: "POST", body: JSON.stringify(data), token });
+    // Источник оплаты для журнала платежей: Telegram Mini-App или сайт/кабинет.
+    const source = typeof window !== "undefined" && (window as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp?.initData ? "miniapp" : "site";
+    return request("/client/payments/platega", { method: "POST", body: JSON.stringify({ ...data, source }), token });
   },
 
   async getPublicTariffs(): Promise<{ items: PublicTariffCategory[] }> {

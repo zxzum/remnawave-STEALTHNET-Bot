@@ -11,6 +11,7 @@ import { ThemeProvider } from "@/contexts/theme";
 import { AnimatedBackground } from "@/components/animated-background";
 import { api } from "@/lib/api";
 import type { PublicConfig } from "@/lib/api";
+import { Toaster } from "@/components/ui/toast";
 import { Login as CabinetLogin, Register as CabinetRegister } from "@/cabinet/pages/Auth";
 import { ForgotPassword, ResetPassword, VerifyEmail, VerifyLinkEmail, Onboarding, PaymentWait, YooMoneyPay } from "@/cabinet/pages/AccountFlows";
 import CabinetDashboard from "@/cabinet/pages/Cabinet";
@@ -87,6 +88,7 @@ const LoginPage = lazy(() => import("@/pages/login").then(({ LoginPage }) => ({ 
 const ChangePasswordPage = lazy(() => import("@/pages/change-password").then(({ ChangePasswordPage }) => ({ default: ChangePasswordPage })));
 const DashboardPage = lazy(() => import("@/pages/dashboard").then(({ DashboardPage }) => ({ default: DashboardPage })));
 const ClientsPage = lazy(() => import("@/pages/clients").then(({ ClientsPage }) => ({ default: ClientsPage })));
+const PaymentsPage = lazy(() => import("@/pages/payments").then(({ PaymentsPage }) => ({ default: PaymentsPage })));
 const TariffsPage = lazy(() => import("@/pages/tariffs").then(({ TariffsPage }) => ({ default: TariffsPage })));
 const TrialsPage = lazy(() => import("@/pages/trials").then(({ TrialsPage }) => ({ default: TrialsPage })));
 const WithdrawalsPage = lazy(() => import("@/pages/withdrawals").then(({ WithdrawalsPage }) => ({ default: WithdrawalsPage })));
@@ -275,6 +277,7 @@ function AppRoutes() {
           }
         />
         <Route path="clients" element={<ForceChangePassword><ClientsPage /></ForceChangePassword>} />
+        <Route path="payments" element={<ForceChangePassword><PaymentsPage /></ForceChangePassword>} />
         <Route path="tariffs" element={<ForceChangePassword><TariffsPage /></ForceChangePassword>} />
         {/* T15 (11.05.2026) */}
         <Route path="trials" element={<ForceChangePassword><TrialsPage /></ForceChangePassword>} />
@@ -529,6 +532,7 @@ export default function App() {
       <AuthProvider>
         <BrowserRouter future={routerFutureFlags}>
           <AnimatedBackground />
+          <Toaster />
           <TitleAndThemeSync  />
           <AppRoutes />
         </BrowserRouter>
