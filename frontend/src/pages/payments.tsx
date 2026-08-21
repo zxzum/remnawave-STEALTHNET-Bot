@@ -365,7 +365,7 @@ export function PaymentsPage() {
       )}
 
       {/* Toolbar */}
-      <Card className="bg-background/60 backdrop-blur-3xl border-white/10 rounded-[2rem] p-4 shadow-xl space-y-3">
+      <Card className="relative z-10 bg-background/60 backdrop-blur-3xl border-white/10 rounded-[2rem] p-4 shadow-xl space-y-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
@@ -406,7 +406,7 @@ export function PaymentsPage() {
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: "auto", opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              className="overflow-hidden"
+              className={cn(filtersOpen ? "overflow-visible" : "overflow-hidden")}
             >
               <div className="flex flex-wrap items-end gap-3 pt-2 border-t border-white/5">
                 <div className="w-40">
