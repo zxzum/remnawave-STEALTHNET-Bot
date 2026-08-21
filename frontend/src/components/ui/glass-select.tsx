@@ -48,7 +48,7 @@ export function GlassSelect({ value, onChange, options, className }: GlassSelect
       </button>
       <div
         className={cn(
-          "absolute left-0 top-full z-50 mt-1 w-full rounded-lg border border-white/15 bg-slate-900 shadow-2xl transition-all duration-200 origin-top overflow-hidden",
+          "absolute left-0 top-full z-50 mt-1 w-full rounded-lg border border-white/15 bg-black shadow-2xl transition-all duration-200 origin-top overflow-hidden",
           open
             ? "opacity-100 scale-100 pointer-events-auto"
             : "opacity-0 scale-95 pointer-events-none"
