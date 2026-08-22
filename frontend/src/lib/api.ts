@@ -570,6 +570,26 @@ export const api = {
     return request(`/admin/remna/nodes/${nodeUuid}/enable`, { method: "POST", token });
   },
 
+  // ─── Lazeika-Only: режим продления ───────────────────────────────────────
+  async getLazeikaOnlyStatus(token: string): Promise<LazeikaOnlyStatus> {
+    return request("/admin/lazeika-only/status", { token });
+  },
+  async lazeikaOnlySetup(
+    token: string,
+    body: { nodeUuid: string; squadUuid?: string | null; speedMbit?: number },
+  ): Promise<{ ok: boolean; status?: string; error?: string }> {
+    return request("/admin/lazeika-only/setup", { method: "POST", body: JSON.stringify(body), token });
+  },
+  async lazeikaOnlyVerify(token: string): Promise<{ ok: boolean; checks: Array<{ name: string; ok: boolean; detail?: string }> }> {
+    return request("/admin/lazeika-only/verify", { method: "POST", token });
+  },
+  async lazeikaOnlyReconcile(token: string): Promise<{ ok: boolean; status?: string; error?: string }> {
+    return request("/admin/lazeika-only/reconcile", { method: "POST", token });
+  },
+  async lazeikaOnlyDisable(token: string): Promise<{ ok: boolean; status?: string }> {
+    return request("/admin/lazeika-only/disable", { method: "POST", token });
+  },
+
   async remnaNodeDisable(token: string, nodeUuid: string): Promise<unknown> {
     return request(`/admin/remna/nodes/${nodeUuid}/disable`, { method: "POST", token });
   },
@@ -2214,6 +2234,8 @@ export const api = {
       trialConvertAllTariffs?: boolean;
       componentQuotas?: ComponentQuota[];
       trafficQuota?: ClientTrafficQuota | null;
+      /** Lazeika-Only grace активен → баннер кабинета/бота с динамическим count. */
+      lazeikaOnly?: { active: boolean; daysLeft: number; message: string } | null;
     }>;
   }> {
     return request("/client/subscription/all", { token });
@@ -3706,6 +3728,49 @@ export type UpdateSettingsPayload = {
   expiredGraceEnabled?: boolean;
   expiredGraceDays?: number;
   expiredGraceSquadUuid?: string | null;
+  lazeikaOnlyEnabled?: boolean;
+  lazeikaOnlyDays?: number;
+  lazeikaOnlySpeedMbit?: number;
+  lazeikaOnlyNodeUuid?: string | null;
+  lazeikaOnlySquadUuid?: string | null;
+  lazeikaOnlyMessageTemplate?: string | null;
+}
+
+// ─── Lazeika-Only: режим продления (admin API) ───────────────────────────────
+
+export interface LazeikaOnlyResourceState {
+  version: number;
+  status: "UNCONFIGURED" | "APPLYING" | "READY" | "ERROR";
+  nodeUuid: string | null;
+  profileUuid: string | null;
+  baseProfileUuid: string | null;
+  managedInboundUuid: string | null;
+  managedInboundTag: string | null;
+  managedInboundPort: number | null;
+  squadUuid: string | null;
+  squadSource: "AUTO" | "MANUAL";
+  workingHostUuid: string | null;
+  notificationHostUuids: string[];
+  previousNodeConfig: { activeConfigProfileUuid: string | null; activeInbounds: string[] } | null;
+  createdResourceUuids: string[];
+  ssh: { interface: string | null; rateMbit: number };
+  lastError: string | null;
+  lastVerifiedAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface LazeikaOnlyStatus {
+  config: {
+    enabled: boolean;
+    days: number;
+    speedMbit: number;
+    nodeUuid: string | null;
+    squadUuid: string | null;
+    messageTemplate: string;
+  };
+  state: LazeikaOnlyResourceState;
+  workingHost: { uuid?: string; remark?: string; address?: string; isDisabled?: boolean } | null;
+  notificationHosts: Array<{ uuid?: string; remark?: string; address?: string; isDisabled?: boolean }>;
 }
 
 // T-admin-services (портировано из WolfVPN): услуга «доп. устройства» на подписке.
@@ -3990,6 +4055,12 @@ export interface AdminSettings {
   expiredGraceEnabled?: boolean;
   expiredGraceDays?: number;
   expiredGraceSquadUuid?: string | null;
+  lazeikaOnlyEnabled?: boolean;
+  lazeikaOnlyDays?: number;
+  lazeikaOnlySpeedMbit?: number;
+  lazeikaOnlyNodeUuid?: string | null;
+  lazeikaOnlySquadUuid?: string | null;
+  lazeikaOnlyMessageTemplate?: string | null;
   activeLanguages: string[];
   activeCurrencies: string[];
   defaultLanguage?: string;

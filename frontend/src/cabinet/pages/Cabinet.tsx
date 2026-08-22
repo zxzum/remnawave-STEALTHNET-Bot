@@ -76,6 +76,12 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
         </span>
       </div>
 
+      {sub.lazeikaOnly?.active && (
+        <div className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3">
+          <p className="whitespace-pre-line text-sm leading-relaxed text-amber-200">{sub.lazeikaOnly.message}</p>
+        </div>
+      )}
+
       {expiredTrial ? (
         <div className="flex min-h-72 flex-col items-center justify-center text-center">
           <div className="icon-tile h-16 w-16 rounded-2xl">

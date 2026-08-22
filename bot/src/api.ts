@@ -1265,6 +1265,8 @@ export type SubscriptionListItem = {
     remainingBytes: string;
     status: string;
   } | null;
+  /** Lazeika-Only grace активен → сообщение с динамическим count (кабинет/бот). */
+  lazeikaOnly?: { active: boolean; daysLeft: number; message: string } | null;
 };
 
 /** Убрать ВСЕ доп. устройства с подписки (extraDevices=0, hwid kick в Remna). */

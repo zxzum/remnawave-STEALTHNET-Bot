@@ -64,6 +64,8 @@ export type CabinetSubscription = {
   trialConvertAllTariffs: boolean;
   extraDevices: number;
   extraDevicesMonthlyPrice: number;
+  /** Lazeika-Only grace активен → баннер с динамическим {count}. */
+  lazeikaOnly?: { active: boolean; daysLeft: number; message: string };
 };
 
 export function isExpiredTrial(subscription: Pick<CabinetSubscription, "isTrial" | "status">): boolean {
@@ -198,6 +200,8 @@ type SubscriptionItem = {
   trialConvertAllTariffs?: boolean;
   extraDevices?: number;
   extraDevicesMonthlyPrice?: number;
+  /** Lazeika-Only grace: активен → сообщение с динамическим count. */
+  lazeikaOnly?: { active: boolean; daysLeft: number; message: string } | null;
 };
 
 function subscriptionPayload(value: unknown): Record<string, unknown> | null {
@@ -279,6 +283,13 @@ export function mapSubscription(
     trialConvertAllTariffs: item.trialConvertAllTariffs === true,
     extraDevices: Math.max(0, finiteNumber(item.extraDevices) ?? 0),
     extraDevicesMonthlyPrice: Math.max(0, finiteNumber(item.extraDevicesMonthlyPrice) ?? 0),
+    lazeikaOnly: item.lazeikaOnly?.active
+      ? {
+          active: true,
+          daysLeft: Math.max(1, Math.trunc(item.lazeikaOnly.daysLeft) || 1),
+          message: item.lazeikaOnly.message,
+        }
+      : undefined,
   };
 }
 

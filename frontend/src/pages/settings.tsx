@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/contexts/auth";
-import { api, type AdminSettings, type AutoRenewStats, type SyncResult, type SyncToRemnaResult, type SyncCreateRemnaForMissingResult, type SubscriptionPageConfig, type SshConfig } from "@/lib/api";
+import { api, type AdminSettings, type AutoRenewStats, type SyncResult, type SyncToRemnaResult, type SyncCreateRemnaForMissingResult, type SubscriptionPageConfig, type SshConfig, type LazeikaOnlyStatus } from "@/lib/api";
 import { SubscriptionPageEditor } from "@/components/subscription-page-editor";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -427,6 +427,9 @@ export function SettingsPage() {
   const [syncLoading, setSyncLoading] = useState<"from" | "to" | "missing" | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [squads, setSquads] = useState<{ uuid: string; name?: string }[]>([]);
+  const [lazeikaNodes, setLazeikaNodes] = useState<{ uuid: string; name?: string; isDisabled?: boolean }[]>([]);
+  const [lazeikaStatus, setLazeikaStatus] = useState<LazeikaOnlyStatus | null>(null);
+  const [lazeikaBusy, setLazeikaBusy] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("general");
   const [botSubTab, setBotSubTab] = useState<"menu" | "texts" | "emoji" | "behavior" | "links">("menu");
   const [installedLangCodes, setInstalledLangCodes] = useState<string[]>(FALLBACK_LANGS);
@@ -560,6 +563,12 @@ export function SettingsPage() {
         expiredGraceEnabled: (data as AdminSettings).expiredGraceEnabled ?? false,
         expiredGraceDays: (data as AdminSettings).expiredGraceDays ?? 7,
         expiredGraceSquadUuid: (data as AdminSettings).expiredGraceSquadUuid ?? "",
+        lazeikaOnlyEnabled: (data as AdminSettings).lazeikaOnlyEnabled ?? false,
+        lazeikaOnlyDays: (data as AdminSettings).lazeikaOnlyDays ?? 7,
+        lazeikaOnlySpeedMbit: (data as AdminSettings).lazeikaOnlySpeedMbit ?? 5,
+        lazeikaOnlyNodeUuid: (data as AdminSettings).lazeikaOnlyNodeUuid ?? null,
+        lazeikaOnlySquadUuid: (data as AdminSettings).lazeikaOnlySquadUuid ?? null,
+        lazeikaOnlyMessageTemplate: (data as AdminSettings).lazeikaOnlyMessageTemplate ?? "",
       });
     }).finally(() => setLoading(false));
     api.getAutoRenewStats(token).then(setAutoRenewStats).catch(() => {});
@@ -640,7 +649,51 @@ export function SettingsPage() {
       const items = res?.response?.internalSquads ?? (Array.isArray(res) ? res : []);
       setSquads(Array.isArray(items) ? items : []);
     }).catch(() => setSquads([]));
+    // Lazeika-Only: список нод + статус инфраструктуры.
+    api.getRemnaNodes(token).then((res) => {
+      setLazeikaNodes((res.response ?? []).map((n) => ({ uuid: n.uuid, name: n.name, isDisabled: n.isDisabled })));
+    }).catch(() => setLazeikaNodes([]));
+    api.getLazeikaOnlyStatus(token).then(setLazeikaStatus).catch(() => setLazeikaStatus(null));
   }, [token]);
+
+  async function runLazeikaAction(kind: "setup" | "verify" | "reconcile" | "disable") {
+    if (!settings) return;
+    setLazeikaBusy(kind);
+    try {
+      if (kind === "setup") {
+        if (!settings.lazeikaOnlyNodeUuid) {
+          alert("Выберите ноду перед настройкой");
+          return;
+        }
+        const res = await api.lazeikaOnlySetup(token, {
+          nodeUuid: settings.lazeikaOnlyNodeUuid,
+          squadUuid: settings.lazeikaOnlySquadUuid || null,
+          speedMbit: settings.lazeikaOnlySpeedMbit ?? 5,
+        });
+        if (!res.ok) throw new Error(res.error ?? "Не удалось настроить инфраструктуру");
+        setMessage("Инфраструктура Lazeika-Only готова");
+      } else if (kind === "verify") {
+        const res = await api.lazeikaOnlyVerify(token);
+        const failed = res.checks.filter((c) => !c.ok);
+        setMessage(res.ok
+          ? `Проверка пройдена (${res.checks.length} проверок)`
+          : `Проблемы: ${failed.map((c) => c.name).join(", ")}`);
+      } else if (kind === "reconcile") {
+        const res = await api.lazeikaOnlyReconcile(token);
+        if (!res.ok) throw new Error(res.error ?? "Reconcile не удался");
+        setMessage("Ресурсы Lazeika-Only приведены к сохранённому состоянию");
+      } else {
+        await api.lazeikaOnlyDisable(token);
+        setSettings((s) => (s ? { ...s, lazeikaOnlyEnabled: false } : s));
+        setMessage("Режим Lazeika-Only выключен; активные grace-доступы закроются ближайшим cron-тиком");
+      }
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Ошибка операции Lazeika-Only");
+    } finally {
+      setLazeikaBusy(null);
+      api.getLazeikaOnlyStatus(token).then(setLazeikaStatus).catch(() => {});
+    }
+  }
 
   async function handleSyncFromRemna() {
     setSyncLoading("from");
@@ -971,9 +1024,12 @@ export function SettingsPage() {
         giftExpiryNotificationDays: settings.giftExpiryNotificationDays ?? 3,
         giftReferralEnabled: settings.giftReferralEnabled ?? true,
         giftMessageMaxLength: settings.giftMessageMaxLength ?? 200,
-        expiredGraceEnabled: settings.expiredGraceEnabled ?? false,
-        expiredGraceDays: settings.expiredGraceDays ?? 7,
-        expiredGraceSquadUuid: settings.expiredGraceSquadUuid?.trim() || null,
+        lazeikaOnlyEnabled: settings.lazeikaOnlyEnabled ?? false,
+        lazeikaOnlyDays: settings.lazeikaOnlyDays ?? 7,
+        lazeikaOnlySpeedMbit: settings.lazeikaOnlySpeedMbit ?? 5,
+        lazeikaOnlyNodeUuid: settings.lazeikaOnlyNodeUuid || null,
+        lazeikaOnlySquadUuid: settings.lazeikaOnlySquadUuid?.trim() || null,
+        lazeikaOnlyMessageTemplate: settings.lazeikaOnlyMessageTemplate?.trim() || null,
         customBuildEnabled: settings.customBuildEnabled ?? false,
         customBuildPricePerDay: settings.customBuildPricePerDay ?? 0,
         customBuildPricePerDevice: settings.customBuildPricePerDevice ?? 0,
@@ -5564,41 +5620,127 @@ export function SettingsPage() {
               <div className="space-y-4 rounded-lg border p-4 bg-muted/20">
                 <div className="flex items-center justify-between gap-4">
                   <div>
-                    <Label htmlFor="expired-grace-enabled" className="text-base font-medium">Доступ к Telegram после окончания</Label>
+                    <Label htmlFor="lazeika-only-enabled" className="text-base font-medium">Lazeika-Only — режим продления</Label>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Все обычные компоненты отключаются, а подписка временно переводится в указанный only_telegram Squad.
+                      После окончания подписки пользователь сохраняет доступ только к Telegram и lazeika.xyz на выбранной ноде с ограничением скорости.
                     </p>
                   </div>
                   <Switch
-                    id="expired-grace-enabled"
-                    checked={settings.expiredGraceEnabled === true}
-                    onCheckedChange={(checked: boolean) => setSettings((s) => s ? { ...s, expiredGraceEnabled: checked } : s)}
+                    id="lazeika-only-enabled"
+                    checked={settings.lazeikaOnlyEnabled === true}
+                    onCheckedChange={(checked: boolean) => setSettings((s) => s ? { ...s, lazeikaOnlyEnabled: checked } : s)}
                   />
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="expired-grace-days">Grace-период, дней</Label>
+                    <Label htmlFor="lazeika-only-days">Доступ после окончания, дней</Label>
                     <Input
-                      id="expired-grace-days"
+                      id="lazeika-only-days"
                       type="number"
-                      min={0}
+                      min={1}
                       max={365}
-                      value={settings.expiredGraceDays ?? 7}
-                      onChange={(e) => setSettings((s) => s ? { ...s, expiredGraceDays: Number(e.target.value) || 0 } : s)}
+                      value={settings.lazeikaOnlyDays ?? 7}
+                      onChange={(e) => setSettings((s) => s ? { ...s, lazeikaOnlyDays: Number(e.target.value) || 7 } : s)}
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="expired-grace-squad">UUID Squad only_telegram</Label>
+                    <Label htmlFor="lazeika-only-speed">Скорость, Mbit/s</Label>
                     <Input
-                      id="expired-grace-squad"
-                      value={settings.expiredGraceSquadUuid ?? ""}
-                      onChange={(e) => setSettings((s) => s ? { ...s, expiredGraceSquadUuid: e.target.value } : s)}
-                      placeholder="00000000-0000-0000-0000-000000000000"
-                      className="font-mono text-xs"
+                      id="lazeika-only-speed"
+                      type="number"
+                      min={1}
+                      max={1000}
+                      value={settings.lazeikaOnlySpeedMbit ?? 5}
+                      onChange={(e) => setSettings((s) => s ? { ...s, lazeikaOnlySpeedMbit: Number(e.target.value) || 5 } : s)}
                     />
-                    <p className="text-xs text-muted-foreground">Ограничение скорости настраивается в самом Squad Remnawave.</p>
+                    <p className="text-xs text-muted-foreground">Агрегированный лимит на весь inbound.</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="lazeika-only-node">Нода</Label>
+                    <select
+                      id="lazeika-only-node"
+                      value={settings.lazeikaOnlyNodeUuid ?? ""}
+                      onChange={(e) => setSettings((s) => s ? { ...s, lazeikaOnlyNodeUuid: e.target.value || null } : s)}
+                      className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                    >
+                      <option value="">— выберите ноду —</option>
+                      {lazeikaNodes.map((n) => (
+                        <option key={n.uuid} value={n.uuid} disabled={n.isDisabled}>
+                          {n.name}{n.isDisabled ? " (отключена)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="lazeika-only-squad">Squad</Label>
+                    <select
+                      id="lazeika-only-squad"
+                      value={settings.lazeikaOnlySquadUuid ?? ""}
+                      onChange={(e) => setSettings((s) => s ? { ...s, lazeikaOnlySquadUuid: e.target.value || null } : s)}
+                      className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                    >
+                      <option value="">Автоматически создать «Lazeika-Only»</option>
+                      {squads.map((sq) => (
+                        <option key={sq.uuid} value={sq.uuid}>{sq.name || sq.uuid.slice(0, 8)}</option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground">
+                      Ручной squad должен быть пустым или уже управляться режимом.
+                    </p>
                   </div>
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="lazeika-only-template">Сообщение пользователю ({"{count}"} = осталось дней)</Label>
+                  <textarea
+                    id="lazeika-only-template"
+                    rows={4}
+                    value={settings.lazeikaOnlyMessageTemplate ?? ""}
+                    onChange={(e) => setSettings((s) => s ? { ...s, lazeikaOnlyMessageTemplate: e.target.value } : s)}
+                    className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground whitespace-pre-line">
+                    Предпросмотр: {(settings.lazeikaOnlyMessageTemplate ?? "").replace(/\{count\}/g, String(settings.lazeikaOnlyDays ?? 7))}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="button" variant="outline" size="sm" disabled={lazeikaBusy !== null} onClick={() => runLazeikaAction("setup")}>
+                    {lazeikaBusy === "setup" ? "Настройка…" : "Настроить"}
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" disabled={lazeikaBusy !== null} onClick={() => runLazeikaAction("verify")}>
+                    {lazeikaBusy === "verify" ? "Проверка…" : "Проверить"}
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" disabled={lazeikaBusy !== null} onClick={() => runLazeikaAction("reconcile")}>
+                    {lazeikaBusy === "reconcile" ? "Перенастройка…" : "Перенастроить"}
+                  </Button>
+                  {settings.lazeikaOnlyEnabled === true && (
+                    <Button type="button" variant="ghost" size="sm" disabled={lazeikaBusy !== null} onClick={() => runLazeikaAction("disable")}>
+                      Выключить режим
+                    </Button>
+                  )}
+                  <a href="/admin/remna-hosts?tag=LAZEIKA_ONLY" className="text-sm underline text-muted-foreground hover:text-foreground ml-auto">
+                    Редактировать hosts уведомления
+                  </a>
+                </div>
+                {lazeikaStatus && (
+                  <div className="rounded-lg border bg-background/40 p-3 text-xs space-y-1">
+                    <div>
+                      Статус инфраструктуры:{" "}
+                      <span className={lazeikaStatus.state.status === "READY" ? "text-emerald-500 font-semibold" : lazeikaStatus.state.status === "ERROR" ? "text-red-500 font-semibold" : "font-semibold"}>
+                        {lazeikaStatus.state.status}
+                      </span>
+                      {" · "}нода: {lazeikaNodes.find((n) => n.uuid === lazeikaStatus.state.nodeUuid)?.name ?? "—"}
+                      {" · "}порт: {lazeikaStatus.state.managedInboundPort ?? "—"}
+                      {" · "}интерфейс: {lazeikaStatus.state.ssh.interface ?? "—"}
+                      {" · "}скорость: {lazeikaStatus.state.ssh.rateMbit} Mbit/s
+                    </div>
+                    {lazeikaStatus.state.lastError && (
+                      <div className="text-red-500 break-all">{lazeikaStatus.state.lastError}</div>
+                    )}
+                    <div className="text-muted-foreground">
+                      Хосты: рабочий {lazeikaStatus.workingHost ? `«${lazeikaStatus.workingHost.remark ?? ""}»` : "нет"} · уведомления: {lazeikaStatus.notificationHosts.length}/3
+                    </div>
+                  </div>
+                )}
               </div>
 
               {message && <p className="text-sm text-muted-foreground">{message}</p>}

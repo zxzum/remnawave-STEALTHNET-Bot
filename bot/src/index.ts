@@ -7261,6 +7261,11 @@ composer.on("callback_query:data", async (ctx) => {
         // Тело и карточка используют один компактный формат: тариф, общий трафик
         // и отдельная квота белых списков.
         const bodyLines = [`📋 Мои подписки (**${sorted.length}**)`, ""];
+        // Lazeika-Only: динамическое сообщение с оставшимися днями grace (§9).
+        const graceNotice = sorted.find((it) => it.lazeikaOnly?.active)?.lazeikaOnly ?? null;
+        if (graceNotice?.active) {
+          bodyLines.push(graceNotice.message, "");
+        }
         const buttonItems = sorted.map((it) => {
           const info = parseSubInfo(it);
           bodyLines.push(formatCompactSubscription(it));

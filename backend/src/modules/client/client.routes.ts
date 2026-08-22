@@ -3509,6 +3509,8 @@ clientRouter.get("/subscription/all", async (req, res) => {
     trialConvertAllTariffs: boolean;
     trafficQuota: unknown;
     componentQuotas: unknown[];
+    /** Lazeika-Only grace: активен → сообщение с {count}. */
+    lazeikaOnly?: { active: boolean; daysLeft: number; message: string } | undefined;
   };
 
   const allSubs = await prisma.subscription.findMany({
@@ -3528,6 +3530,7 @@ clientRouter.get("/subscription/all", async (req, res) => {
       autoRenewEnabled: true,
       extraDevices: true,
       extraDevicesMonthlyPrice: true,
+      graceUntil: true,
       tariff: { select: { id: true, name: true, menuEmoji: true } },
       trial: { select: { name: true, convertEnabled: true, convertAllTariffs: true, convertTariffIds: true } },
       trafficQuota: { include: { grants: true } },
@@ -3581,6 +3584,7 @@ clientRouter.get("/subscription/all", async (req, res) => {
       trialConvertAllTariffs: sub.trialId ? (sub.trial?.convertAllTariffs ?? false) : false,
       trafficQuota: toClientTrafficQuota(sub.trafficQuota),
       componentQuotas: [],
+      lazeikaOnly: await buildLazeikaOnlyBadge(sub.graceUntil),
     });
   }
 
