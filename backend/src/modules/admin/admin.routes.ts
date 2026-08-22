@@ -11,6 +11,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma, createPayment } from "../../db.js";
 import { requireAuth, requireAdminSection, requireAction } from "../auth/middleware.js";
+import { validateMessageTemplate } from "../lazeika-only/lazeika-only.config.js";
 import { hashPassword } from "../auth/auth.service.js";
 import { hashPassword as hashClientPassword } from "../client/client.service.js";
 import {
@@ -124,6 +125,7 @@ import {
   deleteSingleSubscription,
   disableSingleSubscription,
   enableSingleSubscription,
+  isActiveSubscriptionGrace,
   runSingleSubscriptionOperation,
 } from "../subscription/single-subscription-lifecycle.service.js";
 import { extractRemnaSubscriptionUrl } from "../subscription/subscription-url.js";
@@ -2485,6 +2487,16 @@ async function applySingleRemnaPatch(
   if (!subscription) {
     return { notFound: true, failures: [], requiredFailure: true };
   }
+  // Активный Lazeika-Only grace защищён от перезаписи (§4.4). Исключение — явное
+  // восстановление админом через новый expireAt.
+  if (!data.expireAt && isActiveSubscriptionGrace(subscription.graceUntil ?? null)) {
+    return {
+      notFound: false,
+      graceConflict: true,
+      failures: [{ key: "subscription", required: true, error: "Активен режим продления Lazeika-Only; укажите новый expireAt, чтобы восстановить тариф" }],
+      requiredFailure: true,
+    };
+  }
   if (data.expireAt) {
     await prisma.subscription.update({
       where: { id: subscriptionId },
@@ -3960,6 +3972,16 @@ const updateSettingsSchema = z.object({
   expiredGraceEnabled: z.boolean().optional(),
   expiredGraceDays: z.number().int().min(0).max(365).optional(),
   expiredGraceSquadUuid: z.string().max(100).nullable().optional(),
+  // Lazeika-Only (режим продления)
+  lazeikaOnlyEnabled: z.boolean().optional(),
+  lazeikaOnlyDays: z.number().int().min(1).max(365).optional(),
+  lazeikaOnlySpeedMbit: z.number().int().min(1).max(1000).optional(),
+  lazeikaOnlyNodeUuid: z.string().uuid().nullable().optional(),
+  lazeikaOnlySquadUuid: z.string().uuid().nullable().optional(),
+  lazeikaOnlyMessageTemplate: z.string().min(1).max(1000).refine(
+    (value) => validateMessageTemplate(value),
+    { message: "Шаблон поддерживает только placeholder {count}" },
+  ).nullable().optional(),
   // Поведение бота
   botAutoDeleteUnknownMessages: z.boolean().optional(),
   botInfoBlock: z.string().max(2000).nullable().optional(),
@@ -5002,6 +5024,33 @@ adminRouter.patch("/settings", async (req, res) => {
       create: { key: dbKey, value: val },
       update: { value: val },
     });
+  }
+  // Lazeika-Only: пишем новые ключи и дублируем значения в legacy expired_grace_*,
+  // пока старый UI/скрипты читают только их.
+  const lazeikaKeys: [keyof typeof updates, string, string | null][] = [
+    ["lazeikaOnlyEnabled", "lazeika_only_enabled", "expired_grace_enabled"],
+    ["lazeikaOnlyDays", "lazeika_only_days", "expired_grace_days"],
+    ["lazeikaOnlySpeedMbit", "lazeika_only_speed_mbit", null],
+    ["lazeikaOnlyNodeUuid", "lazeika_only_node_uuid", null],
+    ["lazeikaOnlySquadUuid", "lazeika_only_squad_uuid", "expired_grace_squad_uuid"],
+    ["lazeikaOnlyMessageTemplate", "lazeika_only_message_template", null],
+  ];
+  for (const [key, dbKey, legacyDbKey] of lazeikaKeys) {
+    const v = updates[key];
+    if (v === undefined) continue;
+    const val = v === null ? "" : typeof v === "boolean" ? (v ? "true" : "false") : String(v);
+    await prisma.systemSetting.upsert({
+      where: { key: dbKey },
+      create: { key: dbKey, value: val },
+      update: { value: val },
+    });
+    if (legacyDbKey) {
+      await prisma.systemSetting.upsert({
+        where: { key: legacyDbKey },
+        create: { key: legacyDbKey, value: val },
+        update: { value: val },
+      });
+    }
   }
   invalidateSystemConfigCache();
   const config = await getSystemConfig();
@@ -7828,6 +7877,7 @@ async function getAdminSubscription(subId: string) {
       ownerId: true,
       subscriptionIndex: true,
       remnawaveUuid: true,
+      graceUntil: true,
     },
   });
 }

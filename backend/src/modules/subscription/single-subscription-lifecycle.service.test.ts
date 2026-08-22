@@ -134,6 +134,7 @@ type ProcessExpired = (
   request: (body: Record<string, unknown>) => Promise<{ data?: unknown; error?: string; status: number }>,
   configLoader: () => Promise<ExpiredConfig>,
   now: Date,
+  lazeikaGateLoader?: (config: ExpiredConfig) => Promise<{ enabled: boolean; days: number; squadUuid: string | null; ready: boolean }>,
 ) => Promise<{ checked: number; grace: number; disabled: number; failed: number }>;
 
 type SyncToRemna = (
@@ -361,14 +362,16 @@ test("expired access activates grace for exactly one owning Remnawave UUID", asy
       uuid: "remna-grace",
       expireAt: graceUntil.toISOString(),
       status: "ACTIVE",
-      trafficLimitBytes: 5_000,
-      trafficLimitStrategy: "MONTH",
+      trafficLimitBytes: 0,
+      trafficLimitStrategy: "NO_RESET",
       hwidDeviceLimit: 5,
       activeInternalSquads: ["grace-squad"],
     }]);
     assert.deepEqual(mock.queries[0]?.where, { expireAt: { lte: now }, deletionRequestedAt: null });
     assert.equal(((mock.queries[0]?.select as Record<string, unknown>).remnawaveUuid), true);
-    assert.deepEqual(mock.updates[0], { where: { id: "sub-grace" }, data: { graceUntil } });
+    // Remna-успех пишется первым, graceUntil — только после него (§4.1.6).
+    assert.equal(mock.updates.length, 2);
+    assert.deepEqual(mock.updates[1], { where: { id: "sub-grace" }, data: { graceUntil } });
   } finally {
     mock.restore();
   }
@@ -397,8 +400,10 @@ test("elapsed grace disables one user without extending the original expiry", as
     assert.equal(calls[0]?.uuid, "remna-elapsed");
     assert.equal(calls[0]?.expireAt, expireAt.toISOString());
     assert.equal(calls[0]?.status, "DISABLED");
-    assert.deepEqual(calls[0]?.activeInternalSquads, ["ordinary-squad"]);
-    assert.deepEqual(mock.updates[0], { where: { id: "sub-elapsed" }, data: { graceUntil: null } });
+    // §4.2: рабочий тарифный squad не оставляем.
+    assert.deepEqual(calls[0]?.activeInternalSquads, []);
+    assert.equal(mock.updates.length, 2);
+    assert.deepEqual(mock.updates[1], { where: { id: "sub-elapsed" }, data: { graceUntil: null } });
   } finally {
     mock.restore();
   }
@@ -427,6 +432,91 @@ test("disabled grace configuration preserves past expiry and disables access", a
     assert.equal(calls[0]?.status, "DISABLED");
     assert.equal(calls[0]?.hwidDeviceLimit, 2);
     assert.equal(mock.updates.length, 1, "only the shared success writer updates an unchanged graceUntil");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("active grace is not recomputed when the global days setting changes", async () => {
+  const now = new Date("2026-07-18T12:00:00.000Z");
+  const expireAt = new Date("2026-07-16T12:00:00.000Z");
+  const fixedGraceUntil = new Date("2026-07-20T12:00:00.000Z"); // уже выдан по старым настройкам
+  const mock = mockExpiredSubscriptions([{
+    id: "sub-fixed",
+    remnawaveUuid: "remna-fixed",
+    expireAt,
+    graceUntil: fixedGraceUntil,
+    extraDevices: 0,
+    tariff,
+  }]);
+  const calls: Array<Record<string, unknown>> = [];
+  try {
+    const result = await (service.processExpiredSingleSubscriptionAccess as ProcessExpired)(
+      10,
+      async (body) => { calls.push(body); return { status: 200, data: {} }; },
+      async () => ({ expiredGraceEnabled: true, expiredGraceDays: 30, expiredGraceSquadUuid: "grace-squad" }),
+      now,
+    );
+    assert.deepEqual(result, { checked: 1, grace: 1, disabled: 0, failed: 0 });
+    // expireAt остаётся прежним graceUntil — пересчёта нет.
+    assert.equal(calls[0]?.expireAt, fixedGraceUntil.toISOString());
+    assert.equal(calls[0]?.status, "ACTIVE");
+    // graceUntil не перезаписывается: только success-writer.
+    assert.equal(mock.updates.length, 1);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("not-ready Lazeika-Only infrastructure disables instead of granting grace", async () => {
+  const now = new Date("2026-07-18T12:00:00.000Z");
+  const expireAt = new Date("2026-07-17T12:00:00.000Z");
+  const mock = mockExpiredSubscriptions([{
+    id: "sub-notready",
+    remnawaveUuid: "remna-notready",
+    expireAt,
+    graceUntil: null,
+    extraDevices: 0,
+    tariff,
+  }]);
+  const calls: Array<Record<string, unknown>> = [];
+  try {
+    const result = await (service.processExpiredSingleSubscriptionAccess as ProcessExpired)(
+      10,
+      async (body) => { calls.push(body); return { status: 200, data: {} }; },
+      async () => ({ expiredGraceEnabled: true, expiredGraceDays: 7, expiredGraceSquadUuid: null }),
+      now,
+      async () => ({ enabled: true, days: 7, squadUuid: "grace-squad", ready: false }),
+    );
+    assert.deepEqual(result, { checked: 1, grace: 0, disabled: 1, failed: 0 });
+    assert.equal(calls[0]?.status, "DISABLED");
+    assert.equal(mock.updates.length, 1, "no graceUntil write for disabled path");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("Remnawave failure does not persist graceUntil", async () => {
+  const now = new Date("2026-07-18T12:00:00.000Z");
+  const mock = mockExpiredSubscriptions([{
+    id: "sub-fail",
+    remnawaveUuid: "remna-fail",
+    expireAt: new Date("2026-07-17T12:00:00.000Z"),
+    graceUntil: null,
+    extraDevices: 0,
+    tariff,
+  }]);
+  try {
+    const result = await (service.processExpiredSingleSubscriptionAccess as ProcessExpired)(
+      10,
+      async () => ({ status: 502, error: "boom" }),
+      async () => ({ expiredGraceEnabled: true, expiredGraceDays: 7, expiredGraceSquadUuid: "grace-squad" }),
+      now,
+    );
+    assert.deepEqual(result, { checked: 1, grace: 0, disabled: 0, failed: 1 });
+    const failure = mock.updates[0]?.data as Record<string, unknown>;
+    assert.equal(failure.syncStatus, "PENDING");
+    assert.equal("graceUntil" in failure, false, "graceUntil не пишется до успеха");
   } finally {
     mock.restore();
   }

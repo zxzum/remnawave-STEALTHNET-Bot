@@ -5,6 +5,7 @@ import {
   deleteSingleSubscription,
   processExpiredSingleSubscriptionAccess,
 } from "./single-subscription-lifecycle.service.js";
+import { getLazeikaConfig } from "../lazeika-only/lazeika-only.config.js";
 import { drainPaidExtraOptionQueue } from "../extra-options/extra-options.service.js";
 import {
   DEFAULT_SUBSCRIPTION_EXPIRY_TEXT,
@@ -312,9 +313,26 @@ export async function retryPendingSubscriptionDeletions(
   return { deleted, failed };
 }
 
+/**
+ * Expiry-шаг с реальным Lazeika-Only гейтом (READY-инфраструктура + настройки).
+ * Параллельный cron не создаётся — тот же subscription-maintenance тик (§4.1).
+ */
+export function expireSubscriptionsWithLazeikaGate(limit: number) {
+  return processExpiredSingleSubscriptionAccess(
+    limit,
+    undefined,
+    undefined,
+    new Date(),
+    async () => {
+      const lazeika = await getLazeikaConfig();
+      return { enabled: lazeika.enabled, days: lazeika.days, squadUuid: lazeika.squadUuid, ready: lazeika.ready };
+    },
+  );
+}
+
 export async function runSubscriptionMaintenance(
   expiry: (limit: number) => Promise<{ checked: number; grace: number; disabled: number; failed: number }>
-    = processExpiredSingleSubscriptionAccess,
+    = expireSubscriptionsWithLazeikaGate,
   deletions: (limit: number) => Promise<{ deleted: number; failed: number }>
     = retryPendingSubscriptionDeletions,
   extraOptions: (limit: number) => Promise<{ checked: number; applied: number; queued: number; failed: number }>

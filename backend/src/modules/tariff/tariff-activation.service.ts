@@ -373,10 +373,16 @@ async function getAllTariffSquadUuids(): Promise<Set<string>> {
  * Объединить сквады тарифа с текущими сквадами пользователя.
  * Тарифные сквады старого тарифа замещаются новыми; add-on сквады (не относящиеся
  * ни к одному тарифу — покупки опции «серверы», подарки) — сохраняются.
+ * Исключение: managed Lazeika-Only squad не сохраняется как «чужой» (§4.4).
  */
 async function mergeSquads(tariffSquadUuids: string[], currentSquadUuids: string[]): Promise<string[]> {
-  const allTariffSquads = await getAllTariffSquadUuids();
-  const preserved = currentSquadUuids.filter((u) => !allTariffSquads.has(u) && !tariffSquadUuids.includes(u));
+  const [allTariffSquads, cfg] = await Promise.all([getAllTariffSquadUuids(), getSystemConfig()]);
+  const managed = new Set(
+    [cfg.lazeikaOnlySquadUuid, cfg.expiredGraceSquadUuid].filter((u): u is string => Boolean(u)),
+  );
+  const preserved = currentSquadUuids.filter(
+    (u) => !allTariffSquads.has(u) && !tariffSquadUuids.includes(u) && !managed.has(u),
+  );
   return [...tariffSquadUuids, ...preserved];
 }
 
@@ -744,6 +750,8 @@ export async function activateTariffForClient(
       currentPricePerDay: newPricePerDay > 0 ? newPricePerDay : null,
       // кешируем дату истечения для broadcast-фильтра.
       ...(finalExpireAt ? { expireAt: new Date(finalExpireAt) } : {}),
+      // §4.4.8: после успешной оплаты grace снимается.
+      graceUntil: null,
     }).catch((e) => {
       console.error("[tariff-activation] upsertSubscriptionByRemnaUuid failed:", e);
       return null;
@@ -1075,6 +1083,8 @@ export async function extendSecondarySubscription(
       trialId: null,
       extraDevices: effectiveExtras,
       extraDevicesMonthlyPrice: effectiveExtrasMonthly,
+      // §4.4.8: успешная оплата снимает Lazeika-Only grace.
+      graceUntil: null,
       ...(tariff.id && tariff.id !== sec.tariffId ? { tariffId: tariff.id } : {}),
       ...(effectiveConvert && newPriceForDb != null && newPriceForDb > 0 ? {
         customPrice: newPriceForDb,

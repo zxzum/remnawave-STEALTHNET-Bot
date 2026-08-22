@@ -29,6 +29,22 @@ export function isActiveSubscriptionGrace(graceUntil: Date | null, now = new Dat
   return graceUntil != null && graceUntil.getTime() > now.getTime();
 }
 
+/**
+ * Гейт выдачи Lazeika-Only grace. По умолчанию выводится из legacy expired_grace_*,
+ * cron передаёт реальный loader с проверкой READY-инфраструктуры.
+ */
+export type LazeikaGate = { enabled: boolean; days: number; squadUuid: string | null; ready: boolean };
+
+function legacyGateFromConfig(config: ExpiredGraceConfig): LazeikaGate {
+  return {
+    enabled: config.expiredGraceEnabled,
+    days: Math.max(0, Math.trunc(config.expiredGraceDays)),
+    squadUuid: config.expiredGraceSquadUuid,
+    // ponytail: в legacy-режиме инфраструктурой считается сам squad.
+    ready: Boolean(config.expiredGraceSquadUuid),
+  };
+}
+
 export async function requireSubscriptionRemnaUuid(subscriptionId: string): Promise<string> {
   const row = await prisma.subscription.findUnique({
     where: { id: subscriptionId },
@@ -95,8 +111,12 @@ export async function processExpiredSingleSubscriptionAccess(
   request: RemnaUpdateRequest = remnaUpdateUser,
   configLoader: () => Promise<ExpiredGraceConfig> = getSystemConfig,
   now = new Date(),
+  /** Реальный cron передаёт loader с проверкой READY; тесты/legacy используют дефолт. */
+  lazeikaGateLoader: (config: ExpiredGraceConfig) => Promise<LazeikaGate> = async (config) =>
+    legacyGateFromConfig(config),
 ) {
   const config = await configLoader();
+  const lazeika = await lazeikaGateLoader(config);
   const subscriptions = await prisma.subscription.findMany({
     where: { expireAt: { lte: now }, deletionRequestedAt: null },
     orderBy: { expireAt: "desc" },
@@ -124,38 +144,64 @@ export async function processExpiredSingleSubscriptionAccess(
   for (const subscription of subscriptions) {
     const expireAt = subscription.expireAt;
     if (!expireAt) continue;
-    const graceUntil = new Date(
-      expireAt.getTime() + Math.max(0, config.expiredGraceDays) * 86_400_000,
-    );
-    const allowGrace = Boolean(
-      config.expiredGraceEnabled
-      && config.expiredGraceSquadUuid
-      && config.expiredGraceDays > 0
-      && now.getTime() < graceUntil.getTime(),
-    );
-    const desiredGraceUntil = allowGrace ? graceUntil : null;
+    const graceActiveBefore = isActiveSubscriptionGrace(subscription.graceUntil, now);
+    const graceElapsed = subscription.graceUntil != null && !graceActiveBefore;
+
+    // Fixed graceUntil: уже выданный доступ не пересчитывается при каждом запуске (§4.1.4).
+    let desiredGraceUntil: Date | null = null;
+    if (graceActiveBefore) {
+      desiredGraceUntil = subscription.graceUntil;
+    } else if (!graceElapsed) {
+      const computed = new Date(expireAt.getTime() + Math.max(0, lazeika.days) * 86_400_000);
+      const allowFreshEntry = Boolean(
+        lazeika.enabled
+        && lazeika.ready
+        && lazeika.squadUuid
+        && lazeika.days > 0
+        && now.getTime() < computed.getTime(),
+      );
+      desiredGraceUntil = allowFreshEntry ? computed : null;
+    }
+    const enteringGrace = desiredGraceUntil != null;
+
+    // Remna update ПЕРВЫЙ: graceUntil не записывается до успешного ответа (§4.1.6).
+    const result = await runSingleSubscriptionOperation(subscription.id, (uuid) => request({
+      uuid,
+      expireAt: (enteringGrace ? desiredGraceUntil! : expireAt).toISOString(),
+      status: enteringGrace ? "ACTIVE" : "DISABLED",
+      ...(enteringGrace ? {
+        // Grace: трафик не ограничиваем лимитом тарифа — NO_RESET/0 (§4.1.5), HWID сохраняем.
+        trafficLimitBytes: 0,
+        trafficLimitStrategy: "NO_RESET",
+        hwidDeviceLimit: subscription.tariff
+          ? Math.max(1, subscription.tariff.includedDevices + subscription.extraDevices)
+          : undefined,
+        activeInternalSquads: [lazeika.squadUuid],
+      } : subscription.tariff && !graceElapsed ? {
+        // Обычное истечение без grace — прежнее поведение.
+        ...remnaTrafficSettings(subscription.tariff),
+        hwidDeviceLimit: Math.max(1, subscription.tariff.includedDevices + subscription.extraDevices),
+        activeInternalSquads: subscription.tariff.internalSquadUuids,
+      } : {
+        // Окончание grace (§4.2): рабочий тарифный squad не оставляем.
+        ...(subscription.tariff
+          ? { hwidDeviceLimit: Math.max(1, subscription.tariff.includedDevices + subscription.extraDevices) }
+          : {}),
+        activeInternalSquads: [],
+      }),
+    }));
+    if (result.requiredFailure) {
+      failed++;
+      continue;
+    }
+    // Успех: фиксируем/очищаем graceUntil локально.
     if (subscription.graceUntil?.getTime() !== desiredGraceUntil?.getTime()) {
       await prisma.subscription.update({
         where: { id: subscription.id },
         data: { graceUntil: desiredGraceUntil },
       });
     }
-    const result = await runSingleSubscriptionOperation(subscription.id, (uuid) => request({
-      uuid,
-      expireAt: (allowGrace ? graceUntil : expireAt).toISOString(),
-      status: allowGrace ? "ACTIVE" : "DISABLED",
-      ...(subscription.tariff ? {
-        ...remnaTrafficSettings(subscription.tariff),
-        hwidDeviceLimit: Math.max(1, subscription.tariff.includedDevices + subscription.extraDevices),
-        activeInternalSquads: allowGrace
-          ? [config.expiredGraceSquadUuid]
-          : subscription.tariff.internalSquadUuids,
-      } : {
-        activeInternalSquads: allowGrace ? [config.expiredGraceSquadUuid] : [],
-      }),
-    }));
-    if (result.requiredFailure) failed++;
-    else if (allowGrace) grace++;
+    if (enteringGrace) grace++;
     else disabled++;
   }
   return { checked: subscriptions.length, grace, disabled, failed };

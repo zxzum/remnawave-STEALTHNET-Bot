@@ -66,6 +66,20 @@ import {
 import { validateEmailForSignup } from "../signup-protection/email-blocklist.js";
 import { configuredAssetUrl } from "./bot-assets.routes.js";
 import { toClientTrafficQuota } from "../squad-traffic/squad-traffic.client.js";
+import { isActiveSubscriptionGrace } from "../subscription/single-subscription-lifecycle.service.js";
+import { DEFAULT_LAZEIKA_MESSAGE_TEMPLATE } from "./client.service.js";
+import { renderGraceMessage } from "../lazeika-only/lazeika-only.config.js";
+
+/** Бейдж Lazeika-Only для кабинета/бота; undefined когда grace не активен. */
+async function buildLazeikaOnlyBadge(
+  graceUntil: Date | null,
+): Promise<{ active: boolean; daysLeft: number; message: string } | undefined> {
+  if (!isActiveSubscriptionGrace(graceUntil)) return undefined;
+  const daysLeft = Math.max(1, Math.ceil((graceUntil!.getTime() - Date.now()) / 86_400_000));
+  const config = await getSystemConfig();
+  const template = config.lazeikaOnlyMessageTemplate || DEFAULT_LAZEIKA_MESSAGE_TEMPLATE;
+  return { active: true, daysLeft, message: renderGraceMessage(template, daysLeft) };
+}
 import { applyTrafficEntitlement } from "../squad-traffic/traffic-entitlement.service.js";
 import {
   isClientTrialBlocked,
@@ -3234,6 +3248,7 @@ clientRouter.get("/subscription", async (req, res) => {
       remnawaveUuid: true,
       trialId: true,
       expireAt: true,
+      graceUntil: true,
       tariff: { select: { name: true } },
       trial: { select: { name: true, convertEnabled: true } },
       trafficQuota: { include: { grants: true } },
@@ -3242,6 +3257,8 @@ clientRouter.get("/subscription", async (req, res) => {
   if (!rootSub?.remnawaveUuid) {
     return res.json({ subscription: null, tariffDisplayName: null, currentPricePerDay: null, trafficQuota: null, message: "Подписка не привязана" });
   }
+  // Lazeika-Only: динамическое сообщение с {count} для кабинета и бота (§9).
+  const lazeikaOnly = await buildLazeikaOnlyBadge(rootSub.graceUntil);
   const effectiveUuid = rootSub.remnawaveUuid;
   // Self-heal: clients.remnawaveUuid разошёлся с актуальной подпиской → чиним (влияет на устройства, доп.подписки и пр.).
   if (rootSub.remnawaveUuid !== client.remnawaveUuid) {
@@ -3265,6 +3282,7 @@ clientRouter.get("/subscription", async (req, res) => {
         trialName: rootSub.trialId ? (rootSub.trial?.name ?? null) : null,
         trialConvertEnabled: rootSub.trialId ? (rootSub.trial?.convertEnabled ?? true) : true,
         trafficQuota: toClientTrafficQuota(rootSub.trafficQuota),
+        lazeikaOnly,
         message: null,
       });
     }
@@ -3382,6 +3400,7 @@ clientRouter.get("/subscription", async (req, res) => {
     trialName: rootSub?.trialId ? (rootSub.trial?.name ?? null) : null,
     trialConvertEnabled: rootSub?.trialId ? (rootSub.trial?.convertEnabled ?? true) : true,
     trafficQuota: toClientTrafficQuota(rootSub.trafficQuota),
+    lazeikaOnly,
     componentQuotas: [],
   });
 });

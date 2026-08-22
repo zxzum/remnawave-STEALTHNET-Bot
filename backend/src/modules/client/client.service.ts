@@ -180,7 +180,11 @@ const SYSTEM_CONFIG_KEYS = [
   "theme_accent", // Глобальная цветовая тема: default, blue, violet, rose, orange, green, emerald, cyan, amber, red, pink, indigo
   "allow_user_theme_change", // Разрешить пользователям менять тему: true/false
   "force_subscribe_enabled", "force_subscribe_channel_id", "force_subscribe_message", // Принудительная подписка на канал/группу
-  "blacklist_enabled", // Блокировка пользователей из Community Blacklist
+   "blacklist_enabled", // Блокировка пользователей из Community Blacklist
+  // Lazeika-Only: режим продления после истечения подписки (legacy-алиасы expired_grace_*)
+  "lazeika_only_enabled", "lazeika_only_days", "lazeika_only_speed_mbit",
+  "lazeika_only_node_uuid", "lazeika_only_squad_uuid", "lazeika_only_profile_uuid",
+  "lazeika_only_message_template", "expired_grace_enabled", "expired_grace_days", "expired_grace_squad_uuid",
   // Продажа опций: доп. трафик, доп. устройства, доп. серверы (сквады)
   "sell_options_enabled", "sell_options_traffic_enabled", "sell_options_traffic_products",
   "sell_options_devices_enabled", "sell_options_devices_products",
@@ -964,12 +968,43 @@ async function loadSystemConfigFromDb() {
     expiredGraceEnabled: map.expired_grace_enabled === "true" || map.expired_grace_enabled === "1",
     expiredGraceDays: Math.max(0, parseInt(map.expired_grace_days || "7", 10) || 0),
     expiredGraceSquadUuid: (map.expired_grace_squad_uuid ?? "").trim() || null,
+    // Lazeika-Only: новые ключи имеют приоритет, иначе legacy expired_grace_* (не ломаем текущие установки).
+    lazeikaOnlyEnabled: firstNonEmptyFlag(map.lazeika_only_enabled, map.expired_grace_enabled),
+    lazeikaOnlyDays: clampInt(map.lazeika_only_days ?? map.expired_grace_days, 1, 365, 7),
+    lazeikaOnlySpeedMbit: clampInt(map.lazeika_only_speed_mbit, 1, 1000, 5),
+    lazeikaOnlyNodeUuid: (map.lazeika_only_node_uuid ?? "").trim() || null,
+    lazeikaOnlySquadUuid: (map.lazeika_only_squad_uuid ?? map.expired_grace_squad_uuid ?? "").trim() || null,
+    lazeikaOnlyMessageTemplate: (map.lazeika_only_message_template ?? "").trim() || DEFAULT_LAZEIKA_MESSAGE_TEMPLATE,
     botAutoDeleteUnknownMessages: map.bot_auto_delete_unknown_messages === "true" || map.bot_auto_delete_unknown_messages === "1",
     botInfoBlock: (map.bot_info_block ?? "").trim() || null,
   };
 }
 
 export type CategoryEmojis = Record<string, string>;
+
+/** Шаблон сообщения Lazeika-Only по умолчанию (спецификация §5.3). Единственный placeholder — {count}. */
+export const DEFAULT_LAZEIKA_MESSAGE_TEMPLATE = [
+  "🔐 Доступ к lazeika.xyz и Telegram",
+  "",
+  "⏰ Ваша подписка закончилась!",
+  "✅ Доступ сохранён ещё на {count} дней!",
+  "💳 Продлите подписку, чтобы пользоваться всеми сервисами!",
+].join("\n");
+
+function firstNonEmptyFlag(...values: Array<string | undefined>): boolean {
+  for (const v of values) {
+    if (v == null || v === "") continue;
+    return v.trim() === "true" || v.trim() === "1";
+  }
+  return false;
+}
+
+function clampInt(raw: string | undefined, min: number, max: number, fallback: number): number {
+  if (raw == null || raw.trim() === "") return fallback;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
 
 function parseBotAdminTelegramIds(raw: string | undefined): string[] {
   if (!raw || !raw.trim()) return [];

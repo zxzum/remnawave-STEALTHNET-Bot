@@ -248,6 +248,8 @@ export async function upsertSubscriptionByRemnaUuid(
     currentPricePerDay?: number | null;
     autoRenewEnabled?: boolean;
     expireAt?: Date | null;
+    /** Оплата во время Lazeika-Only grace: успешная активация снимает режим. */
+    graceUntil?: Date | null;
   },
 ): Promise<{ id: string; subscriptionIndex: number; created: boolean }> {
   // Сначала ищем существующую подписку с этим UUID — чтобы не плодить дубли.
@@ -265,6 +267,7 @@ export async function upsertSubscriptionByRemnaUuid(
         ...(data.currentPricePerDay !== undefined ? { currentPricePerDay: data.currentPricePerDay } : {}),
         ...(data.autoRenewEnabled !== undefined ? { autoRenewEnabled: data.autoRenewEnabled } : {}),
         ...(data.expireAt !== undefined ? { expireAt: data.expireAt } : {}),
+        ...(data.graceUntil !== undefined ? { graceUntil: data.graceUntil } : {}),
       },
     });
     return { id: byUuid.id, subscriptionIndex: byUuid.subscriptionIndex, created: false };

@@ -72,6 +72,14 @@ const DEFAULTS: Array<[string, string]> = [
     "gift_intro_text",
     "🤔 Устали смотреть, как мучается Ваш близкий человек?\n\nПодарите ему доступ к нашему VPN 💖\n\n🎁 После оплаты придёт доступ, который вам останется лишь переслать человеку, которому вы хотите его подарить! 🤗",
   ],
+  // Lazeika-Only: режим продления после истечения подписки.
+  ["lazeika_only_enabled", "false"],
+  ["lazeika_only_days", "7"],
+  ["lazeika_only_speed_mbit", "5"],
+  [
+    "lazeika_only_message_template",
+    "🔐 Доступ к lazeika.xyz и Telegram\n\n⏰ Ваша подписка закончилась!\n✅ Доступ сохранён ещё на {count} дней!\n💳 Продлите подписку, чтобы пользоваться всеми сервисами!",
+  ],
 ];
 
 export async function ensureSystemSettings() {
