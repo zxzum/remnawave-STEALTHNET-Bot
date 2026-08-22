@@ -112,7 +112,8 @@ export async function getLazeikaConfig(
     days: Math.min(365, Math.max(1, Math.trunc(cfg.lazeikaOnlyDays ?? 7))),
     speedMbit: Math.min(1000, Math.max(1, Math.trunc(cfg.lazeikaOnlySpeedMbit ?? 5))),
     nodeUuid: cfg.lazeikaOnlyNodeUuid ?? null,
-    squadUuid: cfg.lazeikaOnlySquadUuid ?? null,
+    // Ключ настроек может отстать от resource_state (авто-создание squad в setup) — берём сохранённый.
+    squadUuid: (cfg.lazeikaOnlySquadUuid ?? "").trim() || state.squadUuid || null,
     messageTemplate: cfg.lazeikaOnlyMessageTemplate || DEFAULT_LAZEIKA_MESSAGE_TEMPLATE,
     ready,
   };
