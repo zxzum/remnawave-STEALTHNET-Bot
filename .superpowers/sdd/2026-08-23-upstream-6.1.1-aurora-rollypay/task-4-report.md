@@ -31,3 +31,23 @@ Implemented for Лазейка ВПН.
 
 - No live RollyPay API/webhook test was run because external credentials/service access were not available.
 - Frontend Vite reports the repository's existing large-chunk warning (>500 kB); the build still succeeds.
+
+## Round 1/5 remediation
+
+- Added `rollypay` to the centralized `markPaymentPaid` top-up classification, retaining the existing pending-only flip so retries credit balance once.
+- Preserved `targetSubscriptionId` in RollyPay extra-option metadata before the payment snapshot is persisted.
+- Recorded promo usage after successful RollyPay `markPaymentPaid`; the existing shared helper remains the retry-idempotent guard.
+- Made RollyPay proxy and Sing-box product amounts/currencies come from active DB tariffs; caller `amount` remains a pure top-up input only, and non-RUB/missing/inactive products are rejected.
+
+## Round 1/5 verification
+
+- Focused round-1 contracts: 4 passed.
+- Full backend tests: 31 passed.
+- Backend build: passed.
+- Frontend build: passed.
+- Bot build: passed.
+- `git diff --check`: passed.
+
+## Round 1/5 commit
+
+- `e66d3af` (`fix: close RollyPay Task 4 payment findings`)
