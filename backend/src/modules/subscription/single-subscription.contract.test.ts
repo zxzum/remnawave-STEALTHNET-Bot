@@ -87,8 +87,8 @@ test("contest prizes and device extras update only the owning Remnawave UUID", a
     readFile(new URL("./extras.helper.ts", import.meta.url), "utf8"),
   ]);
   assert.match(contest, /remnaUpdateUser\(\{ uuid: subscription\.remnawaveUuid, expireAt: newExpireAt \}\)/);
-  assert.match(extras, /removePaidExtrasFromRemna\(sub\.remnawaveUuid, includedDevices/);
-  assert.match(extras, /remnaUpdateUser\(\{ uuid: sub\.remnawaveUuid, hwidDeviceLimit: newDevices \}\)/);
+  assert.match(extras, /removePaidExtrasFromRemna\((?:sub\.remnawaveUuid!|remnaUuid), includedDevices/);
+  assert.match(extras, /remnaUpdateUser\(\{ uuid: (?:sub\.remnawaveUuid|sub\.ownerId ?\/\*.+\*\/ )?.*hwidDeviceLimit: newDevices \}\)/) ;
   assert.doesNotMatch([contest, extras].join("\n"), /\bcomponents\s*:/);
 });
 

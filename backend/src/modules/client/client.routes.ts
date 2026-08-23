@@ -67,6 +67,7 @@ import { validateEmailForSignup } from "../signup-protection/email-blocklist.js"
 import { configuredAssetUrl } from "./bot-assets.routes.js";
 import { toClientTrafficQuota } from "../squad-traffic/squad-traffic.client.js";
 import { isActiveSubscriptionGrace } from "../subscription/single-subscription-lifecycle.service.js";
+import { withSubscriptionClientLock } from "../subscription/single-subscription-lifecycle.service.js";
 import { DEFAULT_LAZEIKA_MESSAGE_TEMPLATE } from "./client.service.js";
 import { renderGraceMessage } from "../lazeika-only/lazeika-only.config.js";
 
@@ -2830,6 +2831,8 @@ clientRouter.post("/promo/activate", async (req, res) => {
   const { code } = req.body as { code?: string };
   if (!code?.trim()) return res.status(400).json({ message: "Промокод не указан" });
 
+  // §4: вся промо-выдача под общим клиентским advisory-локом (cron/оплата/админ).
+  const runPromoActivation = async (): Promise<unknown> => {
   const group = await prisma.promoGroup.findUnique({ where: { code: code.trim() } });
   if (!group || !group.isActive) return res.status(404).json({ message: "Промокод не найден или неактивен" });
   // Lazeika-Only grace (§3 ревью): гейт ДО резервации, иначе после продления
@@ -2853,6 +2856,11 @@ clientRouter.post("/promo/activate", async (req, res) => {
   // получат serialization_failure и нашу 400. Существующая activation для того
   // же юзера ловится @@unique(promoGroupId, clientId) → P2002 → 400.
   let activationCreated = false;
+  const releasePromoReservation = () => (activationCreated
+    ? prisma.promoActivation.delete({
+        where: { promoGroupId_clientId: { promoGroupId: group.id, clientId: client.id } },
+      }).catch(() => {})
+    : Promise.resolve());
   try {
     await prisma.$transaction(async (tx) => {
       // Дубль той же связки (юзер уже активировал этот промокод) — DB словит
@@ -2878,7 +2886,12 @@ clientRouter.post("/promo/activate", async (req, res) => {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg === "DUPLICATE_USER_ACTIVATION") {
-      return res.status(400).json({ message: "Вы уже активировали этот промокод" });
+      // Orphan-резервация после ambiguous-сбоя (remnawaveUuid не привязан) → резюмим.
+      if (!client.remnawaveUuid) {
+        activationCreated = true; // резервация уже существует
+      } else {
+        return res.status(400).json({ message: "Вы уже активировали этот промокод" });
+      }
     }
     if (msg === "MAX_ACTIVATIONS_EXCEEDED") {
       return res.status(400).json({ message: "Лимит активаций промокода исчерпан" });
@@ -2933,7 +2946,15 @@ clientRouter.post("/promo/activate", async (req, res) => {
       activeInternalSquads: [group.squadUuid],
     });
     if (updateRes.error) {
-      return res.status(updateRes.status >= 400 ? updateRes.status : 500).json({ message: updateRes.error });
+      // Definitive (4xx) → откатываем резервацию; ambiguous (сеть/5xx) → оставляем,
+      // повторная попытка возобновится с той же резервацией (idемпотентно).
+      const ambiguous = !updateRes.status || updateRes.status >= 500;
+      if (ambiguous) {
+        console.warn("[promo] ambiguous Remna failure; reservation kept for retry", { status: updateRes.status });
+        return res.status(503).json({ message: "Сервис временно недоступен, попробуйте ещё раз" });
+      }
+      await releasePromoReservation();
+      return res.status(502).json({ message: updateRes.error });
     }
   } else {
     let existingUuid: string | null = null;
@@ -2969,13 +2990,17 @@ clientRouter.post("/promo/activate", async (req, res) => {
       });
       existingUuid = extractRemnaUuid(createRes.data);
     }
-    if (!existingUuid) return res.status(502).json({ message: "Ошибка создания пользователя VPN" });
-
-    await remnaUpdateUser({ uuid: existingUuid, expireAt, trafficLimitBytes, hwidDeviceLimit, activeInternalSquads: [group.squadUuid] });
+    if (!existingUuid) {
+      // createUser не удался (definitive) → резервация не нужна.
+      await releasePromoReservation();
+      return res.status(502).json({ message: "Ошибка создания пользователя VPN" });
+    }
 
     await prisma.client.update({
       where: { id: client.id },
       data: { remnawaveUuid: existingUuid },
+    }).catch(async (e) => {
+      console.warn("[promo] local client.update failed; remote access granted", e);
     });
     promoWorkingUuid = existingUuid;
   }
@@ -2986,10 +3011,12 @@ clientRouter.post("/promo/activate", async (req, res) => {
     await upsertSubscriptionByRemnaUuid(client.id, {
       remnawaveUuid: promoWorkingUuid,
       expireAt: new Date(promoExpireAt),
-    });
+    }).catch((e) => console.warn("[promo] subscription upsert failed after grant", e));
   }
 
   return res.json({ message: "Промокод активирован! Подписка подключена." });
+  };
+  await withSubscriptionClientLock(client.id, runPromoActivation);
 });
 
 // ——— Промокоды (скидки / бесплатные дни) ———
@@ -3061,6 +3088,8 @@ clientRouter.post("/promo-code/activate", async (req, res) => {
     return res.status(400).json({ message: "Промокод не полностью настроен" });
   }
 
+  // §4: выдача промокода под общим клиентским advisory-локом.
+  const runPromoCodeActivation = async (): Promise<unknown> => {
   if (!isRemnaConfigured()) return res.status(503).json({ message: "Сервис временно недоступен" });
 
   // Lazeika-Only grace (§4.4): промо-активация выдала бы обычный squad/лимиты поверх
@@ -3082,7 +3111,7 @@ clientRouter.post("/promo-code/activate", async (req, res) => {
   if (client.remnawaveUuid) {
     const userRes = await remnaGetUser(client.remnawaveUuid);
     const currentExpireAt = extractCurrentExpireAt(userRes.data);
-    const expireAt = calculateExpireAt(currentExpireAt, promo.durationDays);
+    const expireAt = calculateExpireAt(currentExpireAt, promo.durationDays ?? 0);
     activatedExpireAt = expireAt;
 
     const updateRes = await remnaUpdateUser({
@@ -3115,7 +3144,7 @@ clientRouter.post("/promo-code/activate", async (req, res) => {
       email: client.email,
       clientIdFallback: client.id,
     });
-    const expireAt = calculateExpireAt(currentExpireAt, promo.durationDays);
+    const expireAt = calculateExpireAt(currentExpireAt, promo.durationDays ?? 0);
     activatedExpireAt = expireAt;
     if (!existingUuid) {
       const createRes = await remnaCreateUser({
@@ -3131,10 +3160,12 @@ clientRouter.post("/promo-code/activate", async (req, res) => {
       existingUuid = extractRemnaUuid(createRes.data);
     }
     if (!existingUuid) return res.status(502).json({ message: "Ошибка создания пользователя VPN" });
+    // Второй PATCH не нужен: createUser уже выставил expireAt/squads/лимиты.
 
-    await remnaUpdateUser({ uuid: existingUuid, expireAt, trafficLimitBytes, hwidDeviceLimit, activeInternalSquads: [promo.squadUuid] });
-    // Не вызываем add-users: по api-1.yaml эндпоинт добавляет ВСЕХ пользователей в сквад.
-    await prisma.client.update({ where: { id: client.id }, data: { remnawaveUuid: existingUuid } });
+    await prisma.client.update({
+      where: { id: client.id },
+      data: { remnawaveUuid: existingUuid },
+    }).catch((e) => console.warn("[promo-code] local client.update failed; remote access granted", e));
     activatedUuid = existingUuid;
   }
 
@@ -3155,6 +3186,8 @@ clientRouter.post("/promo-code/activate", async (req, res) => {
   }
 
   return res.json({ message: `Промокод активирован! Подписка на ${promo.durationDays} дн. подключена.` });
+  };
+  await withSubscriptionClientLock(client.id, runPromoCodeActivation);
 });
 
 /** Определить отображаемое имя тарифа: Триал, название с сайта или «Тариф не выбран».

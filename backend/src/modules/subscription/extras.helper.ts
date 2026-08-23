@@ -20,7 +20,7 @@ import {
   remnaDeleteUserHwidDevice,
   remnaUpdateUser,
 } from "../remna/remna.client.js";
-import { isActiveSubscriptionGrace } from "./single-subscription-lifecycle.service.js";
+import { isActiveSubscriptionGrace, withSubscriptionClientLock } from "./single-subscription-lifecycle.service.js";
 
 export interface RemoveExtrasResult {
   ok: boolean;
@@ -123,6 +123,7 @@ export async function removeAllExtraDevicesForSub(subId: string): Promise<Remove
     where: { id: subId },
     select: {
       id: true,
+      ownerId: true,
       remnawaveUuid: true,
       tariffId: true,
       extraDevices: true,
@@ -138,12 +139,6 @@ export async function removeAllExtraDevicesForSub(subId: string): Promise<Remove
     // Уже нет extras — ничего не делаем.
     return { ok: true, extraDevicesRemoved: 0, hwidKicked: 0, newDeviceLimit: 0 };
   }
-  // Активный Lazeika-Only grace: изменение HWID-лимита отложено до восстановления (§4.4).
-  const graceRow = await prisma.subscription.findUnique({ where: { id: subId }, select: { graceUntil: true } });
-  if (isActiveSubscriptionGrace(graceRow?.graceUntil ?? null)) {
-    return { ok: false, extraDevicesRemoved: 0, hwidKicked: 0, newDeviceLimit: 0, error: "Подписка в режиме продления Lazeika-Only: сначала продлите тариф" };
-  }
-
   const tariff = sub.tariffId
     ? await prisma.tariff.findUnique({
         where: { id: sub.tariffId },
@@ -152,21 +147,26 @@ export async function removeAllExtraDevicesForSub(subId: string): Promise<Remove
     : null;
   const includedDevices = tariff?.includedDevices ?? tariff?.deviceLimit ?? 1;
 
-  const removed = await removePaidExtrasFromRemna(sub.remnawaveUuid, includedDevices, async () => {
-    await prisma.subscription.update({
-      where: { id: sub.id },
-      data: { extraDevices: 0, extraDevicesMonthlyPrice: 0 },
-    });
-  });
-  if (!removed.ok) {
-    return { ok: false, extraDevicesRemoved: 0, hwidKicked: removed.removed, newDeviceLimit: includedDevices, error: removed.error };
+  // Удаление extras под клиентским advisory-локом; grace перепроверяется внутри (§4 финала).
+  if (!sub.remnawaveUuid || !sub.ownerId) {
+    return { ok: false, extraDevicesRemoved: 0, hwidKicked: 0, newDeviceLimit: includedDevices, error: "подписка не привязана к панели" };
   }
-  return {
-    ok: true,
-    extraDevicesRemoved: sub.extraDevices ?? 0,
-    hwidKicked: removed.removed,
-    newDeviceLimit: includedDevices,
-  };
+  return withSubscriptionClientLock(sub.ownerId, async (): Promise<RemoveExtrasResult> => {
+    const graceRow = await prisma.subscription.findUnique({ where: { id: subId }, select: { graceUntil: true } });
+    if (isActiveSubscriptionGrace(graceRow?.graceUntil ?? null)) {
+      return { ok: false, extraDevicesRemoved: 0, hwidKicked: 0, newDeviceLimit: includedDevices, error: "Подписка в режиме продления Lazeika-Only: сначала продлите тариф" };
+    }
+    const inner = await removePaidExtrasFromRemna(sub.remnawaveUuid!, includedDevices, async () => {
+      await prisma.subscription.update({
+        where: { id: sub.id },
+        data: { extraDevices: 0, extraDevicesMonthlyPrice: 0 },
+      });
+    });
+    if (!inner.ok) {
+      return { ok: false, extraDevicesRemoved: 0, hwidKicked: inner.removed, newDeviceLimit: includedDevices, ...(inner.error ? { error: inner.error } : {}) };
+    }
+    return { ok: true, extraDevicesRemoved: sub.extraDevices ?? 0, hwidKicked: inner.removed, newDeviceLimit: includedDevices };
+  });
 }
 
 export interface GrantDevicesResult {

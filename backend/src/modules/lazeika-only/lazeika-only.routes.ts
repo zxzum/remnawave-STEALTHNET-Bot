@@ -141,3 +141,49 @@ lazeikaOnlyRouter.post("/disable", async (_req: Request, res: Response) => {
   invalidateSystemConfigCache();
   return res.json({ ok: true, ...result });
 });
+
+/**
+ * Безопасный сброс resource_state для смены ноды/полной перепрошивки.
+ * Разрешён ТОЛЬКО при выключенном режиме (иначе admin мог бы стереть состояние
+ * под живым grace). Инфраструктуру в Remna не трогает.
+ */
+lazeikaOnlyRouter.post("/reset-state", async (_req: Request, res: Response) => {
+  const [config, lazeika] = await Promise.all([getSystemConfig(), getLazeikaConfig()]);
+  if (lazeika.enabled) {
+    return res.status(409).json({ message: "Сначала выключите режим Lazeika-Only" });
+  }
+  const value = JSON.stringify({
+    version: 1,
+    status: "UNCONFIGURED",
+    nodeUuid: null,
+    profileUuid: null,
+    baseProfileUuid: null,
+    managedInboundUuid: null,
+    managedInboundTag: null,
+    managedInboundPort: null,
+    squadUuid: null,
+    squadSource: "AUTO",
+    workingHostUuid: null,
+    notificationHostUuids: [],
+    previousNodeConfig: null,
+    createdResourceUuids: [],
+    ssh: { interface: null, rateMbit: lazeika.speedMbit },
+    lastError: null,
+    lastVerifiedAt: null,
+    updatedAt: new Date().toISOString(),
+  });
+  await prisma.systemSetting.upsert({
+    where: { key: "lazeika_only_resource_state" },
+    create: { key: "lazeika_only_resource_state", value },
+    update: { value },
+  });
+  for (const key of ["lazeika_only_profile_uuid", "lazeika_only_squad_uuid", "lazeika_only_node_uuid"]) {
+    await prisma.systemSetting.upsert({
+      where: { key },
+      create: { key, value: "" },
+      update: { value: "" },
+    });
+  }
+  invalidateSystemConfigCache();
+  return res.json({ ok: true });
+});

@@ -2481,17 +2481,37 @@ function getRemnaDevices(data: unknown): unknown[] {
   return Array.isArray(response.devices) ? response.devices : [];
 }
 
+type RemnaPatchResult = {
+  notFound?: boolean;
+  graceConflict?: boolean;
+  degraded?: boolean;
+  failures: Array<{ key: "subscription"; required: true; error: string }>;
+  requiredFailure: boolean;
+};
 async function applySingleRemnaPatch(
   subscriptionId: string,
   data: z.infer<typeof remnaUpdateBodySchema>,
-) {
+): Promise<RemnaPatchResult> {
   const subscription = await getAdminSubscription(subscriptionId);
   if (!subscription) {
     return { notFound: true, failures: [], requiredFailure: true };
   }
+  // Вся операция под общим клиентским advisory-локом (§4 финала): grace-проверка,
+  // Remna PATCH и локальная запись атомарны относительно cron/оплаты/промо.
+  return withSubscriptionClientLock(subscription.ownerId, () =>
+    applySingleRemnaPatchInner(subscriptionId, data, subscription),
+  );
+}
+
+async function applySingleRemnaPatchInner(
+  subscriptionId: string,
+  data: z.infer<typeof remnaUpdateBodySchema>,
+  subscription: NonNullable<Awaited<ReturnType<typeof getAdminSubscription>>>,
+): Promise<RemnaPatchResult> {
   // Активный Lazeika-Only grace защищён от перезаписи (§4.4). Исключение — явное
   // восстановление админом через новый expireAt.
-  if (!data.expireAt && isActiveSubscriptionGrace(subscription.graceUntil ?? null)) {
+  const freshGrace = await prisma.subscription.findUnique({ where: { id: subscriptionId }, select: { graceUntil: true } });
+  if (!data.expireAt && isActiveSubscriptionGrace(freshGrace?.graceUntil ?? null)) {
     return {
       notFound: false,
       graceConflict: true,

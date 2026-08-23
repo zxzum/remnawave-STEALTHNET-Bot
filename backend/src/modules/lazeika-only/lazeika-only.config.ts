@@ -72,14 +72,35 @@ export async function loadResourceState(): Promise<LazeikaResourceState> {
   return parseResourceState(row?.value);
 }
 
+export function serializeResourceState(state: LazeikaResourceState): string {
+  return JSON.stringify({ ...state, updatedAt: new Date().toISOString() });
+}
+
 export async function saveResourceState(state: LazeikaResourceState, tx?: StateTx): Promise<void> {
-  const value = JSON.stringify({ ...state, updatedAt: new Date().toISOString() });
+  const value = serializeResourceState(state);
   const client = tx ?? prisma;
+  // Полноценный upsert: без update существующая строка не обновлялась бы никогда (§1 финала).
   await client.systemSetting.upsert({
     where: { key: LAZEIKA_STATE_KEY },
     create: { key: LAZEIKA_STATE_KEY, value },
-    // ponytail: cast нужен из-за структурного типа tx в тестах; Prisma-клиент совместим.
-  } as Parameters<typeof prisma.systemSetting.upsert>[0]).then(() => undefined);
+    update: { value },
+  } as Parameters<typeof prisma.systemSetting.upsert>[0]);
+}
+
+/**
+ * Атомарный compare-and-swap записи состояния: строка обновляется только если её
+ * текущее значение равно expectedRaw. Основа fencing для setup-воркеров (§2 финала).
+ */
+export async function casUpdateResourceState(
+  expectedRaw: string,
+  nextState: LazeikaResourceState,
+): Promise<{ ok: boolean; raw: string }> {
+  const value = serializeResourceState(nextState);
+  const updated = await prisma.systemSetting.updateMany({
+    where: { key: LAZEIKA_STATE_KEY, value: expectedRaw },
+    data: { value },
+  });
+  return { ok: updated.count > 0, raw: value };
 }
 
 export type LazeikaConfig = {
