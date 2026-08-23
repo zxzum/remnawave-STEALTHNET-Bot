@@ -50,7 +50,7 @@ type WebhookCompletionResult = { ok: boolean; error?: string };
 
 /** Делегирует подтверждённый платёж общей locked/idempotent completion-службе. */
 async function activatePayment(paymentId: string) {
-  const result = await markPaymentPaid(paymentId);
+  const result = await markPaymentPaid(paymentId, { allowFailedRecovery: true });
   if (!result.ok || !result.payment) return result;
 
   const payment = result.payment;

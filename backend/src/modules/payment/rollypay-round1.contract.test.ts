@@ -23,7 +23,7 @@ test("RollyPay top-ups use the centralized idempotent balance-credit classificat
   }), true);
 
   assert.match(source, /FOR UPDATE/);
-  assert.match(source, /fresh\.status !== "PENDING"/);
+  assert.match(source, /canTransitionPaymentToPaid\(fresh\.status, options\.allowFailedRecovery === true\)/);
   assert.match(source, /tx\.payment\.update/);
   const creditStart = source.indexOf("if (isTopUp) {");
   const creditEnd = source.indexOf("return { count: 1 };", creditStart);
@@ -54,7 +54,7 @@ test("RollyPay records promo usage after successful mark-paid and keeps retries 
   const helper = await readFile(new URL("./promo-code-usage.util.ts", import.meta.url), "utf8");
 
   assert.match(webhook, /recordPromoCodeUsageFromPayment/);
-  const markStart = webhook.indexOf("const result = await markPaymentPaid(payment.id);");
+  const markStart = webhook.indexOf("const result = await markPaymentPaid(payment.id, { allowFailedRecovery: true });");
   const failureStart = webhook.indexOf("if (!result.ok)", markStart);
   const promoCall = webhook.indexOf("await recordPromoCodeUsageFromPayment(payment.id);", markStart);
   assert.ok(markStart >= 0);

@@ -20,7 +20,18 @@ test("a concurrent PAID flip re-enters activation recovery instead of short-circ
   const activationStart = source.indexOf("let activation:", flipStart);
   const concurrentBranch = source.slice(flipStart, activationStart);
   assert.match(concurrentBranch, /updated\?\.status === "PAID"/);
-  assert.match(concurrentBranch, /return markPaymentPaid\(paymentId\)/);
+  assert.match(concurrentBranch, /return markPaymentPaid\(paymentId, options\)/);
+});
+
+test("FAILED recovery is evaluated under the same payment row lock as top-up credit", async () => {
+  const source = await readFile(new URL("./mark-paid.service.ts", import.meta.url), "utf8");
+  const topupStart = source.indexOf("const isTopUp =");
+  const activationStart = source.indexOf("let activation:", topupStart);
+  const lockedCompletion = source.slice(topupStart, activationStart);
+  assert.match(lockedCompletion, /canTransitionPaymentToPaid\(fresh\.status, options\.allowFailedRecovery === true\)/);
+  assert.match(lockedCompletion, /FOR UPDATE/);
+  assert.match(lockedCompletion, /tx\.payment\.update/);
+  assert.match(lockedCompletion, /tx\.client\.update/);
 });
 
 test("slot activation failure is retryable and PAID retries attempt incomplete activation", async () => {

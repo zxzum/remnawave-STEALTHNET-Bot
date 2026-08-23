@@ -109,7 +109,7 @@ rollypayWebhooksRouter.post("/", async (req: Request, res: Response) => {
       data: { externalId: lookup.payment.payment_id },
     });
 
-    const result = await markPaymentPaid(payment.id);
+    const result = await markPaymentPaid(payment.id, { allowFailedRecovery: true });
     if (!result.ok) {
       console.error("[RollyPay Webhook] payment completion failed", {
         paymentId: payment.id,

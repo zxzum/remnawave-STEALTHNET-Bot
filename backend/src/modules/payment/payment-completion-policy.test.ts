@@ -1,10 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-
 import {
+  canTransitionPaymentToPaid,
   decideSlotActivation,
+  exactFiatAmountMatches,
   isSharedTopUpPayment,
 } from "./payment-completion-policy.js";
+
+test("exact fiat amount reconciliation accepts equal cents and rejects mismatches or extra precision", () => {
+  assert.equal(exactFiatAmountMatches(100, "100.00"), true);
+  assert.equal(exactFiatAmountMatches(99.9, "99.90"), true);
+  assert.equal(exactFiatAmountMatches(100, "99.99"), false);
+  assert.equal(exactFiatAmountMatches(100, "100.001"), false);
+  assert.equal(exactFiatAmountMatches(100.001, "100.00"), false);
+});
+
+test("FAILED payments require explicit authoritative recovery while PENDING remains payable", () => {
+  assert.equal(canTransitionPaymentToPaid("PENDING", false), true);
+  assert.equal(canTransitionPaymentToPaid("PENDING", true), true);
+  assert.equal(canTransitionPaymentToPaid("FAILED", false), false);
+  assert.equal(canTransitionPaymentToPaid("FAILED", true), true);
+  assert.equal(canTransitionPaymentToPaid("REFUNDED", true), false);
+});
 
 test("legacy PAID slot payments without linkage refuse automatic reprovisioning", () => {
   assert.equal(decideSlotActivation({ linkedSlotCount: 0, state: null }), "LEGACY_BLOCKED");

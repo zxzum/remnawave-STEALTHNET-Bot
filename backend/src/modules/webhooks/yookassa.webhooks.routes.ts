@@ -226,7 +226,7 @@ yookassaWebhooksRouter.post("/yookassa", async (req, res) => {
     });
   }
 
-  const result = await markPaymentPaid(payment.id);
+  const result = await markPaymentPaid(payment.id, { allowFailedRecovery: true });
   if (!result.ok) {
     console.error("[YooKassa Webhook] Payment completion failed", {
       paymentId: payment.id,

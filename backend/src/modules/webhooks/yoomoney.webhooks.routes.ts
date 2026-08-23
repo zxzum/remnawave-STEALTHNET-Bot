@@ -10,6 +10,7 @@ import { createHash } from "crypto";
 import { prisma } from "../../db.js";
 import { getSystemConfig } from "../client/client.service.js";
 import { markPaymentPaid } from "../payment/mark-paid.service.js";
+import { exactFiatAmountMatches } from "../payment/payment-completion-policy.js";
 
 function hasExtraOptionInMetadata(metadata: string | null): boolean {
   if (!metadata?.trim()) return false;
@@ -193,11 +194,19 @@ yoomoneyWebhooksRouter.post("/yoomoney", async (req, res) => {
   if (!Number.isFinite(amountNum) || amountNum <= 0) {
     return res.status(200).send("OK");
   }
+  if (!exactFiatAmountMatches(payment.amount, amount)) {
+    console.warn("[YooMoney Webhook] Payment amount mismatch", {
+      paymentId: payment.id,
+      storedAmount: payment.amount,
+      signedAmount: amount,
+    });
+    return res.status(200).send("OK");
+  }
 
   const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
   await prisma.payment.update({ where: { id: payment.id }, data: { externalId: operationId } });
 
-  const result = await markPaymentPaid(payment.id);
+  const result = await markPaymentPaid(payment.id, { allowFailedRecovery: true });
   if (!result.ok) {
     console.error("[YooMoney Webhook] Payment completion failed", { paymentId: payment.id, error: result.error });
     return res.status(503).send("Retry");

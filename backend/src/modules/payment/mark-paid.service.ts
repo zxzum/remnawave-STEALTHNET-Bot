@@ -14,7 +14,7 @@ import { notifyProxySlotsCreated, notifySingboxSlotsCreated } from "../notificat
 import { auditPaymentClientBotAlignment } from "./payment-webhook-audit.util.js";
 import { extinguishOneTimeDiscount } from "../client/personal-discount.js";
 import { isPaidVpnPurchase, isVpnSubscriptionPurchase, markTrialUsedForPaidPurchase } from "../trial/trial-purchase-lock.service.js";
-import { isSharedTopUpPayment } from "./payment-completion-policy.js";
+import { canTransitionPaymentToPaid, isSharedTopUpPayment } from "./payment-completion-policy.js";
 
 function hasExtraOptionInMetadata(metadata: string | null): boolean {
   if (!metadata?.trim()) return false;
@@ -84,7 +84,14 @@ export type MarkPaymentPaidResult = {
   error?: string;
 };
 
-export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPaidResult> {
+export type MarkPaymentPaidOptions = {
+  allowFailedRecovery?: boolean;
+};
+
+export async function markPaymentPaid(
+  paymentId: string,
+  options: MarkPaymentPaidOptions = {},
+): Promise<MarkPaymentPaidResult> {
   const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
   if (!payment) {
     return { ok: false, payment: null, error: "Payment not found" };
@@ -180,8 +187,8 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
     isVpnProduct,
   });
 
-  // Idempotent flip: PENDING → PAID. Если параллельный webhook (или повторный
-  // ретрай провайдера) уже зафлипнул — count=0, сюда не лезем второй раз.
+  // Idempotent flip: PENDING → PAID, or FAILED → PAID only after an explicitly
+  // authoritative provider confirmation. A concurrent retry sees count=0.
   // Без этой проверки: 2 webhook'а на один payment → 2 раза +balance.increment
   // (двойной топап). На бесподписном webhook'е (см. отчёт) — атакер мог фигачить
   // /webhooks/platega с одним paymentId сколько хочет.
@@ -190,7 +197,7 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
     flip = await prisma.$transaction(async (tx) => {
       await tx.$queryRawUnsafe('SELECT "id" FROM "payments" WHERE "id" = $1 FOR UPDATE', paymentId);
       const fresh = await tx.payment.findUnique({ where: { id: paymentId } });
-      if (!fresh || fresh.status !== "PENDING") return { count: 0 };
+      if (!fresh || !canTransitionPaymentToPaid(fresh.status, options.allowFailedRecovery === true)) return { count: 0 };
       const metadata = fresh.metadata ? JSON.parse(fresh.metadata) as Record<string, unknown> : {};
       const requestedId = typeof metadata.targetSubscriptionId === "string" ? metadata.targetSubscriptionId : null;
       const subscription = requestedId
@@ -216,7 +223,7 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
     flip = await prisma.$transaction(async (tx) => {
       await tx.$queryRawUnsafe('SELECT "id" FROM "payments" WHERE "id" = $1 FOR UPDATE', paymentId);
       const fresh = await tx.payment.findUnique({ where: { id: paymentId } });
-      if (!fresh || fresh.status !== "PENDING") return { count: 0 };
+      if (!fresh || !canTransitionPaymentToPaid(fresh.status, options.allowFailedRecovery === true)) return { count: 0 };
       await tx.payment.update({ where: { id: paymentId }, data: { status: "PAID", paidAt: now } });
       if (isTopUp) {
         await tx.client.update({
@@ -231,9 +238,12 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
     // Если конкурент уже зафлипнул payment, повторно войдём в PAID-ветку:
     // она безопасно восстановит незавершённую активацию слотов/тарифа.
     const updated = await prisma.payment.findUnique({ where: { id: paymentId } });
-    if (updated?.status === "PAID") return markPaymentPaid(paymentId);
-    const result = await distributeReferralRewards(paymentId);
-    return { ok: true, payment: updated ?? payment, referral: result };
+    if (updated?.status === "PAID") return markPaymentPaid(paymentId, options);
+    return {
+      ok: false,
+      payment: updated ?? payment,
+      error: `Payment status ${updated?.status ?? "missing"} cannot transition to PAID`,
+    };
   }
   if (isVpnProduct) {
     try {

@@ -93,7 +93,7 @@ cryptopayWebhooksRouter.post("/", async (req: Request, res: Response) => {
     await prisma.payment.update({ where: { id: payment.id }, data: { externalId: String(invoiceId) } });
   }
 
-  const result = await markPaymentPaid(payment.id);
+  const result = await markPaymentPaid(payment.id, { allowFailedRecovery: true });
   if (!result.ok) {
     console.error("[Crypto Pay Webhook] Payment completion failed", { paymentId: payment.id, error: result.error });
     return res.status(503).send("Retry");

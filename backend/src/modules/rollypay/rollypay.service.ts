@@ -12,6 +12,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { getProxyUrl } from "../proxy-util/get-proxy-url.js";
 import { proxyFetch } from "../proxy-util/proxy-fetch.js";
+import { canonicalFiatAmount } from "../payment/payment-completion-policy.js";
 
 const API_BASE = "https://rollypay.io";
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -227,13 +228,6 @@ export function verifyRollypayWebhookSignature(
 export type RollypayPaymentValidation =
   | { ok: true }
   | { ok: false; reason: string };
-
-function canonicalFiatAmount(value: string | number | undefined): string | null {
-  if (typeof value === "string") return /^\d+\.\d{2}$/.test(value) ? value : null;
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
-  const formatted = value.toFixed(2);
-  return Number(formatted) === value ? formatted : null;
-}
 
 export function validateRollypayPayment(
   localPayment: { orderId: string; externalId?: string | null; amount: number; currency: string },

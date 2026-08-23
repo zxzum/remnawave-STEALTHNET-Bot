@@ -100,7 +100,7 @@ heleketWebhooksRouter.post("/", async (req: Request, res: Response) => {
   const uuid = body.uuid ?? null;
   if (uuid) await prisma.payment.update({ where: { id: payment.id }, data: { externalId: uuid } });
 
-  const result = await markPaymentPaid(payment.id);
+  const result = await markPaymentPaid(payment.id, { allowFailedRecovery: true });
   if (!result.ok) {
     console.error("[Heleket Webhook] Payment completion failed", { paymentId: payment.id, error: result.error });
     return res.status(503).send("Retry");
