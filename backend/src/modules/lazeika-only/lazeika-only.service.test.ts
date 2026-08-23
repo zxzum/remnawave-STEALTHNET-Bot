@@ -217,6 +217,7 @@ test("setup from clean state creates exactly one profile, squad, working host an
     persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     beginSetup: async () => true,
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
     persistSetupInputs: async () => {},
   });
 
@@ -261,6 +262,7 @@ test("second setup does not duplicate resources", async () => {
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     beginSetup: async () => true,
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
     persistSetupInputs: async () => {},
   });
   await service.setup(SETUP_INPUT);
@@ -288,6 +290,7 @@ test("manual squad containing foreign inbounds is rejected without changes", asy
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     beginSetup: async () => true,
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
     persistSetupInputs: async () => {},
   });
   await assert.rejects(
@@ -307,6 +310,7 @@ test("rollback restores the node after a Remna profile failure", async () => {
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     beginSetup: async () => true,
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
     persistSetupInputs: async () => {},
   });
   await assert.rejects(() => service.setup(SETUP_INPUT), /profile create failed/);
@@ -326,6 +330,7 @@ test("rollback removes only resources created by the failed run after an SSH fai
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     beginSetup: async () => true,
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
     persistSetupInputs: async () => {},
   });
   const persistedSquadUuids: Array<string | null> = [];
@@ -336,6 +341,7 @@ test("rollback removes only resources created by the failed run after an SSH fai
     persistProfileUuid: async () => {},
     persistSquadUuid: async (uuid) => { persistedSquadUuids.push(uuid); },
     beginSetup: async () => true,
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
     persistSetupInputs: async () => {},
   });
   await assert.rejects(() => service2.setup(SETUP_INPUT), /tc-фильтры/);
@@ -369,6 +375,7 @@ test("auto-created squad uuid is persisted to settings for mergeSquads", async (
     persistProfileUuid: async () => {},
     persistSquadUuid: async (uuid) => { persisted.push(uuid); },
     beginSetup: async () => true,
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
     persistSetupInputs: async () => {},
   });
   await service.setup(SETUP_INPUT);
@@ -385,6 +392,7 @@ test("reconcile recreates missing hosts without duplicating existing ones", asyn
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     beginSetup: async () => true,
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
     persistSetupInputs: async () => {},
   });
   await service.setup(SETUP_INPUT);
@@ -413,6 +421,7 @@ test("parallel setup is rejected by the APPLYING CAS lock", async () => {
       return true;
     },
     persistSetupInputs: async () => {},
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
   });
   await service.setup(SETUP_INPUT);
   applying = true; // имитируем незавершённый параллельный запуск
@@ -431,6 +440,7 @@ test("node change after READY is rejected with a clear error", async () => {
     loadState: store.loadState, saveState: store.saveState,
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     beginSetup: async () => true,
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
     persistSetupInputs: async () => {},
   });
   await service.setup(SETUP_INPUT);
@@ -464,6 +474,7 @@ test("failed re-setup restores modified existing profile/hosts and reinstalls pr
     loadState: store.loadState, saveState: store.saveState,
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     persistSetupInputs: async () => {}, beginSetup: async () => true,
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
   });
 
   // Успешный setup №1.

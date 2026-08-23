@@ -45,7 +45,14 @@ export const resourceStateSchema = z.object({
   lastError: z.string().nullable().default(null),
   lastVerifiedAt: z.string().datetime().nullable().default(null),
   updatedAt: z.string().datetime().nullable().default(null),
+  /** Служебные поля CAS-блока setup (очищаются при терминальном статусе). */
+  lockToken: z.string().nullable().default(null),
+  lockedAt: z.string().datetime().nullable().default(null),
 });
+
+/** Минимальный интерфейс транзакции для атомарной записи состояния. */
+export type LazeikaStateTx = { systemSetting: { upsert(args: unknown): Promise<unknown> } };
+type StateTx = LazeikaStateTx;
 
 export type LazeikaResourceState = z.infer<typeof resourceStateSchema>;
 
@@ -65,13 +72,14 @@ export async function loadResourceState(): Promise<LazeikaResourceState> {
   return parseResourceState(row?.value);
 }
 
-export async function saveResourceState(state: LazeikaResourceState): Promise<void> {
+export async function saveResourceState(state: LazeikaResourceState, tx?: StateTx): Promise<void> {
   const value = JSON.stringify({ ...state, updatedAt: new Date().toISOString() });
-  await prisma.systemSetting.upsert({
+  const client = tx ?? prisma;
+  await client.systemSetting.upsert({
     where: { key: LAZEIKA_STATE_KEY },
     create: { key: LAZEIKA_STATE_KEY, value },
-    update: { value },
-  });
+    // ponytail: cast нужен из-за структурного типа tx в тестах; Prisma-клиент совместим.
+  } as Parameters<typeof prisma.systemSetting.upsert>[0]).then(() => undefined);
 }
 
 export type LazeikaConfig = {

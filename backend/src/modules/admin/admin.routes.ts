@@ -3446,9 +3446,11 @@ adminRouter.post("/clients/:id/remna/squads/add", async (req, res) => {
   if (!target) return res.status(400).json({ message: "Клиент не привязан к Remna" });
   const body = squadActionSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Invalid input" });
-  if (await clientHasActiveGrace(parsed.data.id)) return res.status(409).json({ message: "Активен режим продления Lazeika-Only: изменение сквадов заблокировано" });
   // Получаем текущие сквады пользователя и патчим под клиентским advisory-локом.
-  const result = await withSubscriptionClientLock(parsed.data.id, async () => {
+  // Grace перепроверяется ВНУТРИ лока (§6 ревью).
+  type SquadOpResult = { data?: unknown; error?: string; status?: number; conflict?: boolean };
+  const result = await withSubscriptionClientLock(parsed.data.id, async (): Promise<SquadOpResult> => {
+    if (await clientHasActiveGrace(parsed.data.id)) return { conflict: true };
     const userRes = await remnaGetUser(target.remnawaveUuid);
     const userData = userRes.data as Record<string, unknown> | undefined;
     const resp = (userData?.response ?? userData) as Record<string, unknown> | undefined;
@@ -3465,7 +3467,10 @@ adminRouter.post("/clients/:id/remna/squads/add", async (req, res) => {
     }
     return remnaUpdateUser({ uuid: target.remnawaveUuid, activeInternalSquads: currentSquads });
   });
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
+  if ((result as { conflict?: boolean }).conflict) {
+    return res.status(409).json({ message: "Активен режим продления Lazeika-Only: изменение сквадов заблокировано" });
+  }
+  if (result.error) return res.status((result.status ?? 500) >= 400 ? (result.status ?? 500) : 500).json({ message: result.error });
   return res.json(result.data ?? {});
 });
 
@@ -3476,19 +3481,23 @@ adminRouter.post("/clients/:id/remna/squads/remove", async (req, res) => {
   if (!target) return res.status(400).json({ message: "Клиент не привязан к Remna" });
   const body = squadActionSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Invalid input" });
-  if (await clientHasActiveGrace(parsed.data.id)) return res.status(409).json({ message: "Активен режим продления Lazeika-Only: изменение сквадов заблокировано" });
   // По api-1.yaml у DELETE .../remove-users нет requestBody — только uuid сквада в path; эндпоинт может убирать всех из сквада. Поэтому убираем сквад только у этого пользователя через PATCH user (как при add).
-  const result = await withSubscriptionClientLock(parsed.data.id, async () => {
+  // Grace перепроверяется ВНУТРИ лока (§6 ревью).
+  const result = await withSubscriptionClientLock(parsed.data.id, async (): Promise<{ data?: unknown; error?: string; status?: number; conflict?: boolean }> => {
+    if (await clientHasActiveGrace(parsed.data.id)) return { conflict: true };
     const userRes = await remnaGetUser(target.remnawaveUuid);
     if (userRes.error) throw new Error(userRes.error);
     const current = getRemnaUserFieldsForMerge(userRes.data);
     const currentSquads = current.activeInternalSquads.filter((u) => u !== body.data.squadUuid);
     return remnaUpdateUser({ uuid: target.remnawaveUuid, activeInternalSquads: currentSquads });
-  }).catch((error: unknown): { data?: unknown; error?: string; status: number } => ({
+  }).catch((error: unknown): { data?: unknown; error?: string; status?: number; conflict?: boolean } => ({
     error: error instanceof Error ? error.message : String(error),
     status: 500,
   }));
-  if (result.error) return res.status(result.status >= 400 ? result.status : 500).json({ message: result.error });
+  if ((result as { conflict?: boolean }).conflict) {
+    return res.status(409).json({ message: "Активен режим продления Lazeika-Only: изменение сквадов заблокировано" });
+  }
+  if (result.error) return res.status((result.status ?? 500) >= 400 ? (result.status ?? 500) : 500).json({ message: result.error });
   return res.json(result.data ?? {});
 });
 
@@ -8102,19 +8111,25 @@ adminRouter.post("/subscriptions/:subId/remna/squads/add", asyncRoute(async (req
   if (!parsed.success) return res.status(400).json({ message: "Invalid subscription id" });
   const body = squadActionSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Invalid input" });
-  const graceSub = await prisma.subscription.findUnique({ where: { id: parsed.data.subId }, select: { ownerId: true, graceUntil: true } });
-  if (!graceSub) return res.status(404).json({ message: "Подписка не найдена" });
-  if (isActiveSubscriptionGrace(graceSub.graceUntil)) {
-    return res.status(409).json({ message: "Активен режим продления Lazeika-Only: изменение сквадов заблокировано" });
+  const ownerRow = await prisma.subscription.findUnique({ where: { id: parsed.data.subId }, select: { ownerId: true, graceUntil: true } });
+  if (!ownerRow) return res.status(404).json({ message: "Подписка не найдена" });
+  // Операция под клиентским advisory-локом; grace перепроверяется внутри (§6 ревью).
+  type SubSquadOp = Awaited<ReturnType<typeof runSingleSubscriptionOperation>> & { conflict?: boolean };
+  const result = (await withSubscriptionClientLock(ownerRow.ownerId, async (): Promise<SubSquadOp> => {
+    const freshGrace = await prisma.subscription.findUnique({ where: { id: parsed.data.subId }, select: { graceUntil: true } });
+    if (isActiveSubscriptionGrace(freshGrace?.graceUntil ?? null)) return { failures: [{ key: "subscription", required: true, error: "Активен режим продления Lazeika-Only: изменение сквадов заблокировано" }], requiredFailure: true, conflict: true };
+    let updatedSquads: string[] = [];
+    return runSingleSubscriptionOperation(parsed.data.subId, async (uuid) => {
+      const user = await remnaGetUser(uuid);
+      if (user.error) throw new Error(user.error);
+      updatedSquads = getRemnaUserFieldsForMerge(user.data).activeInternalSquads;
+      if (!updatedSquads.includes(body.data.squadUuid)) updatedSquads.push(body.data.squadUuid);
+      return remnaUpdateUser({ uuid, activeInternalSquads: updatedSquads });
+    });
+  })) as SubSquadOp;
+  if ((result as { conflict?: boolean }).conflict) {
+    return res.status(409).json({ message: result.failures.map((failure) => failure.error).join("; ") });
   }
-  let updatedSquads: string[] = [];
-  const result = await runSingleSubscriptionOperation(parsed.data.subId, async (uuid) => {
-    const user = await remnaGetUser(uuid);
-    if (user.error) throw new Error(user.error);
-    updatedSquads = getRemnaUserFieldsForMerge(user.data).activeInternalSquads;
-    if (!updatedSquads.includes(body.data.squadUuid)) updatedSquads.push(body.data.squadUuid);
-    return remnaUpdateUser({ uuid, activeInternalSquads: updatedSquads });
-  });
   return res.status(result.requiredFailure ? 502 : 200).json({ ...result, degraded: result.failures.length > 0 });
 }));
 
@@ -8123,22 +8138,27 @@ adminRouter.post("/subscriptions/:subId/remna/squads/remove", asyncRoute(async (
   if (!parsed.success) return res.status(400).json({ message: "Invalid subscription id" });
   const body = squadActionSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Invalid input" });
-  const graceSubRemove = await prisma.subscription.findUnique({ where: { id: parsed.data.subId }, select: { ownerId: true, graceUntil: true } });
-  if (!graceSubRemove) return res.status(404).json({ message: "Подписка не найдена" });
-  if (isActiveSubscriptionGrace(graceSubRemove.graceUntil)) {
-    return res.status(409).json({ message: "Активен режим продления Lazeika-Only: изменение сквадов заблокировано" });
-  }
+  const ownerRow = await prisma.subscription.findUnique({ where: { id: parsed.data.subId }, select: { ownerId: true, graceUntil: true } });
+  if (!ownerRow) return res.status(404).json({ message: "Подписка не найдена" });
   const graceSub = await prisma.subscription.findUnique({ where: { id: parsed.data.subId }, select: { graceUntil: true } });
   if (isActiveSubscriptionGrace(graceSub?.graceUntil ?? null)) {
     return res.status(409).json({ message: "Активен режим продления Lazeika-Only: изменение сквадов заблокировано" });
   }
-  let updatedSquads: string[] = [];
-  const result = await runSingleSubscriptionOperation(parsed.data.subId, async (uuid) => {
-    const user = await remnaGetUser(uuid);
-    if (user.error) throw new Error(user.error);
-    updatedSquads = getRemnaUserFieldsForMerge(user.data).activeInternalSquads.filter((uuid) => uuid !== body.data.squadUuid);
-    return remnaUpdateUser({ uuid, activeInternalSquads: updatedSquads });
-  });
+  type SubSquadOp2 = Awaited<ReturnType<typeof runSingleSubscriptionOperation>> & { conflict?: boolean };
+  const result = (await withSubscriptionClientLock(ownerRow.ownerId, async (): Promise<SubSquadOp2> => {
+    const freshGrace = await prisma.subscription.findUnique({ where: { id: parsed.data.subId }, select: { graceUntil: true } });
+    if (isActiveSubscriptionGrace(freshGrace?.graceUntil ?? null)) return { failures: [{ key: "subscription", required: true, error: "Активен режим продления Lazeika-Only: изменение сквадов заблокировано" }], requiredFailure: true, conflict: true };
+    let updatedSquads: string[] = [];
+    return runSingleSubscriptionOperation(parsed.data.subId, async (uuid) => {
+      const user = await remnaGetUser(uuid);
+      if (user.error) throw new Error(user.error);
+      updatedSquads = getRemnaUserFieldsForMerge(user.data).activeInternalSquads.filter((sq) => sq !== body.data.squadUuid);
+      return remnaUpdateUser({ uuid, activeInternalSquads: updatedSquads });
+    });
+  })) as SubSquadOp2;
+  if ((result as { conflict?: boolean }).conflict) {
+    return res.status(409).json({ message: result.failures.map((failure) => failure.error).join("; ") });
+  }
   return res.status(result.requiredFailure ? 502 : 200).json({ ...result, degraded: result.failures.length > 0 });
 }));
 

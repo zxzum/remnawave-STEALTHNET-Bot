@@ -349,11 +349,17 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
     const { isActiveSubscriptionGrace: stillInGrace } = await import("../subscription/single-subscription-lifecycle.service.js");
     const freshSub = await prisma.subscription.findUnique({ where: { id: liveSubscription.id }, select: { graceUntil: true } });
     if (stillInGrace(freshSub?.graceUntil ?? null)) {
+      // Обязательно NEEDS_PLAN: если оставить APPLYING, retry уйдёт в stale-ветку
+      // и платёж зависнет в MANUAL_REVIEW (§2 ревью).
       await prisma.payment.updateMany({
         where: { id: paymentId, extraOptionState: "APPLYING", extraOptionClaimToken: pendingClaimToken },
-        data: { extraOptionClaimToken: null, extraOptionNextAttemptAt: new Date(Date.now() + 6 * 60 * 60_000) },
+        data: {
+          extraOptionState: "NEEDS_PLAN",
+          extraOptionClaimToken: null,
+          extraOptionNextAttemptAt: new Date(Date.now() + 6 * 60 * 60_000),
+        },
       });
-      console.warn("[extra-options] grace started before apply; payment requeued", { paymentId });
+      console.warn("[extra-options] grace started before apply; payment requeued to NEEDS_PLAN", { paymentId });
       return { ok: true, outcome: "QUEUED" };
     }
   }

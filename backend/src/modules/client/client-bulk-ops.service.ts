@@ -214,26 +214,37 @@ export async function syncAllSubscriptionsToRemna(clientId: string): Promise<Bul
       pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "skipped", message: "нет тарифа — нечего пушить" });
       continue;
     }
-    // Активный Lazeika-Only grace защищён от перезаписи (§4.4).
+    // Активный Lazeika-Only grace: быстрый pre-check по снапшоту (авторитетная
+    // перепроверка — внутри лока ниже).
     if (isActiveSubscriptionGrace(sub.graceUntil ?? null)) {
       pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "skipped", message: "активен режим продления Lazeika-Only — sync пропущен" });
       continue;
     }
     const tariff = sub.tariff;
-    // Тот же клиентский advisory-лок, что у cron/оплаты: check-then-act гонки исключены.
-    const result = await withSubscriptionClientLock(sub.ownerId, () => runSingleSubscriptionOperation(sub.id, (uuid) => remnaUpdateUser({
-      uuid,
-      ...(sub.expireAt ? { expireAt: sub.expireAt.toISOString() } : {}),
-      ...remnaTrafficSettings(tariff),
-      hwidDeviceLimit: Math.max(1, tariff.includedDevices + sub.extraDevices),
-      activeInternalSquads: tariff.internalSquadUuids,
-    })));
+    // Тот же клиентский advisory-лок, что у cron/оплаты. Grace перепроверяется ВНУТРИ
+    // лока по свежей строке — иначе cron включит grace между проверкой и PATCH (§6 ревью).
+    type SyncOpResult = Awaited<ReturnType<typeof runSingleSubscriptionOperation>>;
+    const syncOutcome = await withSubscriptionClientLock(sub.ownerId, async (): Promise<SyncOpResult | "GRACE"> => {
+      const freshSub = await prisma.subscription.findUnique({ where: { id: sub.id }, select: { graceUntil: true } });
+      if (isActiveSubscriptionGrace(freshSub?.graceUntil ?? null)) return "GRACE";
+      return runSingleSubscriptionOperation(sub.id, (uuid) => remnaUpdateUser({
+        uuid,
+        ...(sub.expireAt ? { expireAt: sub.expireAt.toISOString() } : {}),
+        ...remnaTrafficSettings(tariff),
+        hwidDeviceLimit: Math.max(1, tariff.includedDevices + sub.extraDevices),
+        activeInternalSquads: tariff.internalSquadUuids,
+      }));
+    });
+    if (syncOutcome === "GRACE") {
+      pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "skipped", message: "активен режим продления Lazeika-Only — sync пропущен (перепроверка под локом)" });
+      continue;
+    }
     pushItem(report, {
       subscriptionId: sub.id,
       subscriptionIndex: sub.subscriptionIndex,
       remnawaveUuid: sub.remnawaveUuid,
-      status: result.failures.length ? "error" : "ok",
-      ...(result.failures.length ? { message: result.failures.map((failure) => `${failure.key}: ${failure.error}`).join("; ") } : {}),
+      status: syncOutcome.failures.length ? "error" : "ok",
+      ...(syncOutcome.failures.length ? { message: syncOutcome.failures.map((failure) => `${failure.key}: ${failure.error}`).join("; ") } : {}),
     });
   }
   return report;

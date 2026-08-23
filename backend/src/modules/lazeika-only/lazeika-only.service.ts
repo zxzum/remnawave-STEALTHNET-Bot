@@ -11,6 +11,7 @@ import {
   LAZEIKA_STATE_KEY,
   loadResourceState,
   parseResourceState,
+  type LazeikaStateTx,
   saveResourceState,
   type LazeikaResourceState,
 } from "./lazeika-only.config.js";
@@ -53,13 +54,14 @@ function unwrap(data: unknown): unknown {
 
 /** upsert UUID в SystemSetting (без секретов, только идентификаторы). */
 function defaultPersistUuid(key: string) {
-  return async (uuid: string | null): Promise<void> => {
-    const { prisma } = await import("../../db.js");
-    await prisma.systemSetting.upsert({
+  return async (uuid: string | null, tx?: { systemSetting: { upsert(args: unknown): Promise<unknown> } }): Promise<void> => {
+    const mod = await import("../../db.js");
+    const client = tx ?? mod.prisma;
+    await client.systemSetting.upsert({
       where: { key },
       create: { key, value: uuid ?? "" },
       update: { value: uuid ?? "" },
-    });
+    } as Parameters<typeof mod.prisma.systemSetting.upsert>[0]);
   };
 }
 async function requireOk(res: RemnaResult, phase: string): Promise<unknown> {
@@ -134,14 +136,16 @@ export type LazeikaServiceDependencies = {
   ssh: SshExecutor;
   sshEnvLoader?: () => SshEnv;
   loadState?: typeof loadResourceState;
-  saveState?: typeof saveResourceState;
-  persistProfileUuid?: (uuid: string | null) => Promise<void>;
+  saveState?: (state: LazeikaResourceState, tx?: unknown) => Promise<void>;
+  persistProfileUuid?: (uuid: string | null, tx?: unknown) => Promise<void>;
   /** Авто-созданный squad пишется и в lazeika_only_squad_uuid (его читает mergeSquads). */
-  persistSquadUuid?: (uuid: string | null) => Promise<void>;
+  persistSquadUuid?: (uuid: string | null, tx?: unknown) => Promise<void>;
   /** CAS-захват APPLYING; false → параллельный setup отклонён. */
   beginSetup?: () => Promise<boolean>;
-  /** Атомарная фиксация входных настроек (нода/squad/скорость) после успешного setup. */
-  persistSetupInputs?: (input: { nodeUuid: string; squadUuid: string | null; speedMbit: number }) => Promise<void>;
+  /** Атомарная фиксация входных настроек (нода/squad/скорость) в одной транзакции с READY. */
+  persistSetupInputs?: (input: { nodeUuid: string; squadUuid: string | null; speedMbit: number }, tx?: unknown) => Promise<void>;
+  /** Транзакционная обёртка финального READY+persist (инъекция для тестов). */
+  runAtomic?: (fn: (tx: LazeikaStateTx | undefined) => Promise<void>) => Promise<void>;
 };
 
 export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
@@ -153,6 +157,10 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     saveState = saveResourceState,
     persistProfileUuid = defaultPersistUuid(LAZEIKA_PROFILE_KEY),
     persistSquadUuid = defaultPersistUuid("lazeika_only_squad_uuid"),
+    runAtomic = async (fn: (tx: LazeikaStateTx | undefined) => Promise<void>) => {
+      const { prisma } = await import("../../db.js");
+      await prisma.$transaction(async (tx) => fn(tx as LazeikaStateTx));
+    },
     // CAS по сырому значению SystemSetting: два параллельных setup'а не могут оба пройти updateMany.
     // CAS по сырому значению + lockToken/lockedAt. APPLYING свежее 10 минут = чужая
     // активная работа; протухший (падение процесса) — забираем себе (§6 ревью).
@@ -195,9 +203,9 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     },
     // Настройки фиксируются самим setup'ом: UI мог не сохранить форму перед «Настроить»
     // (иначе resource_state=READY при пустом lazeika_only_node_uuid, §4 ревью).
-    persistSetupInputs = async ({ nodeUuid, squadUuid, speedMbit }) => {
-      const { prisma } = await import("../../db.js");
-      const { invalidateSystemConfigCache } = await import("../client/client.service.js");
+    persistSetupInputs = async ({ nodeUuid, squadUuid, speedMbit }, tx?: { systemSetting: { upsert(args: unknown): Promise<unknown> } }) => {
+      const mod = await import("../../db.js");
+      const client = tx ?? mod.prisma;
       const entries: Array<[string, string]> = [
         ["lazeika_only_node_uuid", nodeUuid],
         ["lazeika_only_squad_uuid", squadUuid ?? ""],
@@ -206,13 +214,16 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         ["expired_grace_squad_uuid", squadUuid ?? ""],
       ];
       for (const [key, value] of entries) {
-        await prisma.systemSetting.upsert({
+        await client.systemSetting.upsert({
           where: { key },
           create: { key, value },
           update: { value },
-        });
+        } as Parameters<typeof mod.prisma.systemSetting.upsert>[0]);
       }
-      invalidateSystemConfigCache();
+      if (!tx) {
+        const { invalidateSystemConfigCache } = await import("../client/client.service.js");
+        invalidateSystemConfigCache();
+      }
     },
   } = dependencies;
 
@@ -287,7 +298,8 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     // rollback обязан вернуть их к состоянию до запуска, а не только удалить созданное.
     let profileSnapshot: { uuid: string; name?: string; config?: unknown } | null = null;
     const hostSnapshots: Array<{ uuid: string; inbound: unknown; tags: string[] }> = [];
-    let tcFilesExisted = false;
+    let squadSnapshot: { uuid: string; inbounds: string[] } | null = null;
+    let tcFilesExisted: boolean | null = null;
     const prevSsh = { ...state.ssh };
 
     // Смена ноды после READY запрещена (§7): старый managed-профиль/snapshot/hosts
@@ -305,8 +317,9 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     if (!claimed) {
       throw new SetupError("Настройка Lazeika-Only уже выполняется, подождите её завершения", "LOCK");
     }
-    state = { ...state, status: "APPLYING", lastError: null };
-    await saveState(state);
+    // Перезачитываем строку: beginSetup записал lockToken/lockedAt — они обязаны
+    // пережить все последующие saveState (§1 ревью), иначе CAS мгновенно ломается.
+    state = await loadState();
 
     try {
       // ── Валидация (§7.1) ──
@@ -409,6 +422,13 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         const squad = (await fetchSquads()).find((s) => s.uuid === squadUuid);
         if (!squad) throw new SetupError("Выбранный squad не найден", "SQUAD");
         assertManualSquadSafe(squad, managedInboundUuid);
+        // Снапшот прежних inbounds — rollback вернёт squad (§4 ревью).
+        squadSnapshot = {
+          uuid: squadUuid,
+          inbounds: (squad.inbounds ?? [])
+            .map((ib) => (typeof ib === "string" ? ib : ib?.uuid))
+            .filter((u): u is string => Boolean(u)),
+        };
         await requireOk(
           await remna.updateInternalSquad({ uuid: squadUuid, inbounds: [managedInboundUuid] }),
           "SQUAD",
@@ -551,11 +571,19 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         void lastText;
       }
 
-      // Существовали ли unit/скрипт до этого запуска (решает rollback: restore vs cleanup).
+      // Существовали ли unit/скрипт до запуска. Неопределённый результат —
+      // терминальная ошибка БЕЗ destructive cleanup (§4 ревью).
       try {
         const probe = await ssh(node.address, `[ -f ${TC_SCRIPT_PATH} ] && [ -f /etc/systemd/system/${TC_UNIT_NAME} ] && echo TCFILES_EXIST || echo TCFILES_NEW`);
-        tcFilesExisted = (probe.stdout + probe.stderr).includes("TCFILES_EXIST");
-      } catch { tcFilesExisted = false; }
+        const probeText = probe.stdout + probe.stderr;
+        if (!probe.ok) throw new SetupError(`Не удалось проверить наличие tc-лимитера на ноде (exit ${probe.exitCode})`, "SSH_TC");
+        if (probeText.includes("TCFILES_EXIST")) tcFilesExisted = true;
+        else if (probeText.includes("TCFILES_NEW")) tcFilesExisted = false;
+        else throw new SetupError("Неоднозначный ответ ноды при проверке tc-лимитера", "SSH_TC");
+      } catch (error) {
+        if (error instanceof SetupError) throw error;
+        throw new SetupError(`Не удалось проверить наличие tc-лимитера: ${error instanceof Error ? error.message : String(error)}`, "SSH_TC");
+      }
 
       const remoteInstall = [
         "install -d /usr/local/sbin",
@@ -578,16 +606,23 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       }
       state.ssh = { interface: detectedIface!, rateMbit: speed };
 
-      // ── Готово (только теперь READY, §7.5) ──
+      // ── Готово: READY + фиксация входных настроек АТОМАРНО (§5 ревью) ──
       state.createdResourceUuids = [];
       state.lastVerifiedAt = new Date().toISOString();
       state.status = "READY";
-      await saveState(state);
-      await persistProfileUuid(managedProfileUuid);
-      // Авто-созданный squad должен попасть в настройки: mergeSquads читает ключ (§4.4.3).
-      await persistSquadUuid(squadUuid);
-      // Фиксируем входные настройки вместе с READY.
-      await persistSetupInputs?.({ nodeUuid: input.nodeUuid, squadUuid, speedMbit: speed });
+      state.lockToken = null;
+      state.lockedAt = null;
+      await runAtomic(async (tx) => {
+        await saveState(state, tx);
+        await persistProfileUuid(managedProfileUuid, tx);
+        // Авто-созданный squad попадает в настройки: mergeSquads читает ключ (§4.4.3).
+        await persistSquadUuid(squadUuid, tx);
+        await persistSetupInputs?.({ nodeUuid: input.nodeUuid, squadUuid, speedMbit: speed }, tx);
+      });
+      {
+        const { invalidateSystemConfigCache } = await import("../client/client.service.js");
+        invalidateSystemConfigCache();
+      }
       return { status: "READY", state };
     } catch (error) {
       const phase = error instanceof SetupError ? error.phase : "UNKNOWN";
@@ -625,8 +660,14 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         for (const h of hostSnapshots) {
           await remna.updateHost({ uuid: h.uuid, inbound: h.inbound, tags: h.tags }).catch(() => {});
         }
-        // tc: если лимитер уже стоял — переустанавливаем прежний; иначе снимаем наши фильтры и unit.
-        if (detectedIface && nodeAddress) {
+        if (squadSnapshot) {
+          await remna.updateInternalSquad({ uuid: squadSnapshot.uuid, inbounds: squadSnapshot.inbounds }).catch(() => {});
+        }
+        // tc: restore при существовавшем лимитере, cleanup только когда его точно не было,
+        // ничего не трогаем если состояние неизвестно (probe упал — setup прервался до установки,
+        // но фильтры могли остаться от прежнего READY... нет: probe идёт ДО install; unknown ⇒ мы
+        // прервались до любых tc-действий этого запуска).
+        if (detectedIface && nodeAddress && tcFilesExisted !== null) {
           if (tcFilesExisted && prevSsh.interface && prevSsh.rateMbit) {
             const restoreScript = [
               "install -d /usr/local/sbin",
@@ -664,6 +705,8 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       state.status = "ERROR";
       state.lastError = `[${phase}] ${message}`;
       state.createdResourceUuids = created.map((r) => r.uuid);
+      state.lockToken = null;
+      state.lockedAt = null;
       await saveState(state);
       throw error;
     }
@@ -683,10 +726,25 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     const profile = profiles.find((p) => p.uuid === state.profileUuid);
     add("profile", !!profile);
     add("inbound", !!profile?.inbounds?.some((ib) => ib.uuid === state.managedInboundUuid));
-    // Routing: три managed-правила по нашему inboundTag должны присутствовать в конфиге.
-    const managedRules = ((profile?.config?.routing?.rules ?? []) as Array<{ inboundTag?: unknown }>)
+    // Routing: содержательная сверка (§8 ревью) — telegram/lazeika.xyz → DIRECT,
+    // catch-all нашего тега → BLOCK-тег профиля.
+    type RuleShape = { inboundTag?: unknown; domain?: unknown; network?: unknown; outboundTag?: unknown };
+    const managedRules = ((profile?.config?.routing?.rules ?? []) as RuleShape[])
       .filter((r) => Array.isArray(r.inboundTag) && (r.inboundTag as string[]).includes(state.managedInboundTag ?? ""));
-    add("routing_rules", managedRules.length >= 3, String(managedRules.length));
+    const blockTag = (profile?.config?.outbounds ?? [])
+      .map((o) => String(o.tag ?? ""))
+      .find((t) => t.toLowerCase() === "block" || t.toLowerCase() === "blackhole");
+    const hasTelegram = managedRules.some((r) =>
+      Array.isArray(r.domain) && (r.domain as string[]).includes("geosite:telegram") && r.outboundTag === "DIRECT");
+    const hasLazeika = managedRules.some((r) =>
+      Array.isArray(r.domain) && (r.domain as string[]).includes("domain:lazeika.xyz") && r.outboundTag === "DIRECT");
+    const hasBlockCatchAll = Boolean(blockTag) && managedRules.some((r) =>
+      r.outboundTag === blockTag && r.network === "tcp,udp");
+    add(
+      "routing_rules",
+      hasTelegram && hasLazeika && hasBlockCatchAll,
+      [hasTelegram ? "" : "нет geosite:telegram→DIRECT", hasLazeika ? "" : "нет domain:lazeika.xyz→DIRECT", hasBlockCatchAll ? "" : `нет catch-all→${blockTag ?? "BLOCK"}`].filter(Boolean).join("; ") || undefined,
+    );
 
     let squad: SquadShape | undefined;
     try {
@@ -740,7 +798,8 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
               `[ -f ${TC_SCRIPT_PATH} ] && [ -f /etc/systemd/system/${TC_UNIT_NAME} ] && echo FILES_OK || echo FILES_MISSING`,
               `systemctl is-enabled ${TC_UNIT_NAME} >/dev/null 2>&1 && echo UNIT_ENABLED || echo UNIT_DISABLED`,
               `ss -Hltn "sport = :${state.managedInboundPort}" | grep -q . && echo PORT_LISTENING || echo PORT_SILENT`,
-              `tc filter show dev "${state.ssh.interface}" | grep -oE 'rate [0-9]+mbit' | head -1`,
+              // Регистронезависимо и БЕЗ head -1: нужны все 8 фильтров (§7 ревью).
+              `tc filter show dev "${state.ssh.interface}" | grep -ioE 'rate [0-9]+[m]bit' || true`,
             ].join("\n"),
           );
           const out = probe.stdout + probe.stderr;
@@ -755,13 +814,13 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
               missingPrefs.length === 0,
               missingPrefs.length ? `нет pref: ${missingPrefs.join(", ")}` : undefined,
             );
-            // Rate у КАЖДОГО из 8 фильтров (tc печатает Mbit в разном регистре).
-            const rates = Array.from(out.matchAll(/rate\s+(\d+)\s*mbit/gi)).map((m) => m[1]);
+            // Rate у КАЖДОГО из 8 фильтров; tc печатает Mbit в разном регистре.
+            const rates = Array.from((out).matchAll(/rate\s+(\d+)\s*mbit/gi)).map((m) => m[1]);
             const distinct = [...new Set(rates)];
             const expected = String(state.ssh.rateMbit);
             add(
               "tc_rate",
-              rates.length >= 8 && distinct.length === 1 && distinct[0] === expected,
+              rates.length >= 8 && distinct.length === 1 && distinct[0]?.toLowerCase() === expected.toLowerCase(),
               rates.length ? `найдено ${rates.length}: ${distinct.join("/")}` : "rate не определён",
             );
             add("tc_files", out.includes("FILES_OK"), out.includes("FILES_MISSING") ? "скрипт/unit отсутствуют" : undefined);

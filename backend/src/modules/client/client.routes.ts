@@ -2832,6 +2832,16 @@ clientRouter.post("/promo/activate", async (req, res) => {
 
   const group = await prisma.promoGroup.findUnique({ where: { code: code.trim() } });
   if (!group || !group.isActive) return res.status(404).json({ message: "Промокод не найден или неактивен" });
+  // Lazeika-Only grace (§3 ревью): гейт ДО резервации, иначе после продления
+  // пользователь упрётся в «промокод уже активирован».
+  const promoGraceSub = await prisma.subscription.findFirst({
+    where: { ownerId: client.id, deletionRequestedAt: null },
+    orderBy: { subscriptionIndex: "asc" },
+    select: { graceUntil: true },
+  });
+  if (isActiveSubscriptionGrace(promoGraceSub?.graceUntil ?? null)) {
+    return res.status(409).json({ message: "Подписка в режиме продления Lazeika-Only: сначала продлите тариф" });
+  }
 
   // Раньше было: existing-check + count(maxActivations) + потом Remna API + потом
   // promoActivation.create в самом конце. Между чтением count и create — секунды
@@ -2892,17 +2902,6 @@ clientRouter.post("/promo/activate", async (req, res) => {
       }).catch(() => {});
     }
     return res.status(503).json({ message: "Сервис временно недоступен" });
-  }
-
-  // Lazeika-Only grace (§4.4): промо-активация выдала бы обычный squad/лимиты поверх
-  // grace-доступа. Контролируемый конфликт — продление тарифа снимает режим.
-  const promoGraceSub = await prisma.subscription.findFirst({
-    where: { ownerId: client.id, deletionRequestedAt: null },
-    orderBy: { subscriptionIndex: "asc" },
-    select: { graceUntil: true },
-  });
-  if (isActiveSubscriptionGrace(promoGraceSub?.graceUntil ?? null)) {
-    return res.status(409).json({ message: "Подписка в режиме продления Lazeika-Only: сначала продлите тариф" });
   }
 
   const trafficLimitBytes = Number(group.trafficLimitBytes);
