@@ -40,6 +40,16 @@ test("shows an initial skeleton and a retryable load error", async () => {
   assert.match(layout, /onRetry=\{reload\}/);
 });
 
+test("Aurora reuses shared cabinet feedback services", async () => {
+  const layout = await readFile(new URL("../pages/cabinet/aurora/aurora-layout.tsx", import.meta.url), "utf8");
+  assert.match(layout, /from "@\/cabinet\/components\/Layout"/);
+  assert.match(layout, /from "@\/cabinet\/components\/ui\/Toasts"/);
+  assert.match(layout, /from "@\/cabinet\/store\/AppContext"/);
+  assert.match(layout, /loading \? <InitialSkeleton pathname=\{location\.pathname\}/);
+  assert.match(layout, /error \? <LoadError message=\{error\} onRetry=\{reload\}/);
+  assert.match(layout, /<Toasts \/>/);
+});
+
 test("isolates cabinet styles from admin while retaining portal styles", async () => {
   const main = await readFile(new URL("../main.tsx", import.meta.url), "utf8");
   const app = await readFile(new URL("../App.tsx", import.meta.url), "utf8");

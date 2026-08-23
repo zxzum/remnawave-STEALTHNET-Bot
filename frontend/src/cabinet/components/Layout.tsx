@@ -195,7 +195,7 @@ function BottomNav() {
   );
 }
 
-function InitialSkeleton({ pathname }: { pathname: string }) {
+export function InitialSkeleton({ pathname }: { pathname: string }) {
   const page = pathname.split("/").pop();
   const header = (
     <div className="space-y-2">
@@ -283,7 +283,7 @@ function InitialSkeleton({ pathname }: { pathname: string }) {
   );
 }
 
-function LoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
+export function LoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <div className="glass mx-auto mt-16 max-w-lg rounded-4xl p-7 text-center">
       <h1 className="text-xl font-extrabold">Не удалось загрузить кабинет</h1>

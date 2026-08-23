@@ -10,6 +10,7 @@ test("Aurora cabinet design is opt-in, validated, seeded safely, and exposed pub
   ]);
 
   assert.match(clientService, /"cabinet_design"/);
+  assert.match(clientService, /serviceName:\s*map\.service_name \|\| "Лазейка ВПН"/);
   assert.match(clientService, /cabinetDesign:\s*map\.cabinet_design === "aurora" \? "aurora" : "default"/);
   assert.match(clientService, /cabinetDesign:\s*full\.cabinetDesign === "aurora" \? "aurora" : "default"/);
   assert.match(adminRoutes, /cabinetDesign:\s*z\.enum\(\["default", "aurora"\]\)\.optional\(\)/);

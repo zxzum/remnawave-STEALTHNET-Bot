@@ -1,5 +1,8 @@
 import { useEffect } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
+import { InitialSkeleton, LoadError } from "@/cabinet/components/Layout";
+import { Toasts } from "@/cabinet/components/ui/Toasts";
+import { useApp } from "@/cabinet/store/AppContext";
 import { AuroraTabs } from "@/components/aurora/aurora-tabs";
 import { useCabinetConfig } from "@/contexts/cabinet-config";
 
@@ -16,7 +19,9 @@ function gradientEnd([r, g, b]: [number, number, number]): string {
 }
 
 export function AuroraLayout() {
+  const location = useLocation();
   const config = useCabinetConfig();
+  const { loading, error, reload } = useApp();
   const rgb = hexToRgb(config?.themeAccent);
 
   useEffect(() => {
@@ -45,8 +50,9 @@ export function AuroraLayout() {
         "--au-muted": "#70778e",
       } as React.CSSProperties}
     >
+      <Toasts />
       <main className="relative mx-auto max-w-md px-4 pb-32 pt-4">
-        <Outlet />
+        {loading ? <InitialSkeleton pathname={location.pathname} /> : error ? <LoadError message={error} onRetry={reload} /> : <Outlet />}
       </main>
       <AuroraTabs />
     </div>

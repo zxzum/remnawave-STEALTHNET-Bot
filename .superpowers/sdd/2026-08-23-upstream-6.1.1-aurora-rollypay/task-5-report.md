@@ -67,3 +67,30 @@ No source patch was required after inspection and verification. The existing Tas
 
 - Aurora page entry points intentionally reuse existing cabinet page logic; a fully distinct Aurora content implementation would be a separate feature, outside this finalization task.
 - Browser-based visual or interaction QA was not run; the requested validation was the targeted tests, full backend tests, and both builds.
+
+## Round 1/5 fix
+
+### Findings fixed
+
+1. Aurora now reuses the existing cabinet `AppContext` feedback state, `Toasts`, `InitialSkeleton`, and `LoadError`. Payment and RollyPay success/failure messages continue to use the existing `toast` business logic and are visible in the Aurora shell. The default shell behavior is unchanged.
+2. The public service-name fallback is now `Лазейка ВПН`; explicitly configured `service_name` values remain unchanged, and technical identifiers were not renamed.
+
+### Focused regression coverage
+
+- Added an Aurora shell contract covering shared toast and loading/error imports/rendering.
+- Extended the public-config contract to require the Лазейка ВПН fallback.
+- Verified both new contracts red before the production patch and green afterward.
+
+### Round verification
+
+| Check | Result |
+| --- | --- |
+| Aurora feedback contract | 1 passed, 0 failed |
+| Resolver test | 1 passed, 0 failed |
+| Public-config/cabinet-design contract | 1 passed, 0 failed |
+| Backend full tests | 31 passed, 0 failed |
+| Backend build | Passed: `tsc` |
+| Frontend build | Passed: TypeScript and Vite; 3855 modules transformed |
+| `git diff --check` | Clean |
+
+No minor findings were addressed in this round. Existing Node `DEP0205` and frontend large-chunk warnings remain unchanged.
