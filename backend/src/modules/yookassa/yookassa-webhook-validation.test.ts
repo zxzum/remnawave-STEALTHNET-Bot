@@ -55,6 +55,25 @@ test("distinguishes transient YooKassa failures from remote rejection", () => {
   assert.equal(rejected?.status, 404);
 });
 
+test("treats HTTP 408 and transport timeout errors as transient", () => {
+  const timeout = yookassa.yookassaPaymentLookupFailure?.("request timeout", 408);
+  assert.equal(timeout?.kind, "transient");
+  assert.equal(timeout?.status, 408);
+  const transport = (yookassa as unknown as { isYookassaTransportTimeout?: (error: unknown) => boolean }).isYookassaTransportTimeout;
+  assert.equal(typeof transport, "function");
+  assert.equal(transport?.({ name: "AbortError", message: "This operation was aborted" }), true);
+});
+
+test("treats not-configured YooKassa lookup as retryable in the webhook route", async () => {
+  const source = await readFile(new URL("../webhooks/yookassa.webhooks.routes.ts", import.meta.url), "utf8");
+  const lookupStart = source.indexOf("const paymentLookup = await getYookassaPayment");
+  const validationStart = source.indexOf("const validation =", lookupStart);
+  const lookupBlock = source.slice(lookupStart, validationStart);
+  assert.match(lookupBlock, /paymentLookup\.kind === "transient"/);
+  assert.match(lookupBlock, /paymentLookup\.kind === "not_configured"/);
+  assert.match(lookupBlock, /res\.status\(503\)/);
+});
+
 test("returns retryable status for transient YooKassa lookup failures", async () => {
   const source = await readFile(new URL("../webhooks/yookassa.webhooks.routes.ts", import.meta.url), "utf8");
   const lookupStart = source.indexOf("const paymentLookup = await getYookassaPayment");
@@ -86,4 +105,12 @@ test("does not short-circuit a PAID payment with incomplete activation", async (
   assert.notEqual(guardStart, -1);
   assert.notEqual(markStart, -1);
   assert.match(source.slice(guardStart, markStart), /!shouldRetryPaidActivation\(payment\)/);
+});
+
+test("YooKassa PAID guard permits proxy and Sing-box activation recovery", async () => {
+  const source = await readFile(new URL("../webhooks/yookassa.webhooks.routes.ts", import.meta.url), "utf8");
+  assert.match(source, /shouldRetryPaidSlotActivation/);
+  const guardStart = source.indexOf('if (payment.status === "PAID" && !isExtraOption');
+  const markStart = source.indexOf("const result = await markPaymentPaid", guardStart);
+  assert.match(source.slice(guardStart, markStart), /!shouldRetryPaidSlotActivation\(payment\)/);
 });

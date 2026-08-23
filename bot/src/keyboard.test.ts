@@ -130,6 +130,25 @@ test("каждый раздел сохраняет согласованные д
   ]);
 });
 
+test("RollyPay is available for proxy, Sing-box, and extra-option payments", () => {
+  const proxy = (keyboard.proxyPaymentMethodButtons as unknown as (...args: unknown[]) => ReturnType<typeof keyboard.proxyPaymentMethodButtons>)(
+    "proxy-1", [], null, undefined, undefined, null, false, false, false, "RUB", true,
+  );
+  const singbox = (keyboard.singboxPaymentMethodButtons as unknown as (...args: unknown[]) => ReturnType<typeof keyboard.singboxPaymentMethodButtons>)(
+    "singbox-1", [], null, undefined, undefined, null, false, false, false, "RUB", true,
+  );
+  const option = (keyboard.optionPaymentMethodButtons as unknown as (...args: unknown[]) => ReturnType<typeof keyboard.optionPaymentMethodButtons>)(
+    { kind: "devices", id: "device-1", name: "Устройство", deviceCount: 1, price: 100, currency: "RUB" },
+    0, null, undefined, undefined, [], false, false, false, true,
+  );
+
+  const callbackData = (markup: ReturnType<typeof keyboard.proxyPaymentMethodButtons>) =>
+    markup.inline_keyboard.flatMap((row) => row).flatMap((button) => "callback_data" in button ? [button.callback_data] : []);
+  assert.ok(callbackData(proxy).includes("pay_proxy_rollypay:proxy-1"));
+  assert.ok(callbackData(singbox).includes("pay_singbox_rollypay:singbox-1"));
+  assert.ok(callbackData(option).includes("pay_option_rollypay:devices:device-1"));
+});
+
 function buildOptions(showTrial: boolean): Parameters<typeof mainMenu>[0] {
   return {
     showTrial,

@@ -73,13 +73,24 @@ test("terminal broadcast jobs expose partial failures as unsuccessful results", 
   }
 });
 
-test("worker finalization cannot overwrite a stale terminal job", () => {
+test("worker finalization cannot overwrite a resumed job with an old run token", () => {
   const finalization = workerSource.split("// Финализируем", 2)[1].split("// Удаляем attachment", 2)[0];
   assert.match(finalization, /prisma\.broadcastHistory\.updateMany/);
-  assert.match(finalization, /where:\s*\{\s*id:\s*job\.id,\s*status:\s*\"running\"\s*\}/);
+  assert.match(finalization, /runToken:\s*job\.run_token/);
 });
 
-test("stale pending and running broadcasts are moved to error", async () => {
+test("worker exception finalization preserves persisted progress and clean completion clears errors", () => {
+  const finalization = workerSource.split("// Финализируем", 2)[1].split("// Удаляем attachment", 2)[0];
+  assert.match(finalization, /const finalData = lastResult\s*\?/);
+  assert.match(finalization, /sentTelegram: lastResult\.sentTelegram/);
+  assert.match(finalization, /failedTelegram: finalStatus === "pending" \? 0 : lastResult\.failedTelegram/);
+  assert.match(finalization, /failedEmail: finalStatus === "pending" \? 0 : lastResult\.failedEmail/);
+  assert.match(finalization, /errors: finalStatus === "pending" \? \[\] : lastResult\.errors\.slice/);
+  assert.match(finalization, /: \{[\s\S]*error: finalError/);
+  assert.doesNotMatch(finalization, /sentTelegram: lastResult\?\.sentTelegram \?\? 0/);
+});
+
+test("pending broadcasts are never swept stale and a healthy lease is retained", async () => {
   const originalFindMany = history.findMany;
   const originalUpdateMany = history.updateMany;
   const now = new Date("2026-08-23T00:30:00.000Z");
@@ -89,24 +100,39 @@ test("stale pending and running broadcasts are moved to error", async () => {
   try {
     history.findMany = async (args) => {
       findManyArgs = args;
-      return [
-        { id: "pending-1", status: "pending", startedAt: new Date("2026-08-23T00:00:00.000Z") },
-        { id: "running-1", status: "running", startedAt: new Date("2026-08-23T00:00:00.000Z") },
-      ];
+      return [{ id: "running-1", status: "running", runToken: "run-1", leaseExpiresAt: new Date("2026-08-23T00:31:00.000Z") }];
     };
     history.updateMany = async (args) => {
       updateManyArgs = args;
       return { count: 2 };
     };
 
-    assert.equal(await sweepStaleBroadcastJobs(now), 2);
-    assert.deepEqual((findManyArgs as { where: { status: unknown } }).where.status, { in: ["pending", "running"] });
-    const update = updateManyArgs as { data: { status: string; finishedAt: Date; error: string } };
-    assert.equal(update.data.status, "error");
-    assert.equal(update.data.finishedAt, now);
-    assert.match(update.data.error, /broadcast-worker/);
+    assert.equal(await sweepStaleBroadcastJobs(now), 0);
+    assert.equal((findManyArgs as { where: { status: unknown } }).where.status, "running");
+    assert.equal(updateManyArgs, undefined);
   } finally {
     history.findMany = originalFindMany;
     history.updateMany = originalUpdateMany;
   }
+});
+
+test("resume clears broadcast failure state while preserving sent progress", async () => {
+  const source = await readFile(new URL("./broadcast.service.ts", import.meta.url), "utf8");
+  const resumeStart = source.indexOf("broadcastHistory.update({");
+  const resumeEnd = source.indexOf("});", resumeStart);
+  const update = source.slice(resumeStart, resumeEnd);
+  assert.match(update, /failedTelegram:\s*0/);
+  assert.match(update, /failedEmail:\s*0/);
+  assert.match(update, /errors:\s*\[\]/);
+  assert.match(update, /error:\s*null/);
+  assert.doesNotMatch(update, /sentTelegram:\s*0/);
+});
+
+test("stale running broadcasts are guarded by token and durable lease", async () => {
+  const source = await readFile(new URL("./broadcast-stale.scheduler.ts", import.meta.url), "utf8");
+  assert.match(source, /status:\s*"running"/);
+  assert.match(source, /leaseExpiresAt/);
+  assert.match(source, /runToken/);
+  assert.match(source, /updateMany/);
+  assert.match(source, /errors:\s*\[/);
 });

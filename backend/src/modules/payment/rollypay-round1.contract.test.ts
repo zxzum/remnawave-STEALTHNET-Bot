@@ -25,11 +25,13 @@ test("RollyPay top-ups use the centralized idempotent balance-credit classificat
   assert.match(classification, /!isExtraOption/);
   assert.match(classification, /!isVpnProduct/);
 
-  assert.match(source, /where: \{ id: paymentId, status: "PENDING" \}/);
+  assert.match(source, /FOR UPDATE/);
+  assert.match(source, /fresh\.status !== "PENDING"/);
+  assert.match(source, /tx\.payment\.update/);
   const creditStart = source.indexOf("if (isTopUp) {");
-  const creditEnd = source.indexOf("\n\n  let activation", creditStart);
+  const creditEnd = source.indexOf("return { count: 1 };", creditStart);
   assert.ok(creditEnd > creditStart);
-  assert.match(source.slice(creditStart, creditEnd), /balance: \{ increment: payment\.amount \}/);
+  assert.match(source.slice(creditStart, creditEnd), /balance: \{ increment: fresh\.amount \}/);
 });
 
 test("RollyPay preserves targetSubscriptionId in every extra-option payment metadata path", async () => {

@@ -4212,6 +4212,36 @@ composer.on("callback_query:data", async (ctx) => {
       return;
     }
 
+    if (data.startsWith("pay_proxy_rollypay:")) {
+      const proxyTariffId = data.slice("pay_proxy_rollypay:".length);
+      const { items } = await api.getPublicProxyTariffs();
+      const tariff = items?.flatMap((c: { tariffs: { id: string; name: string; price: number; currency: string }[] }) => c.tariffs).find((t: { id: string }) => t.id === proxyTariffId);
+      if (!tariff) {
+        await editMessageContent(ctx, "Тариф не найден.", backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
+        return;
+      }
+      if (tariff.currency.toUpperCase() !== "RUB") {
+        await editMessageContent(ctx, "RollyPay принимает только рубли (RUB).", backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
+        return;
+      }
+      try {
+        const discountInfo = activeDiscountCode.get(userId);
+        const payment = await api.createRollypayPayment(token, {
+          amount: tariff.price,
+          currency: tariff.currency,
+          proxyTariffId,
+          promoCode: discountInfo?.code,
+        });
+        if (discountInfo?.code) activeDiscountCode.delete(userId);
+        const msg = buildPaymentMessage(config, { name: tariff.name, price: formatMoney(tariff.price, tariff.currency), amount: String(tariff.price), currency: tariff.currency, action: "Нажмите для оплаты:" });
+        await editMessageContent(ctx, msg.text, payUrlMarkup(payment.payUrl, config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds), msg.entities);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Ошибка создания платежа RollyPay";
+        await editMessageContent(ctx, `❌ ${msg}`, tariffErrMarkup(e, config, innerStyles?.back, innerEmojiIds));
+      }
+      return;
+    }
+
     if (data.startsWith("pay_proxy:")) {
       const rest = data.slice("pay_proxy:".length);
       const parts = rest.split(":");
@@ -4268,6 +4298,7 @@ composer.on("callback_query:data", async (ctx) => {
         !!config?.yookassaEnabled,
         !!config?.cryptopayEnabled,
         tariff.currency,
+        !!config?.rollypayEnabled,
       );
       const msg = buildPaymentMessage(config, {
         name: tariff.name,
@@ -4380,6 +4411,36 @@ composer.on("callback_query:data", async (ctx) => {
       return;
     }
 
+    if (data.startsWith("pay_singbox_rollypay:")) {
+      const singboxTariffId = data.slice("pay_singbox_rollypay:".length);
+      const { items } = await api.getPublicSingboxTariffs();
+      const tariff = items?.flatMap((c: { tariffs: { id: string; name: string; price: number; currency: string }[] }) => c.tariffs).find((t: { id: string }) => t.id === singboxTariffId);
+      if (!tariff) {
+        await editMessageContent(ctx, "Тариф не найден.", backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
+        return;
+      }
+      if (tariff.currency.toUpperCase() !== "RUB") {
+        await editMessageContent(ctx, "RollyPay принимает только рубли (RUB).", backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
+        return;
+      }
+      try {
+        const discountInfo = activeDiscountCode.get(userId);
+        const payment = await api.createRollypayPayment(token, {
+          amount: tariff.price,
+          currency: tariff.currency,
+          singboxTariffId,
+          promoCode: discountInfo?.code,
+        });
+        if (discountInfo?.code) activeDiscountCode.delete(userId);
+        const msg = buildPaymentMessage(config, { name: tariff.name, price: formatMoney(tariff.price, tariff.currency), amount: String(tariff.price), currency: tariff.currency, action: "Нажмите для оплаты:" });
+        await editMessageContent(ctx, msg.text, payUrlMarkup(payment.payUrl, config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds), msg.entities);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Ошибка создания платежа RollyPay";
+        await editMessageContent(ctx, `❌ ${msg}`, tariffErrMarkup(e, config, innerStyles?.back, innerEmojiIds));
+      }
+      return;
+    }
+
     if (data.startsWith("pay_singbox:")) {
       const rest = data.slice("pay_singbox:".length);
       const parts = rest.split(":");
@@ -4436,6 +4497,7 @@ composer.on("callback_query:data", async (ctx) => {
         !!config?.yookassaEnabled,
         !!config?.cryptopayEnabled,
         tariff.currency,
+        !!config?.rollypayEnabled,
       );
       const msg = buildPaymentMessage(config, {
         name: tariff.name,
@@ -5505,6 +5567,36 @@ composer.on("callback_query:data", async (ctx) => {
       return;
     }
 
+    if (data.startsWith("pay_option_rollypay:")) {
+      const parts = data.split(":");
+      const kind = (parts[1] ?? "") as "traffic" | "devices" | "servers";
+      const productId = parts.length > 2 ? parts.slice(2).join(":") : "";
+      const option = (config?.sellOptions ?? []).find((o) => o.kind === kind && o.id === productId);
+      if (!option) {
+        await editMessageContent(ctx, "Опция не найдена.", backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
+        return;
+      }
+      if (option.currency.toUpperCase() !== "RUB") {
+        await editMessageContent(ctx, "RollyPay принимает только рубли (RUB).", backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
+        return;
+      }
+      const target = extraOptionTargetSub.get(userId);
+      const targetSubscriptionId = target && target !== "primary" ? target : undefined;
+      try {
+        const payment = await api.createRollypayPayment(token, {
+          extraOption: { kind: option.kind, productId: option.id, targetSubscriptionId },
+        });
+        const optName = option.name || (option.kind === "traffic" ? `+${option.trafficGb} ГБ` : option.kind === "devices" ? `+${option.deviceCount} устр.` : "Сервер");
+        const msg = buildPaymentMessage(config, { name: optName, price: formatMoney(option.price, option.currency), amount: String(option.price), currency: option.currency, action: "Нажмите кнопку ниже для оплаты:" });
+        await editMessageContent(ctx, msg.text, payUrlMarkup(payment.payUrl, config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds), msg.entities);
+        extraOptionTargetSub.delete(userId);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Ошибка создания платежа RollyPay";
+        await editMessageContent(ctx, `❌ ${msg}`, tariffErrMarkup(e, config, innerStyles?.back, innerEmojiIds));
+      }
+      return;
+    }
+
     if (data.startsWith("pay_option_yoomoney:")) {
       const parts = data.split(":");
       const kind = (parts[1] ?? "") as "traffic" | "devices" | "servers";
@@ -5692,7 +5784,8 @@ composer.on("callback_query:data", async (ctx) => {
         config?.plategaMethods ?? [],
         !!config?.yoomoneyEnabled,
         !!config?.yookassaEnabled,
-        !!config?.cryptopayEnabled
+        !!config?.cryptopayEnabled,
+        !!config?.rollypayEnabled
       );
       await editMessageContent(ctx, choiceText.text, markup, choiceText.entities);
       return;

@@ -62,7 +62,7 @@ export type RollypayWebhookPayload = {
 
 export type CreateRollypayPaymentResult =
   | { ok: true; url: string; paymentId: string | null }
-  | { ok: false; error: string; status?: number };
+  | { ok: false; kind: "transient" | "permanent_rejection"; error: string; status: number };
 
 type RollypayResponse = RollypayPayment;
 
@@ -90,19 +90,31 @@ function describeError(status: number, body: RollypayResponse | null, raw: strin
     : `RollyPay вернул ${status}: ${detail || "без описания"}`;
 }
 
+export function rollypayCreateFailure(
+  error: string,
+  status = 503,
+): Extract<CreateRollypayPaymentResult, { ok: false }> {
+  return {
+    ok: false,
+    kind: status === 408 || status === 429 || status >= 500 ? "transient" : "permanent_rejection",
+    status,
+    error,
+  };
+}
+
 export async function createRollypayPayment(
   params: CreateRollypayPaymentParams,
 ): Promise<CreateRollypayPaymentResult> {
   const { config } = params;
-  if (!isRollypayConfigured(config)) return { ok: false, error: "RollyPay не настроен" };
+  if (!isRollypayConfigured(config)) return rollypayCreateFailure("RollyPay не настроен", 503);
 
   const currency = (params.currency || "RUB").trim().toUpperCase();
   if (currency !== "RUB") {
-    return { ok: false, error: `RollyPay принимает только рубли, а цена указана в ${currency}` };
+    return rollypayCreateFailure(`RollyPay принимает только рубли, а цена указана в ${currency}`, 400);
   }
 
   const amount = Number(params.amount);
-  if (!Number.isFinite(amount) || amount <= 0) return { ok: false, error: "Некорректная сумма платежа" };
+  if (!Number.isFinite(amount) || amount <= 0) return rollypayCreateFailure("Некорректная сумма платежа", 400);
 
   const payload: Record<string, unknown> = {
     amount: amount.toFixed(2),
@@ -129,14 +141,14 @@ export async function createRollypayPayment(
     const raw = await response.text();
     const body = parseResponse(raw);
 
-    if (!response.ok) return { ok: false, error: describeError(response.status, body, raw), status: response.status };
+    if (!response.ok) return rollypayCreateFailure(describeError(response.status, body, raw), response.status);
 
     const url = body?.pay_url?.trim();
-    if (!url) return { ok: false, error: "RollyPay не вернул ссылку на оплату" };
+    if (!url) return rollypayCreateFailure("RollyPay не вернул ссылку на оплату", 503);
     return { ok: true, url, paymentId: body?.payment_id?.trim() || null };
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") return { ok: false, error: "RollyPay не ответил вовремя" };
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    if (error instanceof Error && error.name === "AbortError") return rollypayCreateFailure("RollyPay не ответил вовремя", 408);
+    return rollypayCreateFailure(error instanceof Error ? error.message : String(error), 503);
   } finally {
     clearTimeout(timeoutId);
   }

@@ -51,6 +51,14 @@ export function shouldRetryPaidActivation(payment: {
     || !metadata.subscriptionId.trim();
 }
 
+export function shouldRetryPaidSlotActivation(payment: {
+  status: string;
+  proxyTariffId?: string | null;
+  singboxTariffId?: string | null;
+}): boolean {
+  return payment.status === "PAID" && Boolean(payment.proxyTariffId || payment.singboxTariffId);
+}
+
 export function shouldRetryPaidExtraOption(
   status: string,
   metadata: string | null,
@@ -69,7 +77,8 @@ export type MarkPaymentPaidResult = {
   payment: Awaited<ReturnType<typeof prisma.payment.findUnique>>;
   referral?: Awaited<ReturnType<typeof distributeReferralRewards>>;
   activation?: { ok: boolean; error?: string; outcome?: "APPLIED" | "ALREADY_APPLIED" | "QUEUED" };
-  proxySlots?: { ok: boolean; slotsCreated?: number; error?: string };
+  proxySlots?: { ok: boolean; slotsCreated?: number; alreadyApplied?: boolean; error?: string };
+  singboxSlots?: { ok: boolean; slotsCreated?: number; alreadyApplied?: boolean; error?: string };
   balanceCredited?: boolean;
   error?: string;
 };
@@ -115,6 +124,29 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
           payment,
           error: error instanceof Error ? error.message : String(error),
         };
+      }
+    }
+    if (shouldRetryPaidSlotActivation(payment)) {
+      if (payment.proxyTariffId) {
+        const slotResult = await createProxySlotsByPaymentId(paymentId);
+        const proxySlots = slotResult.ok
+          ? { ok: true, slotsCreated: slotResult.slotsCreated, alreadyApplied: slotResult.alreadyApplied }
+          : { ok: false, error: slotResult.error };
+        if (!slotResult.ok) return { ok: false, payment, proxySlots, error: slotResult.error };
+        if (!slotResult.alreadyApplied) {
+          const tariff = await prisma.proxyTariff.findUnique({ where: { id: payment.proxyTariffId }, select: { name: true } });
+          await notifyProxySlotsCreated(payment.clientId, slotResult.slotIds, tariff?.name ?? undefined).catch(() => {});
+        }
+      } else if (payment.singboxTariffId) {
+        const slotResult = await createSingboxSlotsByPaymentId(paymentId);
+        const singboxSlots = slotResult.ok
+          ? { ok: true, slotsCreated: slotResult.slotsCreated, alreadyApplied: slotResult.alreadyApplied }
+          : { ok: false, error: slotResult.error };
+        if (!slotResult.ok) return { ok: false, payment, singboxSlots, error: slotResult.error };
+        if (!slotResult.alreadyApplied) {
+          const tariff = await prisma.singboxTariff.findUnique({ where: { id: payment.singboxTariffId }, select: { name: true } });
+          await notifySingboxSlotsCreated(payment.clientId, slotResult.slotIds, tariff?.name ?? undefined).catch(() => {});
+        }
       }
     }
     const result = await distributeReferralRewards(paymentId);
@@ -165,22 +197,25 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
       return { count: 1 };
     });
   } else {
-    flip = await prisma.payment.updateMany({
-      where: { id: paymentId, status: "PENDING" },
-      data: { status: "PAID", paidAt: now },
+    flip = await prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe('SELECT "id" FROM "payments" WHERE "id" = $1 FOR UPDATE', paymentId);
+      const fresh = await tx.payment.findUnique({ where: { id: paymentId } });
+      if (!fresh || fresh.status !== "PENDING") return { count: 0 };
+      await tx.payment.update({ where: { id: paymentId }, data: { status: "PAID", paidAt: now } });
+      if (isTopUp) {
+        await tx.client.update({
+          where: { id: fresh.clientId },
+          data: { balance: { increment: fresh.amount } },
+        });
+      }
+      return { count: 1 };
     });
   }
   if (flip.count === 0) {
-    // Уже PAID параллельным запросом — выходим как идемпотент.
+    // Если конкурент уже зафлипнул payment, повторно войдём в PAID-ветку:
+    // она безопасно восстановит незавершённую активацию слотов/тарифа.
     const updated = await prisma.payment.findUnique({ where: { id: paymentId } });
-    if (updated && isPaidVpnPurchase(updated)) {
-      try {
-        await markTrialUsedForPaidPurchase(updated.clientId);
-      } catch (error) {
-        console.error("[trial-lock] failed to mark concurrently-paid client", updated.clientId, error);
-        return { ok: false, payment: updated, error: "Не удалось зафиксировать использованный пробный период" };
-      }
-    }
+    if (updated?.status === "PAID") return markPaymentPaid(paymentId);
     const result = await distributeReferralRewards(paymentId);
     return { ok: true, payment: updated ?? payment, referral: result };
   }
@@ -192,16 +227,9 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
       return { ok: false, payment, error: "Не удалось зафиксировать использованный пробный период" };
     }
   }
-  if (isTopUp) {
-    // Списание баланса делаем ТОЛЬКО если flip нам "достался" (count=1).
-    await prisma.client.update({
-      where: { id: payment.clientId },
-      data: { balance: { increment: payment.amount } },
-    });
-  }
-
   let activation: { ok: boolean; error?: string; outcome?: "APPLIED" | "ALREADY_APPLIED" | "QUEUED" } = { ok: false, error: "no tariff" };
-  let proxySlots: { ok: boolean; slotsCreated?: number; error?: string } = { ok: false };
+  let proxySlots: { ok: boolean; slotsCreated?: number; alreadyApplied?: boolean; error?: string } = { ok: false };
+  let singboxSlots: { ok: boolean; slotsCreated?: number; alreadyApplied?: boolean; error?: string } = { ok: false };
   if (isExtraOption) {
     const extraResult = await applyExtraOptionByPaymentId(paymentId);
     activation = extraResult.ok ? { ok: true, outcome: extraResult.outcome } : { ok: false, error: extraResult.error };
@@ -222,7 +250,7 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
   } else if (payment.proxyTariffId) {
     const proxyResult = await createProxySlotsByPaymentId(paymentId);
     if (proxyResult.ok) {
-      proxySlots = { ok: true, slotsCreated: proxyResult.slotsCreated };
+      proxySlots = { ok: true, slotsCreated: proxyResult.slotsCreated, alreadyApplied: proxyResult.alreadyApplied };
       const tariff = await prisma.proxyTariff.findUnique({
         where: { id: payment.proxyTariffId },
         select: { name: true },
@@ -234,11 +262,13 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
       ).catch(() => {});
     } else {
       proxySlots = { ok: false, error: proxyResult.error };
+      const updated = await prisma.payment.findUnique({ where: { id: paymentId } });
+      return { ok: false, payment: updated ?? payment, proxySlots: { ok: false, error: proxyResult.error }, error: proxyResult.error };
     }
   } else if (payment.singboxTariffId) {
     const singboxResult = await createSingboxSlotsByPaymentId(paymentId);
     if (singboxResult.ok) {
-      proxySlots = { ok: true, slotsCreated: singboxResult.slotsCreated };
+      singboxSlots = { ok: true, slotsCreated: singboxResult.slotsCreated, alreadyApplied: singboxResult.alreadyApplied };
       const tariff = await prisma.singboxTariff.findUnique({
         where: { id: payment.singboxTariffId },
         select: { name: true },
@@ -249,7 +279,9 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
         tariff?.name ?? undefined
       ).catch(() => {});
     } else {
-      proxySlots = { ok: false, error: singboxResult.error };
+      singboxSlots = { ok: false, error: singboxResult.error };
+      const updated = await prisma.payment.findUnique({ where: { id: paymentId } });
+      return { ok: false, payment: updated ?? payment, singboxSlots: { ok: false, error: singboxResult.error }, error: singboxResult.error };
     }
   }
 
@@ -267,6 +299,7 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
     referral,
     activation,
     proxySlots: proxySlots.ok ? proxySlots : undefined,
+    singboxSlots: singboxSlots.ok ? singboxSlots : undefined,
     balanceCredited: isTopUp,
   };
 }

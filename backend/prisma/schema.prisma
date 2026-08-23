@@ -339,6 +339,8 @@ model Payment {
   singboxTariff     SingboxTariff?     @relation(fields: [singboxTariffId], references: [id], onDelete: SetNull)
   subscription      Subscription?      @relation("PaymentSubscription", fields: [subscriptionId], references: [id], onDelete: SetNull)
   referralCredits   ReferralCredit[]
+  proxySlots        ProxySlot[]        @relation("PaymentProxySlots")
+  singboxSlots      SingboxSlot[]      @relation("PaymentSingboxSlots")
 
   @@index([clientId])
   @@index([status])
@@ -682,6 +684,10 @@ model BroadcastHistory {
   targetGroup     String?   @map("target_group")
   /// Флаг отмены: API ставит true → worker видит и прерывает рассылку.
   cancelRequested Boolean   @default(false) @map("cancel_requested")
+  /// Durable claim token: every worker write must match the current run.
+  runToken       String?    @map("run_token")
+  heartbeatAt    DateTime?  @map("heartbeat_at")
+  leaseExpiresAt DateTime?  @map("lease_expires_at")
   totalTelegram   Int       @default(0) @map("total_telegram")
   sentTelegram    Int       @default(0) @map("sent_telegram")
   failedTelegram  Int       @default(0) @map("failed_telegram")
@@ -696,6 +702,7 @@ model BroadcastHistory {
 
   @@index([startedAt(sort: Desc)])
   @@index([status])
+  @@index([status, leaseExpiresAt])
   @@map("broadcast_history")
 }
 
@@ -795,6 +802,7 @@ model ProxySlot {
   nodeId             String   @map("node_id")
   clientId           String   @map("client_id")
   proxyTariffId      String?  @map("proxy_tariff_id")
+  paymentId          String?  @map("payment_id")
   login              String // Уникален в рамках ноды
   password           String // В открытом виде для выдачи и конфига на ноде
   expiresAt          DateTime @map("expires_at")
@@ -809,11 +817,13 @@ model ProxySlot {
   node        ProxyNode    @relation(fields: [nodeId], references: [id], onDelete: Cascade)
   client      Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
   proxyTariff ProxyTariff? @relation(fields: [proxyTariffId], references: [id], onDelete: SetNull)
+  payment     Payment?     @relation("PaymentProxySlots", fields: [paymentId], references: [id], onDelete: SetNull)
 
   @@unique([nodeId, login])
   @@index([nodeId])
   @@index([clientId])
   @@index([proxyTariffId])
+  @@index([paymentId])
   @@index([status])
   @@map("proxy_slots")
 }
@@ -882,6 +892,7 @@ model SingboxSlot {
   nodeId             String   @map("node_id")
   clientId           String   @map("client_id")
   singboxTariffId    String?  @map("singbox_tariff_id")
+  paymentId          String?  @map("payment_id")
   userIdentifier     String   @map("user_identifier") // UUID (VLESS/Trojan) или логин (SS/Hy2)
   secret             String?  @db.Text // пароль для SS/Hy2
   expiresAt          DateTime @map("expires_at")
@@ -895,11 +906,13 @@ model SingboxSlot {
   node          SingboxNode    @relation(fields: [nodeId], references: [id], onDelete: Cascade)
   client        Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
   singboxTariff SingboxTariff? @relation(fields: [singboxTariffId], references: [id], onDelete: SetNull)
+  payment       Payment?       @relation("PaymentSingboxSlots", fields: [paymentId], references: [id], onDelete: SetNull)
 
   @@unique([nodeId, userIdentifier])
   @@index([nodeId])
   @@index([clientId])
   @@index([singboxTariffId])
+  @@index([paymentId])
   @@index([status])
   @@map("singbox_slots")
 }

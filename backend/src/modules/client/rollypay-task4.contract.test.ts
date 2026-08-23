@@ -17,6 +17,11 @@ test("RollyPay defaults and public exposure require the admin flag and both secr
   assert.match(seed, /\["rollypay_test_mode", "false"\]/);
 });
 
+test("fresh system settings use the Лазейка ВПН service label", async () => {
+  const seed = await readFile(new URL("../../scripts/seed-system-settings.ts", import.meta.url), "utf8");
+  assert.match(seed, /\["service_name", "Лазейка ВПН"\]/);
+});
+
 test("RollyPay purchase route uses product currency, rejects non-RUB, and returns url", async () => {
   const route = await readFile(new URL("./client.routes.ts", import.meta.url), "utf8");
   const start = route.indexOf('clientRouter.post("/rollypay/create-payment"');

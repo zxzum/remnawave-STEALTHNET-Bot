@@ -209,10 +209,21 @@ export type YookassaPaymentLookup =
   | { ok: true; payment: YookassaPayment }
   | { ok: false; kind: "transient" | "remote_rejection" | "not_configured"; status: number; error: string };
 
+export function isYookassaTransportTimeout(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const value = error as { name?: unknown; message?: unknown; code?: unknown };
+  const name = typeof value.name === "string" ? value.name.toLowerCase() : "";
+  const message = typeof value.message === "string" ? value.message.toLowerCase() : "";
+  const code = typeof value.code === "string" ? value.code.toLowerCase() : "";
+  return name === "aborterror"
+    || ["timeout", "timed out", "etimedout", "econnreset", "econnrefused", "enotfound", "network"].some((part) =>
+      message.includes(part) || code.includes(part));
+}
+
 export function yookassaPaymentLookupFailure(error: string, status = 503): Extract<YookassaPaymentLookup, { ok: false }> {
   return {
     ok: false,
-    kind: status === 429 || status >= 500 ? "transient" : "remote_rejection",
+    kind: status === 408 || status === 429 || status >= 500 ? "transient" : "remote_rejection",
     status,
     error,
   };
@@ -245,7 +256,7 @@ export async function getYookassaPayment(id: string, config: YookassaConfig): Pr
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return yookassaPaymentLookupFailure(message);
+    return yookassaPaymentLookupFailure(message, isYookassaTransportTimeout(error) ? 408 : 503);
   } finally {
     clearTimeout(timeoutId);
   }

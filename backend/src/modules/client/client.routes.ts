@@ -6584,8 +6584,15 @@ clientRouter.post("/rollypay/create-payment", async (req, res) => {
     });
 
     if (!result.ok) {
-      await prisma.payment.delete({ where: { id: payment.id } }).catch(() => {});
-      return res.status(500).json({ message: result.error });
+      if (result.kind === "transient") {
+        return res.status(503).json({ message: result.error, retryable: true });
+      }
+      if (result.kind === "permanent_rejection") {
+        await prisma.payment.delete({ where: { id: payment.id } }).catch(() => {});
+        const status = result.status >= 400 && result.status < 500 ? result.status : 500;
+        return res.status(status).json({ message: result.error });
+      }
+      return res.status(503).json({ message: result.error, retryable: true });
     }
 
     const url = await saveRedirectAndBuildUrl(payment.id, orderId, result.url, config.publicAppUrl);

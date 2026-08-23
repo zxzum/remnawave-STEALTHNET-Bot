@@ -797,8 +797,9 @@ export async function runBroadcast(options: {
             }
           }
           if (broadcastId) {
-            // Best-effort INSERT — если упадёт (unique violation на retry/race), игнорируем.
-            prisma.broadcastSentLog.create({
+            // Persist the recipient before progress/final writes so a response
+            // loss after the DB commit cannot cause a duplicate on resume.
+            await prisma.broadcastSentLog.create({
               data: { broadcastId, tgid: tid },
             }).catch(() => { /* duplicate / FK gone — норм */ });
           }
@@ -972,6 +973,12 @@ export async function startBroadcastJob(options: {
           finishedAt: null,
           error: null,
           cancelRequested: false,
+          failedTelegram: 0,
+          failedEmail: 0,
+          errors: [],
+          runToken: null,
+          heartbeatAt: null,
+          leaseExpiresAt: null,
           attachmentName: options.attachment?.originalname ?? null,
           attachmentPath: attachmentPath,
           attachmentMime: options.attachment?.mimetype ?? null,

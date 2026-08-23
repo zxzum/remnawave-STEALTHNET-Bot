@@ -2,7 +2,6 @@ import { prisma } from "../../db.js";
 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const STALE_AFTER_MS = 15 * 60 * 1000;
-const STALE_STATUSES = ["pending", "running"] as const;
 const HINT =
   "Рассылка зависла в очереди — похоже, не запущен сервис broadcast-worker " +
   "(проверьте `docker compose ps broadcast-worker` и `docker compose up -d`)";
@@ -12,17 +11,36 @@ let timer: NodeJS.Timeout | null = null;
 export async function sweepStaleBroadcastJobs(now = new Date()): Promise<number> {
   const threshold = new Date(now.getTime() - STALE_AFTER_MS);
   const stuck = await prisma.broadcastHistory.findMany({
-    where: { status: { in: [...STALE_STATUSES] }, startedAt: { lt: threshold } },
-    select: { id: true, status: true, startedAt: true },
+    where: {
+      status: "running",
+      OR: [
+        { leaseExpiresAt: { lt: now } },
+        { leaseExpiresAt: null, startedAt: { lt: threshold } },
+      ],
+    },
+    select: { id: true, runToken: true, leaseExpiresAt: true },
   });
-  if (stuck.length === 0) return 0;
-
-  const result = await prisma.broadcastHistory.updateMany({
-    where: { OR: stuck.map((job) => ({ id: job.id, status: job.status })) },
-    data: { status: "error", finishedAt: now, error: HINT },
-  });
-  console.error(`[broadcast-stale] marked ${result.count} stale jobs as error`);
-  return result.count;
+  let marked = 0;
+  for (const job of stuck) {
+    // Keep this guard in-process as well as in SQL: it makes a healthy
+    // heartbeat harmless even if a mocked/replica read is briefly stale.
+    if (job.leaseExpiresAt && job.leaseExpiresAt > now) continue;
+    const result = await prisma.broadcastHistory.updateMany({
+      where: { id: job.id, status: "running", runToken: job.runToken },
+      data: {
+        status: "error",
+        finishedAt: now,
+        errors: [HINT],
+        error: HINT,
+        runToken: null,
+        heartbeatAt: null,
+        leaseExpiresAt: null,
+      },
+    });
+    marked += result.count;
+  }
+  if (marked > 0) console.error(`[broadcast-stale] marked ${marked} stale jobs as error`);
+  return marked;
 }
 
 export function startBroadcastStaleScheduler(): void {

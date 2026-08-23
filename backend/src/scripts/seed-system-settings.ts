@@ -8,7 +8,7 @@ const DEFAULTS: Array<[string, string]> = [
   ["active_currencies", "usd,rub"],
   ["default_referral_percent", "10"],
   ["trial_days", "3"],
-  ["service_name", "STEALTHNET"],
+  ["service_name", "Лазейка ВПН"],
   [
     "bot_inner_button_styles",
     '{"tariffPay":"primary","topup":"primary","back":"danger","profile":"primary","trialConfirm":"primary","lang":"primary","currency":"primary"}',
