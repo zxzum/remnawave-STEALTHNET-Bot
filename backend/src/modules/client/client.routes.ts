@@ -6430,6 +6430,15 @@ clientRouter.post("/rollypay/create-payment", async (req, res) => {
       }
       if (extraOption.targetSubscriptionId) {
         metadataObj = { ...metadataObj, targetSubscriptionId: extraOption.targetSubscriptionId };
+        const targetSubscription = await prisma.subscription.findFirst({
+          where: {
+            id: extraOption.targetSubscriptionId,
+            deletionRequestedAt: null,
+            OR: [{ ownerId: clientId }, { giftedToClientId: clientId }],
+          },
+          select: { id: true },
+        });
+        if (!targetSubscription) return res.status(400).json({ message: "Подписка для опции не найдена" });
       }
     } else {
       currencyUpper = (currencyBody ?? "RUB").toUpperCase();
