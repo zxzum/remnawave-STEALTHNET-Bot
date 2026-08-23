@@ -152,7 +152,7 @@ export function rollypayPaymentLookupFailure(
 ): Extract<RollypayPaymentLookup, { ok: false }> {
   return {
     ok: false,
-    kind: status === 429 || status >= 500 ? "transient" : "remote_rejection",
+    kind: status === 408 || status === 429 || status >= 500 ? "transient" : "remote_rejection",
     status,
     error,
   };
@@ -216,9 +216,8 @@ export type RollypayPaymentValidation =
   | { ok: true }
   | { ok: false; reason: string };
 
-function amountInCents(value: string | number | undefined): number | null {
-  const amount = Number(value);
-  return Number.isFinite(amount) ? Math.round(amount * 100) : null;
+function canonicalFiatAmount(value: string | number | undefined): string | null {
+  return typeof value === "string" && /^\d+\.\d{2}$/.test(value) ? value : null;
 }
 
 export function validateRollypayPayment(
@@ -254,11 +253,10 @@ export function validateRollypayPayment(
     return { ok: false, reason: "payment_currency_mismatch" };
   }
 
-  const localAmount = amountInCents(localPayment.amount);
-  const webhookAmount = amountInCents(webhook.amount);
-  const remoteAmount = amountInCents(remotePayment.amount);
-  if (localAmount == null || webhookAmount == null || remoteAmount == null
-    || localAmount !== webhookAmount || localAmount !== remoteAmount) {
+  const expectedAmount = localPayment.amount.toFixed(2);
+  const webhookAmount = canonicalFiatAmount(webhook.amount);
+  const remoteAmount = canonicalFiatAmount(remotePayment.amount);
+  if (webhookAmount !== expectedAmount || remoteAmount !== expectedAmount) {
     return { ok: false, reason: "payment_amount_mismatch" };
   }
 

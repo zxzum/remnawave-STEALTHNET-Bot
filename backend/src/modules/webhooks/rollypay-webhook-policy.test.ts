@@ -30,7 +30,7 @@ const remotePayment = {
   status: "paid",
 };
 
-test("accepts a paid remote payment that matches the local RUB payment", () => {
+test("accepts a paid remote payment with canonical 100.00 amounts", () => {
   assert.deepEqual(validateRollypayPayment(localPayment, webhook, remotePayment), { ok: true });
 });
 
@@ -46,6 +46,11 @@ test("rejects a remote order id that differs from the local payment", () => {
 
 test("rejects a remote amount that differs from the local payment", () => {
   const result = validateRollypayPayment(localPayment, webhook, { ...remotePayment, amount: "99.99" });
+  assert.equal(result.ok, false);
+});
+
+test("rejects extra amount precision instead of rounding it to cents", () => {
+  const result = validateRollypayPayment(localPayment, webhook, { ...remotePayment, amount: "99.996" });
   assert.equal(result.ok, false);
 });
 

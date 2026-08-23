@@ -52,7 +52,9 @@ test("rejects non-RUB payments before making an API request", async () => {
 
 test("classifies remote failures so transient lookups can be retried", () => {
   const transient = rollypayPaymentLookupFailure("upstream unavailable", 503);
+  const timeout = rollypayPaymentLookupFailure("request timeout", 408);
   const rejected = rollypayPaymentLookupFailure("not found", 404);
   assert.equal(transient.kind, "transient");
+  assert.equal(timeout.kind, "transient");
   assert.equal(rejected.kind, "remote_rejection");
 });
