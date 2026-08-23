@@ -125,7 +125,7 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
   const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
   const isVpnProduct = isVpnSubscriptionPurchase(payment);
   const isTopUp =
-    (payment.provider === "yoomoney_form" || payment.provider === "platega" || payment.provider === "yookassa") &&
+    (payment.provider === "yoomoney_form" || payment.provider === "platega" || payment.provider === "yookassa" || payment.provider === "rollypay") &&
     !payment.tariffId &&
     !payment.proxyTariffId &&
     !payment.singboxTariffId &&

@@ -16,6 +16,7 @@ import {
   type RollypayWebhookPayload,
 } from "../rollypay/rollypay.service.js";
 import { markPaymentPaid } from "../payment/mark-paid.service.js";
+import { recordPromoCodeUsageFromPayment } from "../payment/promo-code-usage.util.js";
 import { auditPaymentClientBotAlignment } from "../payment/payment-webhook-audit.util.js";
 
 export const rollypayWebhooksRouter = Router();
@@ -117,6 +118,7 @@ rollypayWebhooksRouter.post("/", async (req: Request, res: Response) => {
       return res.status(503).send("Retry");
     }
 
+    await recordPromoCodeUsageFromPayment(payment.id);
     return res.status(200).send("OK");
   } catch (error) {
     console.error("[RollyPay Webhook] transient processing failure", error);

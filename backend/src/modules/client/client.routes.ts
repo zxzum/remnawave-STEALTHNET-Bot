@@ -6428,6 +6428,9 @@ clientRouter.post("/rollypay/create-payment", async (req, res) => {
           },
         };
       }
+      if (extraOption.targetSubscriptionId) {
+        metadataObj = { ...metadataObj, targetSubscriptionId: extraOption.targetSubscriptionId };
+      }
     } else {
       currencyUpper = (currencyBody ?? "RUB").toUpperCase();
       if (tariffIdBody) {
@@ -6481,13 +6484,13 @@ clientRouter.post("/rollypay/create-payment", async (req, res) => {
         if (!proxyTariff || !proxyTariff.enabled) return res.status(400).json({ message: "Прокси-тариф не найден" });
         proxyTariffIdToStore = proxyTariffIdBody;
         currencyUpper = proxyTariff.currency.toUpperCase();
-        amountRounded = Math.round((amountBody ?? proxyTariff.price) * 100) / 100;
+        amountRounded = Math.round(proxyTariff.price * 100) / 100;
       } else if (singboxTariffIdBody) {
         const singboxTariff = await prisma.singboxTariff.findUnique({ where: { id: singboxTariffIdBody } });
         if (!singboxTariff || !singboxTariff.enabled) return res.status(400).json({ message: "Тариф Sing-box не найден" });
         singboxTariffIdToStore = singboxTariffIdBody;
         currencyUpper = singboxTariff.currency.toUpperCase();
-        amountRounded = Math.round((amountBody ?? singboxTariff.price) * 100) / 100;
+        amountRounded = Math.round(singboxTariff.price * 100) / 100;
       } else {
         if (amountBody == null) return res.status(400).json({ message: "Укажите сумму" });
         amountRounded = Math.round(amountBody * 100) / 100;
