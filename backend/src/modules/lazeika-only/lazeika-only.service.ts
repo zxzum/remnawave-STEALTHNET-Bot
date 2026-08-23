@@ -19,7 +19,7 @@ import {
   type LazeikaResourceState,
 } from "./lazeika-only.config.js";
 import { applyLazeikaToConfig, managedInboundTag, pickManagedPort, type XrayConfig } from "./xray-rules.js";
-import { buildTcScript, buildTcUnit, ownedPrefs, TC_POLICE_INDEX_EGRESS, TC_POLICE_INDEX_INGRESS, TC_PREF_BASE, TC_PREF_COUNT, TC_SCRIPT_PATH, TC_UNIT_NAME, validatePort, validateSpeed } from "./tc-script.js";
+import { buildTcScript, buildTcUnit, expectedFilterSpecs, ownedPrefs, TC_POLICE_INDEX_EGRESS, TC_POLICE_INDEX_INGRESS, TC_PREF_BASE, TC_PREF_COUNT, TC_SCRIPT_PATH, TC_UNIT_NAME, validatePort, validateSpeed } from "./tc-script.js";
 import { readSshEnv, runSsh, type SshEnv } from "./ssh.executor.js";
 
 export type RemnaResult = { data?: unknown; error?: string; status: number };
@@ -308,11 +308,15 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     let tcFilesExisted: boolean | null = null;
     const prevSsh = { ...state.ssh };
 
-    // Смена ноды после READY запрещена (§7): старый managed-профиль/snapshot/hosts
-    // завязаны на текущую ноду — безопасный путь: disable + настройка заново.
-    if (state.status === "READY" && state.nodeUuid && input.nodeUuid !== state.nodeUuid) {
+    // Смена ноды запрещена при ЛЮБЫХ следах managed-инфраструктуры (READY/ERROR/APPLYING):
+    // иначе snapshot/hosts старой ноды применятся к новой (§1 финального ревью).
+    // Безопасный путь: POST /admin/lazeika-only/reset-state → setup на новой ноде.
+    const hasManagedTraces = Boolean(
+      state.profileUuid || state.squadUuid || state.managedInboundUuid || state.previousNodeConfig,
+    );
+    if (state.nodeUuid && input.nodeUuid !== state.nodeUuid && hasManagedTraces) {
       throw new SetupError(
-        "Смена ноды при настроенной инфраструктуре не поддерживается: выключите режим и выполните настройку заново на другой ноде",
+        "Смена ноды при наличии managed-инфраструктуры не поддерживается: вызовите POST /admin/lazeika-only/reset-state и настройте заново на другой ноде",
         "VALIDATION",
       );
     }
@@ -449,8 +453,9 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         squadSource = "AUTO";
       } else {
         const squad = (await fetchSquads()).find((s) => s.uuid === squadUuid);
-        if (!squad && input.squadUuid == null && squadSource === "AUTO") {
-          // Авто-squad удалён админом → создаём заново без дублей (§10 финала).
+        if (!squad && squadSource === "AUTO") {
+          // Авто-squad удалён админом (в т.ч. через reconcile со старым UUID из
+          // настроек) → создаём заново без дублей (§10 финала, §2 ревью).
           const rawNew = await requireOk(
             await remna.createInternalSquad({ name: LAZEIKA_SQUAD_NAME, inbounds: [managedInboundUuid] }),
             "SQUAD",
@@ -534,15 +539,22 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       for (const existing of existingNotifications) {
         if (!existing.uuid) continue;
         const currentBinding = existing.inbound ?? null;
-        if (currentBinding?.configProfileUuid === managedProfileUuid
-          && currentBinding.configProfileInboundUuid === managedInboundUuid) continue;
+        const needsBinding = currentBinding?.configProfileUuid !== managedProfileUuid
+          || currentBinding.configProfileInboundUuid !== managedInboundUuid;
+        const needsDisable = existing.isDisabled !== true;
+        if (!needsBinding && !needsDisable) continue;
         hostSnapshots.push({
           uuid: existing.uuid,
           inbound: currentBinding,
           tags: [...(existing.tags ?? [])],
         });
         await requireOk(
-          await remna.updateHost({ uuid: existing.uuid, inbound: binding }),
+          await remna.updateHost({
+            uuid: existing.uuid,
+            inbound: binding,
+            // Notification-host ОБЯЗАНЫ быть disabled: админ мог включить вручную (§5 ревью).
+            ...(needsDisable ? { isDisabled: true } : {}),
+          }),
           "HOSTS",
         );
         state.notificationHostUuids = Array.from(new Set([...state.notificationHostUuids, existing.uuid]));
@@ -630,6 +642,9 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       // Скрипт содержит set -euo pipefail и самопроверку всех 8 pref'ов + обоих
       // общих police actions + enabled unit — любая ошибка ⇒ ненулевой exit (§6 финала).
       const remoteInstall = [
+        // Верхнеуровневый fail-fast: ЛЮБАЯ ошибка (heredoc/chmod/systemctl/скрипт)
+        // ⇒ ненулевой exit всего install-скрипта (§3 финального ревью).
+        "set -euo pipefail",
         "install -d /usr/local/sbin",
         `cat > ${TC_SCRIPT_PATH}.tmp <<'LAZEIKA_TC_EOF'`,
         buildTcScript({ iface: detectedIface!, port, speedMbit: speed }).trimEnd(),
@@ -642,6 +657,8 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         "systemctl daemon-reload",
         `systemctl enable --now ${TC_UNIT_NAME}`,
         TC_SCRIPT_PATH,
+        // Пост-проверка systemd: unit обязан быть enabled после всех шагов.
+        `systemctl is-enabled --quiet ${TC_UNIT_NAME} || { echo UNIT_NOT_ENABLED; exit 1; }`,
       ].join("\n");
       const applied = await ssh(node.address, remoteInstall);
       if (!applied.ok) {
@@ -889,47 +906,46 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
             add("port_listening", out.includes("PORT_LISTENING"));
 
             // ── Содержательная проверка всех собственных фильтров ──
+            // Толерантно к формату tc: eth_type/protocol, порядок токенов произвольный.
             const filtersSection = out.split("===FILTERS===")[1]?.split("===ACTIONS===")[0] ?? "";
-            type FilterLine = { pref: number; protocol: string; ipProto: string; port: number; direction: string; policeIndex: number };
-            const parsedFilters: FilterLine[] = [];
+            type ParsedFilter = {
+              pref: number;
+              protocol: string;
+              ipProto: string;
+              port: number;
+              direction: string;
+              policeIndex: number | null;
+            };
+            const parsedFilters: ParsedFilter[] = [];
             for (const line of filtersSection.split("\n")) {
-              const m = /pref\s+(\d+).*?protocol\s+(ip\w*)\s+flower\s+ip_proto\s+(tcp|udp)\s+(dst_port|src_port)\s+(\d+).*?police index (\d+)/.exec(line);
-              if (m) {
-                parsedFilters.push({
-                  pref: Number(m[1]),
-                  protocol: m[2],
-                  ipProto: m[3],
-                  port: Number(m[5]),
-                  direction: m[4] === "dst_port" ? "ingress" : "egress",
-                  policeIndex: Number(m[6]),
-                });
-              }
+              const prefM = /pref\s+(11\d{3})/.exec(line);
+              if (!prefM) continue;
+              const num = (re: RegExp): string | null => re.exec(line)?.[1] ?? null;
+              const proto = num(/(?:eth_type|protocol)\s+(ip\w*)/i) ?? "";
+              const ipProto = num(/ip_proto\s+(tcp|udp)/i) ?? "";
+              const portDirM = /(dst_port|src_port)\s+(\d+)/.exec(line);
+              const policeRaw = num(/police[^\n]*?index\s+(\d+)/i) ?? num(/action[^\n]*?index\s+(\d+)/i);
+              parsedFilters.push({
+                pref: Number(prefM[1]),
+                protocol: proto,
+                ipProto: ipProto.toLowerCase(),
+                port: portDirM ? Number(portDirM[2]) : -1,
+                direction: portDirM ? (portDirM[1] === "dst_port" ? "ingress" : "egress") : "?",
+                policeIndex: policeRaw ? Number(policeRaw) : null,
+              });
             }
-            const expected = buildTcScript({ iface, port: state.managedInboundPort!, speedMbit: state.ssh.rateMbit });
-            void expected;
+            const specs = expectedFilterSpecs({ port: state.managedInboundPort! });
             const problems: string[] = [];
-            const want = [
-              { protocol: "ip", ipProto: "tcp", direction: "ingress" },
-              { protocol: "ip", ipProto: "udp", direction: "ingress" },
-              { protocol: "ipv6", ipProto: "tcp", direction: "ingress" },
-              { protocol: "ipv6", ipProto: "udp", direction: "ingress" },
-              { protocol: "ip", ipProto: "tcp", direction: "egress" },
-              { protocol: "ip", ipProto: "udp", direction: "egress" },
-              { protocol: "ipv6", ipProto: "tcp", direction: "egress" },
-              { protocol: "ipv6", ipProto: "udp", direction: "egress" },
-            ];
-            for (let i = 0; i < TC_PREF_COUNT; i++) {
-              const pref = TC_PREF_BASE + i;
-              const f = parsedFilters.find((pf) => pf.pref === pref);
-              if (!f) { problems.push(`pref ${pref} отсутствует`); continue; }
-              if (f.port !== state.managedInboundPort) problems.push(`pref ${pref}: порт ${f.port} != ${state.managedInboundPort}`);
-              if (f.ipProto !== want[i].ipProto) problems.push(`pref ${pref}: ip_proto ${f.ipProto} != ${want[i].ipProto}`);
-              if (!f.protocol.startsWith(want[i].protocol)) problems.push(`pref ${pref}: protocol ${f.protocol} != ${want[i].protocol}`);
-              if (f.direction !== want[i].direction) problems.push(`pref ${pref}: направление ${f.direction} != ${want[i].direction}`);
-              const wantIdx = want[i].direction === "ingress" ? TC_POLICE_INDEX_INGRESS : TC_POLICE_INDEX_EGRESS;
-              if (f.policeIndex !== wantIdx) problems.push(`pref ${pref}: police index ${f.policeIndex} != общий ${wantIdx}`);
+            for (const spec of specs) {
+              const f = parsedFilters.find((pf) => pf.pref === spec.pref);
+              if (!f) { problems.push(`pref ${spec.pref} отсутствует`); continue; }
+              if (!f.protocol.toLowerCase().startsWith(spec.protocol)) problems.push(`pref ${spec.pref}: protocol ${f.protocol || "?"} != ${spec.protocol}`);
+              if (f.ipProto !== spec.ipProto) problems.push(`pref ${spec.pref}: ip_proto ${f.ipProto || "?"} != ${spec.ipProto}`);
+              if (f.port !== state.managedInboundPort) problems.push(`pref ${spec.pref}: порт ${f.port} != ${state.managedInboundPort}`);
+              if (f.direction !== spec.direction) problems.push(`pref ${spec.pref}: направление ${f.direction} != ${spec.direction}`);
+              if (f.policeIndex !== null && f.policeIndex !== spec.policeIndex) problems.push(`pref ${spec.pref}: police index ${f.policeIndex} != общий ${spec.policeIndex}`);
             }
-            add("tc_filters", problems.length === 0, problems.slice(0, 4).join("; ") || `${parsedFilters.length}/8`);
+            add("tc_filters", problems.length === 0, problems.slice(0, 4).join("; ") || `${parsedFilters.length}/${TC_PREF_COUNT}`);
 
             // ── Общие actions: ровно по одному bucket на направление с нужным rate ──
             const actionsSection = out.split("===ACTIONS===")[1]?.split("===FILES===")[0] ?? "";

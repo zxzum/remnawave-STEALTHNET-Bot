@@ -651,3 +651,83 @@ test("stale worker cannot overwrite READY/ERROR written by the new worker (servi
   // ERROR воркера A не перезаписал READY воркера B.
   assert.equal(store.state.status, "READY");
 });
+
+test("node change from ERROR state with managed traces is rejected", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  const service = createLazeikaService({
+    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    ...fencedDeps(store),
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    persistSetupInputs: async () => {},
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
+  });
+  // Успешный setup, затем искусственный ERROR (инфраструктурные ссылки остаются в state).
+  await service.setup(SETUP_INPUT);
+  store.setRaw(JSON.stringify({ ...store.state, status: "ERROR", lastError: "[SSH_TC] x" }));
+  const otherNode = "99999999-9999-9999-9999-999999999999";
+  await assert.rejects(
+    () => service.setup({ ...SETUP_INPUT, nodeUuid: otherNode }),
+    /reset-state/,
+  );
+  assert.equal(store.state.status, "ERROR");
+});
+
+test("reconcile with stale auto-squad uuid in state recreates the squad", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  const service = createLazeikaService({
+    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    ...fencedDeps(store),
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    persistSetupInputs: async () => {},
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
+  });
+  await service.setup(SETUP_INPUT);
+  const oldSquadUuid = store.state.squadUuid;
+  env.state.squads = []; // админ удалил auto-squad
+  // Повторный setup: state.squadUuid указывает на удалённый (как reconcile-маршрут).
+  await service.setup(SETUP_INPUT);
+  const squads = env.state.squads.filter((sq) => sq.name === "Lazeika-Only");
+  assert.equal(squads.length, 1);
+  assert.notEqual(store.state.squadUuid, oldSquadUuid);
+});
+
+test("remoteInstall has top-level set -euo and verifies systemd enabled", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  const service = createLazeikaService({
+    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    ...fencedDeps(store),
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    persistSetupInputs: async () => {},
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
+  });
+  await service.setup(SETUP_INPUT);
+  const install = sshf.scripts.find((sc) => sc.includes("systemctl enable --now"));
+  assert.ok(install, "install script sent");
+  assert.match(install!, /^set -euo pipefail/);
+  assert.match(install!, /systemctl is-enabled --quiet lazeika-only-tc\.service \|\| \{ echo UNIT_NOT_ENABLED; exit 1; \}/);
+});
+
+test("reconcile forces notification hosts back to disabled", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  const service = createLazeikaService({
+    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    ...fencedDeps(store),
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    persistSetupInputs: async () => {},
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
+  });
+  await service.setup(SETUP_INPUT);
+  // Админ вручную включил один notification-host.
+  const notif = env.state.hosts.find((h) => h.isDisabled === true)!;
+  notif.isDisabled = false;
+  await service.setup(SETUP_INPUT);
+  assert.equal(notif.isDisabled, true, "notification-host принудительно выключен обратно");
+});

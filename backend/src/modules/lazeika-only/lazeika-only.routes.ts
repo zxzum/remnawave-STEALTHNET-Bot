@@ -116,7 +116,9 @@ lazeikaOnlyRouter.post("/reconcile", async (_req: Request, res: Response) => {
   try {
     const result = await service().setup({
       nodeUuid: config.lazeikaOnlyNodeUuid,
-      squadUuid: config.lazeikaOnlySquadUuid,
+      // Всегда AUTO-режим: если сохранённый squad удалён, reconcile пересоздаст его,
+      // а не упадёт со «squad не найден» на устаревшем UUID из настроек (§2 ревью).
+      squadUuid: null,
       speedMbit: config.lazeikaOnlySpeedMbit,
     });
     return res.json({ ok: true, ...result });

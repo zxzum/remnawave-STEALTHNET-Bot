@@ -53,6 +53,39 @@ export function ownedPrefs(): number[] {
   return Array.from({ length: TC_PREF_COUNT }, (_, i) => TC_PREF_BASE + i);
 }
 
+export type FilterSpec = {
+  pref: number;
+  protocol: "ip" | "ipv6";
+  ipProto: "tcp" | "udp";
+  direction: "ingress" | "egress";
+  policeIndex: number;
+};
+
+/**
+ * Эдинственный источник истины о порядке/содержимом фильтров — используется
+ * генератором скрипта И verify (§4 финального ревью): порядок совпадает by construction.
+ */
+export function expectedFilterSpecs(args: { port: number }): FilterSpec[] {
+  validatePort(args.port);
+  const specs: FilterSpec[] = [];
+  let seq = 0;
+  for (const protocol of ["ip", "ipv6"] as const) {
+    for (const direction of ["ingress", "egress"] as const) {
+      for (const ipProto of ["tcp", "udp"] as const) {
+        specs.push({
+          pref: TC_PREF_BASE + seq,
+          protocol,
+          ipProto,
+          direction,
+          policeIndex: direction === "ingress" ? TC_POLICE_INDEX_INGRESS : TC_POLICE_INDEX_EGRESS,
+        });
+        seq++;
+      }
+    }
+  }
+  return specs;
+}
+
 /**
  * Скрипт применения лимита. Идемпотентный:
  *  - миграция v1: удаляет legacy-pref'ы прежней версии (11001..11008) — они были

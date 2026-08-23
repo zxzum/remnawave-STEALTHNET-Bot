@@ -8,6 +8,7 @@ const {
   validatePort,
   validateSpeed,
   ownedPrefs,
+  expectedFilterSpecs,
   TC_PREF_BASE,
   TC_PREF_COUNT,
   TC_POLICE_INDEX_INGRESS,
@@ -83,4 +84,22 @@ test("systemd unit reruns the limiter after boot", () => {
   assert.match(unit, /After=network-online.target docker.service/);
   assert.match(unit, new RegExp(`ExecStart=.*\\nRemainAfterExit=yes`));
   assert.match(unit, /WantedBy=multi-user.target/);
+});
+
+test("expectedFilterSpecs matches generator order exactly", () => {
+  const script = buildTcScript({ iface: "eth0", port: 40001, speedMbit: 5 });
+  const specs = expectedFilterSpecs({ port: 40001 });
+  assert.equal(specs.length, TC_PREF_COUNT);
+  // Порядок в скрипте == порядок спецификации.
+  const prefsInScript = specs.map((sp) => sp.pref);
+  let cursor = 0;
+  for (const line of script.split("\n")) {
+    if (!line.includes("flower")) continue;
+    const m = /pref (\d+)/.exec(line);
+    if (m) {
+      assert.equal(Number(m[1]), specs[cursor]?.pref, `позиция ${cursor}`);
+      cursor++;
+    }
+  }
+  assert.equal(cursor, TC_PREF_COUNT, "все фильтры в порядке спецификации");
 });
