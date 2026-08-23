@@ -4,7 +4,7 @@
 
 Implemented for Лазейка ВПН.
 
-Commit: `cfaa812` (`chore: release 6.2.0`).
+Commit: `07374c5` (`chore: release 6.2.0`).
 
 ## Changes
 
