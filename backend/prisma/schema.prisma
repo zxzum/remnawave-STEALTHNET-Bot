@@ -323,6 +323,7 @@ model Payment {
   deviceCount              Int?                         @map("device_count") // сколько устройств куплено в этом платеже (1..tariff.maxDevices)
   proxyTariffId            String?                      @map("proxy_tariff_id")
   singboxTariffId          String?                      @map("singbox_tariff_id")
+  slotActivationState      String?                      @default("ELIGIBLE") @map("slot_activation_state")
   remnawaveUserId          String?                      @map("remnawave_user_id")
   metadata                 String?                      @db.Text // JSON
   extraOptionState         ExtraOptionApplicationState? @map("extra_option_state")

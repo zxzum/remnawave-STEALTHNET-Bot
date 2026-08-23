@@ -9,9 +9,6 @@ import { Router } from "express";
 import { createHash } from "crypto";
 import { prisma } from "../../db.js";
 import { getSystemConfig } from "../client/client.service.js";
-import { activateTariffByPaymentId } from "../tariff/tariff-activation.service.js";
-import { createProxySlotsByPaymentId } from "../proxy/proxy-slots-activation.service.js";
-import { createSingboxSlotsByPaymentId } from "../singbox/singbox-slots-activation.service.js";
 import { markPaymentPaid } from "../payment/mark-paid.service.js";
 
 function hasExtraOptionInMetadata(metadata: string | null): boolean {
@@ -23,11 +20,9 @@ function hasExtraOptionInMetadata(metadata: string | null): boolean {
     return false;
   }
 }
-import { distributeReferralRewards } from "../referral/referral.service.js";
-import { notifyBalanceToppedUp, notifyTariffActivated, notifyProxySlotsCreated, notifySingboxSlotsCreated } from "../notification/telegram-notify.service.js";
+import { notifyBalanceToppedUp, notifyTariffActivated } from "../notification/telegram-notify.service.js";
 import { recordPromoCodeUsageFromPayment } from "../payment/promo-code-usage.util.js";
 import { auditPaymentClientBotAlignment } from "../payment/payment-webhook-audit.util.js";
-import { isVpnSubscriptionPurchase } from "../trial/trial-purchase-lock.service.js";
 
 export const yoomoneyWebhooksRouter = Router();
 
@@ -200,82 +195,28 @@ yoomoneyWebhooksRouter.post("/yoomoney", async (req, res) => {
   }
 
   const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
-  if (isExtraOption) {
-    if (operationId) await prisma.payment.update({ where: { id: payment.id }, data: { externalId: operationId } });
-    await markPaymentPaid(payment.id);
-    return res.status(200).send("OK");
-  }
-  if (payment.status === "PAID") {
-    console.log("[YooMoney Webhook] Payment already processed", { paymentId: payment.id });
-    return res.status(200).send("OK");
-  }
-  const isTopUp = !isVpnSubscriptionPurchase(payment) && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
+  await prisma.payment.update({ where: { id: payment.id }, data: { externalId: operationId } });
 
-  if (isTopUp) {
-    await prisma.$transaction([
-      prisma.payment.update({
-        where: { id: payment.id },
-        data: { status: "PAID", paidAt: new Date(), externalId: operationId },
-      }),
-      prisma.client.update({
-        where: { id: payment.clientId },
-        data: { balance: { increment: amountNum } },
-      }),
-    ]);
+  const result = await markPaymentPaid(payment.id);
+  if (!result.ok) {
+    console.error("[YooMoney Webhook] Payment completion failed", { paymentId: payment.id, error: result.error });
+    return res.status(503).send("Retry");
+  }
+  await recordPromoCodeUsageFromPayment(payment.id);
+
+  if (result.balanceCredited) {
     console.log("[YooMoney Webhook] Payment PAID, balance credited (top-up)", {
       paymentId: payment.id,
       clientId: payment.clientId,
-      amount: amountNum,
+      amount: payment.amount,
       operationId,
       notificationType,
     });
-    await notifyBalanceToppedUp(payment.clientId, amountNum, currency || "RUB", "YooMoney").catch(() => {});
-  } else {
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: { status: "PAID", paidAt: new Date(), externalId: operationId },
-    });
-    await recordPromoCodeUsageFromPayment(payment.id);
-    console.log("[YooMoney Webhook] Payment PAID (tariff/option)", { paymentId: payment.id, operationId, notificationType });
-
-    if (payment.proxyTariffId) {
-      const proxyResult = await createProxySlotsByPaymentId(payment.id);
-      if (proxyResult.ok) {
-        console.log("[YooMoney Webhook] Proxy slots created", { paymentId: payment.id, slots: proxyResult.slotsCreated });
-        const tariff = await prisma.proxyTariff.findUnique({ where: { id: payment.proxyTariffId }, select: { name: true } });
-        await notifyProxySlotsCreated(payment.clientId, proxyResult.slotIds, tariff?.name ?? undefined).catch(() => {});
-      } else {
-        console.error("[YooMoney Webhook] Proxy slots creation failed", { paymentId: payment.id, error: proxyResult.error });
-      }
-    } else if (payment.singboxTariffId) {
-      const singboxResult = await createSingboxSlotsByPaymentId(payment.id);
-      if (singboxResult.ok) {
-        console.log("[YooMoney Webhook] Singbox slots created", { paymentId: payment.id, slots: singboxResult.slotsCreated });
-        const tariff = await prisma.singboxTariff.findUnique({ where: { id: payment.singboxTariffId }, select: { name: true } });
-        await notifySingboxSlotsCreated(payment.clientId, singboxResult.slotIds, tariff?.name ?? undefined).catch(() => {});
-      } else {
-        console.error("[YooMoney Webhook] Singbox slots creation failed", { paymentId: payment.id, error: singboxResult.error });
-      }
-    } else {
-      const activation = await activateTariffByPaymentId(payment.id);
-      if (activation.ok) {
-        console.log("[YooMoney Webhook] Tariff activated", { paymentId: payment.id });
-        await notifyTariffActivated(payment.clientId, payment.id).catch(() => {});
-      } else {
-        console.error("[YooMoney Webhook] Tariff activation failed", { paymentId: payment.id, error: (activation as { error?: string }).error });
-      }
-    }
+    await notifyBalanceToppedUp(payment.clientId, payment.amount, currency || "RUB", "YooMoney").catch(() => {});
+  } else if (!isExtraOption && result.activation?.ok && !payment.proxyTariffId && !payment.singboxTariffId) {
+    console.log("[YooMoney Webhook] Tariff activated", { paymentId: payment.id });
+    await notifyTariffActivated(payment.clientId, payment.id).catch(() => {});
   }
-
-  // сжигаем одноразовую персональную скидку после продуктовой покупки.
-  if (!isTopUp) {
-    const { extinguishOneTimeDiscount } = await import("../client/personal-discount.js");
-    await extinguishOneTimeDiscount(payment.clientId).catch(() => {});
-  }
-
-  await distributeReferralRewards(payment.id).catch((e) => {
-    console.error("[YooMoney Webhook] Referral distribution error", { paymentId: payment.id, error: e });
-  });
 
   return res.status(200).send("OK");
 });

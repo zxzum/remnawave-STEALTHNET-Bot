@@ -14,6 +14,7 @@ import { notifyProxySlotsCreated, notifySingboxSlotsCreated } from "../notificat
 import { auditPaymentClientBotAlignment } from "./payment-webhook-audit.util.js";
 import { extinguishOneTimeDiscount } from "../client/personal-discount.js";
 import { isPaidVpnPurchase, isVpnSubscriptionPurchase, markTrialUsedForPaidPurchase } from "../trial/trial-purchase-lock.service.js";
+import { isSharedTopUpPayment } from "./payment-completion-policy.js";
 
 function hasExtraOptionInMetadata(metadata: string | null): boolean {
   if (!metadata?.trim()) return false;
@@ -93,6 +94,9 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
     clientId: payment.clientId,
   });
   if (payment.status === "PAID") {
+    let recoveredActivation: MarkPaymentPaidResult["activation"];
+    let recoveredProxySlots: MarkPaymentPaidResult["proxySlots"];
+    let recoveredSingboxSlots: MarkPaymentPaidResult["singboxSlots"];
     if (isPaidVpnPurchase(payment)) {
       try {
         await markTrialUsedForPaidPurchase(payment.clientId);
@@ -103,6 +107,7 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
     }
     if (shouldRetryPaidExtraOption(payment.status, payment.metadata, payment.extraOptionState)) {
       const extraResult = await applyExtraOptionByPaymentId(paymentId);
+      recoveredActivation = extraResult;
       if (!extraResult.ok) {
         return { ok: false, payment, activation: extraResult, error: extraResult.error };
       }
@@ -114,6 +119,7 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
     if (shouldRetryPaidActivation(payment)) {
       try {
         const activation = await activateTariffByPaymentId(paymentId);
+        recoveredActivation = activation;
         if (!activation.ok) {
           return { ok: false, payment, activation, error: activation.error };
         }
@@ -132,6 +138,7 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
         const proxySlots = slotResult.ok
           ? { ok: true, slotsCreated: slotResult.slotsCreated, alreadyApplied: slotResult.alreadyApplied }
           : { ok: false, error: slotResult.error };
+        recoveredProxySlots = proxySlots;
         if (!slotResult.ok) return { ok: false, payment, proxySlots, error: slotResult.error };
         if (!slotResult.alreadyApplied) {
           const tariff = await prisma.proxyTariff.findUnique({ where: { id: payment.proxyTariffId }, select: { name: true } });
@@ -142,6 +149,7 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
         const singboxSlots = slotResult.ok
           ? { ok: true, slotsCreated: slotResult.slotsCreated, alreadyApplied: slotResult.alreadyApplied }
           : { ok: false, error: slotResult.error };
+        recoveredSingboxSlots = singboxSlots;
         if (!slotResult.ok) return { ok: false, payment, singboxSlots, error: slotResult.error };
         if (!slotResult.alreadyApplied) {
           const tariff = await prisma.singboxTariff.findUnique({ where: { id: payment.singboxTariffId }, select: { name: true } });
@@ -151,18 +159,26 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
     }
     const result = await distributeReferralRewards(paymentId);
     const updated = await prisma.payment.findUnique({ where: { id: paymentId } });
-    return { ok: true, payment: updated ?? payment, referral: result };
+    return {
+      ok: true,
+      payment: updated ?? payment,
+      referral: result,
+      activation: recoveredActivation,
+      proxySlots: recoveredProxySlots,
+      singboxSlots: recoveredSingboxSlots,
+    };
   }
   const now = new Date();
   const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
   const isVpnProduct = isVpnSubscriptionPurchase(payment);
-  const isTopUp =
-    (payment.provider === "yoomoney_form" || payment.provider === "platega" || payment.provider === "yookassa" || payment.provider === "rollypay") &&
-    !payment.tariffId &&
-    !payment.proxyTariffId &&
-    !payment.singboxTariffId &&
-    !isExtraOption &&
-    !isVpnProduct;
+  const isTopUp = isSharedTopUpPayment({
+    provider: payment.provider,
+    tariffId: payment.tariffId,
+    proxyTariffId: payment.proxyTariffId,
+    singboxTariffId: payment.singboxTariffId,
+    hasExtraOption: isExtraOption,
+    isVpnProduct,
+  });
 
   // Idempotent flip: PENDING → PAID. Если параллельный webhook (или повторный
   // ретрай провайдера) уже зафлипнул — count=0, сюда не лезем второй раз.

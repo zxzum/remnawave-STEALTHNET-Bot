@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { isSharedTopUpPayment } from "./payment-completion-policy.js";
 
 async function readRollypayRoute(): Promise<string> {
   const source = await readFile(new URL("../client/client.routes.ts", import.meta.url), "utf8");
@@ -12,18 +13,14 @@ async function readRollypayRoute(): Promise<string> {
 
 test("RollyPay top-ups use the centralized idempotent balance-credit classification", async () => {
   const source = await readFile(new URL("./mark-paid.service.ts", import.meta.url), "utf8");
-  const classificationStart = source.indexOf("const isTopUp =");
-  const classificationEnd = source.indexOf("\n\n  // Idempotent flip", classificationStart);
-  assert.ok(classificationStart >= 0);
-  assert.ok(classificationEnd > classificationStart);
-
-  const classification = source.slice(classificationStart, classificationEnd);
-  assert.match(classification, /payment\.provider === "rollypay"/);
-  assert.match(classification, /!payment\.tariffId/);
-  assert.match(classification, /!payment\.proxyTariffId/);
-  assert.match(classification, /!payment\.singboxTariffId/);
-  assert.match(classification, /!isExtraOption/);
-  assert.match(classification, /!isVpnProduct/);
+  assert.equal(isSharedTopUpPayment({
+    provider: "rollypay",
+    tariffId: null,
+    proxyTariffId: null,
+    singboxTariffId: null,
+    hasExtraOption: false,
+    isVpnProduct: false,
+  }), true);
 
   assert.match(source, /FOR UPDATE/);
   assert.match(source, /fresh\.status !== "PENDING"/);

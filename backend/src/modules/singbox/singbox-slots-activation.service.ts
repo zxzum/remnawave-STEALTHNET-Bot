@@ -6,6 +6,7 @@
 import { randomBytes } from "crypto";
 import { randomUUID } from "crypto";
 import { prisma } from "../../db.js";
+import { decideSlotActivation } from "../payment/payment-completion-policy.js";
 
 export type CreateSingboxSlotsResult =
   | { ok: true; slotsCreated: number; slotIds: string[]; alreadyApplied?: boolean }
@@ -25,7 +26,7 @@ export async function createSingboxSlotsByPaymentId(paymentId: string): Promise<
       await tx.$queryRawUnsafe('SELECT "id" FROM "payments" WHERE "id" = $1 FOR UPDATE', paymentId);
       const payment = await tx.payment.findUnique({
         where: { id: paymentId },
-        select: { singboxTariffId: true, clientId: true },
+        select: { singboxTariffId: true, clientId: true, slotActivationState: true },
       });
       if (!payment?.singboxTariffId) {
         return { ok: false, error: "Sing-box тариф не привязан к платежу", status: 400 };
@@ -36,8 +37,19 @@ export async function createSingboxSlotsByPaymentId(paymentId: string): Promise<
         select: { id: true },
         orderBy: { createdAt: "asc" },
       });
-      if (existing.length > 0) {
+      const decision = decideSlotActivation({
+        linkedSlotCount: existing.length,
+        state: payment.slotActivationState,
+      });
+      if (decision === "ALREADY_APPLIED") {
         return { ok: true, slotsCreated: existing.length, slotIds: existing.map((slot) => slot.id), alreadyApplied: true };
+      }
+      if (decision === "LEGACY_BLOCKED") {
+        return {
+          ok: false,
+          error: "Автоматическая повторная выдача отключена для legacy-платежа без надёжной связи со слотами",
+          status: 409,
+        };
       }
 
       const tariff = await tx.singboxTariff.findUnique({ where: { id: payment.singboxTariffId } });

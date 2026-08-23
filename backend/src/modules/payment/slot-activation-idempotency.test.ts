@@ -25,3 +25,22 @@ test("slot linkage migration is additive and forward-only", async () => {
   assert.match(sql, /ADD COLUMN IF NOT EXISTS/);
   assert.doesNotMatch(sql, /DROP COLUMN|ALTER COLUMN .* NOT NULL/i);
 });
+
+test("slot activation barrier migration is replay-safe and deterministically blocks legacy PAID payments", async () => {
+  const schema = await readFile(new URL("../../../prisma/schema.prisma", import.meta.url), "utf8");
+  assert.match(schema, /slotActivationState\s+String\?\s+@default\("ELIGIBLE"\)\s+@map\("slot_activation_state"\)/);
+
+  const { readdir, readFile: read } = await import("node:fs/promises");
+  const migrations = await readdir(new URL("../../../prisma/migrations", import.meta.url));
+  const migration = migrations.find((name) => name.includes("payment_slot_activation_barrier"));
+  assert.ok(migration);
+  const sql = await read(new URL(`../../../prisma/migrations/${migration}/migration.sql`, import.meta.url), "utf8");
+
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS "slot_activation_state" TEXT/);
+  assert.match(sql, /SET "slot_activation_state" = 'LEGACY_BLOCKED'[\s\S]*"status" = 'PAID'/);
+  assert.match(sql, /SET "slot_activation_state" = 'ELIGIBLE'[\s\S]*"status" = 'PENDING'/);
+  assert.equal(sql.match(/"slot_activation_state" IS NULL/g)?.length, 2);
+  assert.match(sql, /ALTER COLUMN "slot_activation_state" SET DEFAULT 'ELIGIBLE'/);
+  assert.doesNotMatch(sql, /UPDATE\s+"proxy_slots"|UPDATE\s+"singbox_slots"/i);
+  assert.doesNotMatch(sql, /DROP COLUMN|ALTER COLUMN .* NOT NULL/i);
+});

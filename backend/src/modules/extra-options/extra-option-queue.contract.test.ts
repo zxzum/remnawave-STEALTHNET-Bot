@@ -47,7 +47,7 @@ test("balance purchase is atomic and refunds only a CAS-safe pre-PENDING failure
 test("maintenance drains durable paid extra-option states", async () => {
   const source = await readFile(new URL("../subscription/subscription-maintenance.cron.ts", import.meta.url), "utf8");
   assert.match(source, /drainPaidExtraOptionQueue/);
-  assert.match(source, /extraOptions:\s*await extraOptions/);
+  assert.match(source, /extraOptions:\s*await guarded\("extraOptions", \(\) => extraOptions/);
 });
 
 test("LavaTop keeps auth, webhook amount, and recurring renewal semantics", async () => {
@@ -55,8 +55,11 @@ test("LavaTop keeps auth, webhook amount, and recurring renewal semantics", asyn
   assert.ok(source.indexOf("verifyLavatopWebhookAuth") < source.indexOf("parseLavatopWebhook(body"));
   const recurring = source.slice(source.indexOf("async function handleRecurringRenewal"), source.indexOf("/** POST /api/webhooks/lavatop"));
   assert.match(recurring, /const amount = event\.amount \?\? 0/);
-  assert.match(recurring, /status:\s*"PAID"/);
-  assert.match(recurring, /await activatePayment\(newPaymentId\)/);
+  assert.match(recurring, /delete metadata\.subscriptionActivated/);
+  assert.match(recurring, /delete metadata\.subscriptionId/);
+  assert.match(recurring, /subscriptionId:\s*parent\.subscriptionId/);
+  assert.match(recurring, /status:\s*"PENDING"/);
+  assert.match(recurring, /return activatePayment\(newPaymentId\)/);
 });
 
 test("every direct extra-option caller notifies only for a fresh APPLIED outcome", async () => {
