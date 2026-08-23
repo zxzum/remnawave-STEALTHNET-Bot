@@ -16,7 +16,7 @@ import { timingSafeEqual } from "node:crypto";
 import { getYookassaPayment, validateYookassaPayment } from "../yookassa/yookassa.service.js";
 import { prisma } from "../../db.js";
 import { getSystemConfig } from "../client/client.service.js";
-import { markPaymentPaid } from "../payment/mark-paid.service.js";
+import { markPaymentPaid, shouldRetryPaidActivation } from "../payment/mark-paid.service.js";
 import { notifyBalanceToppedUp, notifyTariffActivated } from "../notification/telegram-notify.service.js";
 import { createNalogReceipt } from "../nalog/nalog.service.js";
 import { recordPromoCodeUsageFromPayment } from "../payment/promo-code-usage.util.js";
@@ -178,9 +178,9 @@ yookassaWebhooksRouter.post("/yookassa", async (req, res) => {
       externalId,
       error: paymentLookup.error,
       status: paymentLookup.status,
-      retryable: paymentLookup.retryable,
+      kind: paymentLookup.kind,
     });
-    if (paymentLookup.retryable) {
+    if (paymentLookup.kind === "transient") {
       return res.status(503).send("Retry");
     }
     return res.status(200).send("OK");
@@ -201,7 +201,7 @@ yookassaWebhooksRouter.post("/yookassa", async (req, res) => {
 
   const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
 
-  if (payment.status === "PAID" && !isExtraOption) {
+  if (payment.status === "PAID" && !isExtraOption && !shouldRetryPaidActivation(payment)) {
     console.log("[YooKassa Webhook] Already processed", { paymentId });
     return res.status(200).send("OK");
   }

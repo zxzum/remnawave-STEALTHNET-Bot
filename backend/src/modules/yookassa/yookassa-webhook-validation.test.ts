@@ -18,7 +18,7 @@ const yookassa = await import("./yookassa.service.js") as unknown as {
   ) => { ok: boolean };
   yookassaPaymentLookupFailure?: (error: string, status?: number) => {
     ok: false;
-    retryable: boolean;
+    kind: "transient" | "remote_rejection" | "not_configured";
     status: number;
     error: string;
   };
@@ -43,12 +43,16 @@ test("requires remote metadata payment_id when no local external id exists", () 
   assert.equal(result?.ok, false);
 });
 
-test("keeps YooKassa lookup failures distinguishable and retryable", () => {
+test("distinguishes transient YooKassa failures from remote rejection", () => {
   assert.equal(typeof yookassa.yookassaPaymentLookupFailure, "function");
-  const result = yookassa.yookassaPaymentLookupFailure?.("fetch failed");
-  assert.equal(result?.ok, false);
-  assert.equal(result?.retryable, true);
-  assert.equal(result?.status, 503);
+  const transient = yookassa.yookassaPaymentLookupFailure?.("fetch failed", 503);
+  const rejected = yookassa.yookassaPaymentLookupFailure?.("not found", 404);
+  assert.equal(transient?.ok, false);
+  assert.equal(transient?.kind, "transient");
+  assert.equal(transient?.status, 503);
+  assert.equal(rejected?.ok, false);
+  assert.equal(rejected?.kind, "remote_rejection");
+  assert.equal(rejected?.status, 404);
 });
 
 test("returns retryable status for transient YooKassa lookup failures", async () => {
@@ -59,8 +63,9 @@ test("returns retryable status for transient YooKassa lookup failures", async ()
   assert.notEqual(validationStart, -1);
   const lookupBlock = source.slice(lookupStart, validationStart);
   assert.match(lookupBlock, /if \(!paymentLookup\.ok\)/);
-  assert.match(lookupBlock, /paymentLookup\.retryable/);
+  assert.match(lookupBlock, /paymentLookup\.kind === "transient"/);
   assert.match(lookupBlock, /res\.status\(503\)/);
+  assert.match(lookupBlock, /res\.status\(200\)/);
 });
 
 test("returns retryable status before post-completion side effects", async () => {
@@ -72,4 +77,13 @@ test("returns retryable status before post-completion side effects", async () =>
   assert.notEqual(failureStatus, -1);
   assert.notEqual(promoSideEffect, -1);
   assert.ok(failureStatus < promoSideEffect);
+});
+
+test("does not short-circuit a PAID payment with incomplete activation", async () => {
+  const source = await readFile(new URL("../webhooks/yookassa.webhooks.routes.ts", import.meta.url), "utf8");
+  const guardStart = source.indexOf('if (payment.status === "PAID" && !isExtraOption');
+  const markStart = source.indexOf("const result = await markPaymentPaid", guardStart);
+  assert.notEqual(guardStart, -1);
+  assert.notEqual(markStart, -1);
+  assert.match(source.slice(guardStart, markStart), /!shouldRetryPaidActivation\(payment\)/);
 });

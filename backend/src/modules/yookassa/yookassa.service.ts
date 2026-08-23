@@ -207,12 +207,12 @@ export type YookassaPayment = {
 
 export type YookassaPaymentLookup =
   | { ok: true; payment: YookassaPayment }
-  | { ok: false; retryable: boolean; status: number; error: string };
+  | { ok: false; kind: "transient" | "remote_rejection" | "not_configured"; status: number; error: string };
 
 export function yookassaPaymentLookupFailure(error: string, status = 503): Extract<YookassaPaymentLookup, { ok: false }> {
   return {
     ok: false,
-    retryable: status === 429 || status >= 500,
+    kind: status === 429 || status >= 500 ? "transient" : "remote_rejection",
     status,
     error,
   };
@@ -223,7 +223,7 @@ export async function getYookassaPayment(id: string, config: YookassaConfig): Pr
   const shopId = config.yookassaShopId?.trim() ?? "";
   const secretKey = config.yookassaSecretKey?.trim() ?? "";
   if (!paymentId || !shopId || !secretKey) {
-    return { ok: false, retryable: false, status: 503, error: "YooKassa not configured" };
+    return { ok: false, kind: "not_configured", status: 503, error: "YooKassa not configured" };
   }
 
   const controller = new AbortController();

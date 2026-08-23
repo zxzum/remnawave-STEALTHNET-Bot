@@ -25,6 +25,32 @@ function hasExtraOptionInMetadata(metadata: string | null): boolean {
   }
 }
 
+function parsePaymentMetadata(metadata: string | null): Record<string, unknown> {
+  if (!metadata?.trim()) return {};
+  try {
+    const parsed = JSON.parse(metadata) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+export function shouldRetryPaidActivation(payment: {
+  status: string;
+  provider?: string | null;
+  tariffId?: string | null;
+  metadata?: string | null;
+}): boolean {
+  if (payment.status !== "PAID" || hasExtraOptionInMetadata(payment.metadata ?? null)) return false;
+  if (!isVpnSubscriptionPurchase(payment)) return false;
+  const metadata = parsePaymentMetadata(payment.metadata ?? null);
+  return metadata.subscriptionActivated !== true
+    || typeof metadata.subscriptionId !== "string"
+    || !metadata.subscriptionId.trim();
+}
+
 export function shouldRetryPaidExtraOption(
   status: string,
   metadata: string | null,
@@ -74,6 +100,21 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
       if (extraResult.outcome === "APPLIED") {
         const { notifyExtraOptionApplied } = await import("../notification/telegram-notify.service.js");
         await notifyExtraOptionApplied(payment.clientId, paymentId).catch(() => {});
+      }
+    }
+    if (shouldRetryPaidActivation(payment)) {
+      try {
+        const activation = await activateTariffByPaymentId(paymentId);
+        if (!activation.ok) {
+          return { ok: false, payment, activation, error: activation.error };
+        }
+        await extinguishOneTimeDiscount(payment.clientId);
+      } catch (error) {
+        return {
+          ok: false,
+          payment,
+          error: error instanceof Error ? error.message : String(error),
+        };
       }
     }
     const result = await distributeReferralRewards(paymentId);
@@ -174,6 +215,10 @@ export async function markPaymentPaid(paymentId: string): Promise<MarkPaymentPai
     }
   } else if (payment.tariffId || isVpnProduct) {
     activation = await activateTariffByPaymentId(paymentId);
+    if (!activation.ok) {
+      const updated = await prisma.payment.findUnique({ where: { id: paymentId } });
+      return { ok: false, payment: updated ?? payment, activation, error: activation.error };
+    }
   } else if (payment.proxyTariffId) {
     const proxyResult = await createProxySlotsByPaymentId(paymentId);
     if (proxyResult.ok) {
