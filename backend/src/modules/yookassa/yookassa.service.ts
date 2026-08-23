@@ -186,6 +186,81 @@ export function isYookassaConfigured(shopId: string | null, secretKey: string | 
   return Boolean(shopId?.trim() && secretKey?.trim());
 }
 
+export type YookassaConfig = {
+  yookassaShopId?: string | null;
+  yookassaSecretKey?: string | null;
+};
+
+export type YookassaPayment = {
+  id?: string;
+  status?: string;
+  amount?: { value?: string; currency?: string };
+  metadata?: Record<string, string>;
+  payment_method?: {
+    type?: string;
+    id?: string;
+    saved?: boolean;
+    title?: string;
+    card?: { last4?: string; card_type?: string };
+  };
+};
+
+export async function getYookassaPayment(id: string, config: YookassaConfig): Promise<YookassaPayment | null> {
+  const paymentId = id.trim();
+  const shopId = config.yookassaShopId?.trim() ?? "";
+  const secretKey = config.yookassaSecretKey?.trim() ?? "";
+  if (!paymentId || !shopId || !secretKey) return null;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const auth = Buffer.from(`${shopId}:${secretKey}`).toString("base64");
+    const proxy = await getProxyUrl("payments");
+    const response = await proxyFetch(`${YOOKASSA_API}/payments/${encodeURIComponent(paymentId)}`, {
+      headers: { Authorization: `Basic ${auth}` },
+      signal: controller.signal,
+    }, proxy);
+    if (!response.ok) return null;
+    return (await response.json()) as YookassaPayment;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+export type YookassaPaymentValidation =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+export function validateYookassaPayment(
+  localPayment: { id: string; externalId?: string | null; amount: number; currency: string },
+  remotePayment: YookassaPayment | null,
+  expectedId: string,
+): YookassaPaymentValidation {
+  const providerId = expectedId.trim();
+  if (!remotePayment) return { ok: false, reason: "payment_not_confirmed" };
+  if (!providerId || remotePayment.id !== providerId) return { ok: false, reason: "payment_id_mismatch" };
+  if (localPayment.externalId?.trim() && localPayment.externalId.trim() !== remotePayment.id) {
+    return { ok: false, reason: "stored_external_id_mismatch" };
+  }
+  if (remotePayment.metadata?.payment_id && remotePayment.metadata.payment_id !== localPayment.id) {
+    return { ok: false, reason: "metadata_payment_id_mismatch" };
+  }
+  if (remotePayment.status !== "succeeded") return { ok: false, reason: "payment_not_succeeded" };
+
+  const remoteAmount = Number(remotePayment.amount?.value);
+  const localAmount = Number(localPayment.amount);
+  if (!Number.isFinite(remoteAmount) || !Number.isFinite(localAmount) || Math.round(remoteAmount * 100) !== Math.round(localAmount * 100)) {
+    return { ok: false, reason: "payment_amount_mismatch" };
+  }
+
+  const remoteCurrency = remotePayment.amount?.currency?.trim().toUpperCase();
+  const localCurrency = localPayment.currency.trim().toUpperCase();
+  if (!remoteCurrency || remoteCurrency !== localCurrency) return { ok: false, reason: "payment_currency_mismatch" };
+  return { ok: true };
+}
+
 // ────────────────────────────────────────────
 // Автоплатёж по сохранённому способу оплаты
 // ────────────────────────────────────────────

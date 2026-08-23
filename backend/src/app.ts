@@ -302,6 +302,16 @@ app.get("/_spa", renderSpaIndex);
 app.use("/api/uploads", express.static(path.join("/app/uploads"), {
   maxAge: "30d",
   immutable: true,
+  setHeaders: (res, filePath) => {
+    // Загруженные файлы лежат на домене панели: запретить выполнение
+    // содержимого даже для уже сохранённых небезопасных вложений.
+    res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    if (/\.svgz?$/i.test(filePath)) {
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Content-Disposition", "attachment");
+    }
+  },
 }));
 
 // Маркетплейс между админами: всегда монтируем, но хаб-роуты включаются только
