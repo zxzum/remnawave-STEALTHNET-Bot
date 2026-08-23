@@ -34,6 +34,21 @@ test("accepts a paid remote payment with canonical 100.00 amounts", () => {
   assert.deepEqual(validateRollypayPayment(localPayment, webhook, remotePayment), { ok: true });
 });
 
+test("accepts numeric provider amounts without rounding", () => {
+  assert.deepEqual(
+    validateRollypayPayment(localPayment, { ...webhook, amount: 100 }, { ...remotePayment, amount: 100 }),
+    { ok: true },
+  );
+  assert.deepEqual(
+    validateRollypayPayment(
+      { ...localPayment, amount: 99.9 },
+      { ...webhook, amount: 99.9 },
+      { ...remotePayment, amount: 99.9 },
+    ),
+    { ok: true },
+  );
+});
+
 test("rejects a remote payment id that differs from the signed webhook", () => {
   const result = validateRollypayPayment(localPayment, webhook, { ...remotePayment, payment_id: "rp-other" });
   assert.equal(result.ok, false);
@@ -49,8 +64,8 @@ test("rejects a remote amount that differs from the local payment", () => {
   assert.equal(result.ok, false);
 });
 
-test("rejects extra amount precision instead of rounding it to cents", () => {
-  const result = validateRollypayPayment(localPayment, webhook, { ...remotePayment, amount: "99.996" });
+test("rejects numeric extra amount precision instead of rounding it to cents", () => {
+  const result = validateRollypayPayment(localPayment, webhook, { ...remotePayment, amount: 99.996 });
   assert.equal(result.ok, false);
 });
 

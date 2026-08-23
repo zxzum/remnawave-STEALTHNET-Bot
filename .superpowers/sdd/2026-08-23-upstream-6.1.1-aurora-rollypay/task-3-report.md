@@ -49,3 +49,22 @@ Green/final checks:
 - Focused RollyPay tests: 13 passed, 0 failed.
 - `rtk npm run build` in `backend`: passed (`tsc` exit 0).
 - Self-review: only the shared lookup classifier, shared amount policy, focused tests, and this report changed; no settings/UI work was added.
+
+## Fix round 2/5
+
+- Numeric provider amounts are now accepted when they have at most two decimal places: `100` normalizes to `100.00` and `99.9` to `99.90` without rounding. Numeric `99.996` remains non-fulfilling.
+- String provider amounts still require the exact canonical `\d+\.\d{2}` form.
+
+### TDD evidence
+
+Red:
+
+- Focused command: `rtk npx --no-install tsx --test src/modules/rollypay/rollypay.service.test.ts src/modules/webhooks/rollypay-webhook-policy.test.ts`
+- Result: 14 tests, 13 passed, 1 failed — numeric provider amounts were rejected by the string-only validator.
+
+Green/final checks:
+
+- Focused RollyPay tests: 14 passed, 0 failed.
+- `rtk npm run build` in `backend`: passed (`tsc` exit 0).
+- One initial build caught and was fixed before final verification: TypeScript correctly required narrowing the numeric amount branch from `string | number | undefined`.
+- Self-review: only numeric amount normalization, its focused tests, and this report changed; mismatch still returns non-fulfilling validation and no settings/UI scope was added.

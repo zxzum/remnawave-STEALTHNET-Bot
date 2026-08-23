@@ -217,7 +217,10 @@ export type RollypayPaymentValidation =
   | { ok: false; reason: string };
 
 function canonicalFiatAmount(value: string | number | undefined): string | null {
-  return typeof value === "string" && /^\d+\.\d{2}$/.test(value) ? value : null;
+  if (typeof value === "string") return /^\d+\.\d{2}$/.test(value) ? value : null;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  const formatted = value.toFixed(2);
+  return Number(formatted) === value ? formatted : null;
 }
 
 export function validateRollypayPayment(
