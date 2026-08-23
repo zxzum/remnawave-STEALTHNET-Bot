@@ -10,7 +10,7 @@ import { createReadStream } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const BACKUPS_DIR = process.env.BACKUPS_DIR || path.join(process.cwd(), "backups");
+export const BACKUPS_DIR = process.env.BACKUPS_DIR || path.join(process.cwd(), "backups");
 
 export interface DbConnection {
   host: string;
@@ -126,6 +126,46 @@ export async function listBackups(): Promise<BackupItem[]> {
       }
     }
   }
+}
+
+/** Удаляет только просроченные .sql-файлы, находящиеся внутри BACKUPS_DIR. */
+export async function deleteExpiredBackups(retentionDays: number, now = new Date()): Promise<number> {
+  if (!Number.isFinite(retentionDays) || retentionDays < 0) {
+    throw new Error("retentionDays must be a non-negative number");
+  }
+  const cutoff = now.getTime() - retentionDays * 24 * 60 * 60 * 1000;
+  const base = path.resolve(BACKUPS_DIR);
+  let deleted = 0;
+
+  async function walkDir(dir: string, prefix: string): Promise<void> {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const relativePath = prefix ? path.join(prefix, entry.name) : entry.name;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walkDir(fullPath, relativePath);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".sql")) continue;
+
+      const resolvedPath = resolveBackupPath(relativePath);
+      if (!resolvedPath) continue;
+      const relativeToBase = path.relative(base, path.resolve(resolvedPath));
+      if (relativeToBase.startsWith("..") || path.isAbsolute(relativeToBase)) continue;
+      const file = await stat(resolvedPath);
+      if (file.mtime.getTime() < cutoff) {
+        await rm(resolvedPath, { force: true });
+        deleted++;
+      }
+    }
+  }
+
+  try {
+    await walkDir(BACKUPS_DIR, "");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return deleted;
 }
 
 /** Безопасно разрешает относительный путь к файлу бэкапа; возвращает полный путь или null */

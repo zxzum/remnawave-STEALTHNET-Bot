@@ -67,6 +67,7 @@ services:
       - /etc/ssh:/host-etc/ssh
       - /proc:/host-proc:ro
       - uploads_data:/app/uploads
+      - backups_data:/app/backups
       # 25.05.2026, WolfVPN — shared с broadcast-worker: api сохраняет файлы рассылок сюда,
       # worker читает.
       - broadcast_attachments:/data/broadcast-attachments
@@ -201,6 +202,7 @@ volumes:
   postgres_data:
   frontend_dist:
   uploads_data:
+  backups_data:
   certbot_www:
   certbot_certs:
   # 25.05.2026, WolfVPN — shared между api и broadcast-worker.

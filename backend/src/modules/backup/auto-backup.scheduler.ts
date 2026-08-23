@@ -1,11 +1,12 @@
 import cron, { type ScheduledTask } from "node-cron";
 import { getSystemConfig } from "../client/client.service.js";
-import { parseDatabaseUrl, saveBackupToFile } from "./backup.service.js";
+import { deleteExpiredBackups, parseDatabaseUrl, saveBackupToFile } from "./backup.service.js";
 import { readFile } from "node:fs/promises";
 import { proxyFetch } from "../proxy-util/proxy-fetch.js";
 import { getProxyUrl } from "../proxy-util/get-proxy-url.js";
 
 const DEFAULT_CRON = "0 7 * * *";
+const BACKUP_RETENTION_DAYS = 30;
 const LOG = "[auto-backup]";
 
 let currentTask: ScheduledTask | null = null;
@@ -69,6 +70,12 @@ async function runAutoBackup(): Promise<void> {
   console.log(`${LOG} Creating backup...`);
   try {
     const { fullPath, filename } = await saveBackupToFile(db);
+    try {
+      const deleted = await deleteExpiredBackups(BACKUP_RETENTION_DAYS);
+      if (deleted > 0) console.log(`${LOG} Removed ${deleted} expired backup(s)`);
+    } catch (e) {
+      console.error(`${LOG} Retention cleanup failed:`, e);
+    }
     const fileBuffer = await readFile(fullPath);
     const sizeMb = (fileBuffer.length / 1024 / 1024).toFixed(2);
     const now = new Date().toISOString().slice(0, 19).replace("T", " ");
