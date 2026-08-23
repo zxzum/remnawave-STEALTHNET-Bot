@@ -51,3 +51,20 @@ Implemented for Лазейка ВПН.
 ## Round 1/5 commit
 
 - `e66d3af` (`fix: close RollyPay Task 4 payment findings`)
+
+## Round 2/5 remediation
+
+- RollyPay extra-option purchases now validate an explicit `targetSubscriptionId` before any local PENDING payment or external RollyPay payment is created.
+- Validation requires an existing, non-deletion-requested subscription owned by or gifted to the authenticated client; foreign, stale, and missing targets return `400` with no payment row.
+- An omitted target keeps the existing default-primary behavior.
+
+## Round 2/5 verification
+
+- Focused RollyPay contracts (rounds 1–2): 5 passed.
+- Full backend tests: 31 passed.
+- Backend build: passed.
+- `git diff --check`: passed.
+
+## Round 2/5 commit
+
+- `c9f8cf4` (`fix: validate RollyPay option targets`)
