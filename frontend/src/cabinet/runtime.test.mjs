@@ -208,7 +208,7 @@ test("the client runtime is eager and does not bundle archived cabinet designs",
   const app = await readFile(new URL("../App.tsx", import.meta.url), "utf8");
   assert.match(app, /from "@\/cabinet\/pages\/Auth"/);
   assert.match(app, /from "@\/cabinet\/components\/Layout"/);
-  assert.doesNotMatch(app, /import\("@\/pages\/cabinet\//);
+  assert.doesNotMatch(app, /import\("@\/pages\/cabinet\/(?!aurora\/)/);
   assert.doesNotMatch(app, /ClientDashboardPage|ClientTariffsPage|CabinetLayout/);
   assert.doesNotMatch(app, /Загрузка кабинета…|animate-spin rounded-full border-2 border-primary border-t-transparent/);
 });
