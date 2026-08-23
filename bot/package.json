@@ -1,6 +1,6 @@
 {
   "name": "stealthnet-bot",
-  "version": "5.2.0",
+  "version": "6.2.0",
   "description": "Лазейка ВПН — Telegram-бот для продажи подписок; историческая база: STEALTHNET",
   "type": "module",
   "engines": {

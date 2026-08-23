@@ -3504,7 +3504,7 @@ adminRouter.get("/settings", asyncRoute(async (_req, res) => {
 
 /** Версия панели — для мониторинга. Под auth, чтобы не светить наружу. */
 adminRouter.get("/version", asyncRoute(async (_req, res) => {
-  return res.json({ version: "5.2.0" });
+  return res.json({ version: "6.2.0" });
 }));
 
 /**

@@ -77,7 +77,7 @@ async function main() {
   registerCron({ name: "marketplace-heartbeat", cron: "*/10 * * * *", description: "Heartbeat в маркетплейс-хаб" });
 
   const server = app.listen(env.PORT, "0.0.0.0", () => {
-    console.log(`API v5.2.0 listening on port ${env.PORT}`);
+    console.log(`API v6.2.0 listening on port ${env.PORT}`);
   });
 
   const shutdown = async () => {
