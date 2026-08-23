@@ -72,7 +72,8 @@ export function RemnaHostsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
-  const [tagFilter, setTagFilter] = useState<string | null>(null);
+  // Ссылка из настроек Lazeika-Only: /admin/remna-hosts?tag=LAZEIKA_ONLY → фильтр применён сразу.
+  const [tagFilter, setTagFilter] = useState<string | null>(() => new URLSearchParams(window.location.search).get("tag"));
   const toggleSel = (uuid: string) => setSelected((prev) => { const n = new Set(prev); n.has(uuid) ? n.delete(uuid) : n.add(uuid); return n; });
   const bulkAction = async (action: "enable" | "disable" | "delete") => {
     const uuids = [...selected];

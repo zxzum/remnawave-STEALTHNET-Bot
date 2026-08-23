@@ -81,8 +81,10 @@ export type LazeikaConfig = {
   nodeUuid: string | null;
   squadUuid: string | null;
   messageTemplate: string;
-  /** Инфраструктура полностью настроена — без этого grace не выдаётся. */
+  /** Инфраструктура полностью настроена И совпадает с активными настройками. */
   ready: boolean;
+  /** Настройки (нода/squad) разошлись с resource_state → нужен reconcile. */
+  settingsInSync: boolean;
 };
 
 type SystemConfigLike = {
@@ -102,20 +104,28 @@ export async function getLazeikaConfig(
     systemConfig ??
     ((await import("../client/client.service.js").then((m) => m.getSystemConfig())) as SystemConfigLike);
   const state = await loadResourceState();
+  // Ключ настроек может отстать от resource_state (авто-создание squad в setup) — берём сохранённый.
+  const effectiveSquadUuid = (cfg.lazeikaOnlySquadUuid ?? "").trim() || state.squadUuid || null;
+  const settingsInSync =
+    (!cfg.lazeikaOnlyNodeUuid || cfg.lazeikaOnlyNodeUuid === state.nodeUuid)
+    && (!cfg.lazeikaOnlySquadUuid || cfg.lazeikaOnlySquadUuid === state.squadUuid);
   const ready =
     state.status === "READY"
     && Boolean(state.squadUuid)
     && Boolean(state.profileUuid)
-    && Boolean(state.managedInboundUuid);
+    && Boolean(state.managedInboundUuid)
+    // Админ переключил squad/ноду в настройках, но не прогнал reconcile →
+    // выдавать grace в непроверенный squad нельзя.
+    && settingsInSync;
   return {
     enabled: cfg.lazeikaOnlyEnabled === true,
     days: Math.min(365, Math.max(1, Math.trunc(cfg.lazeikaOnlyDays ?? 7))),
     speedMbit: Math.min(1000, Math.max(1, Math.trunc(cfg.lazeikaOnlySpeedMbit ?? 5))),
     nodeUuid: cfg.lazeikaOnlyNodeUuid ?? null,
-    // Ключ настроек может отстать от resource_state (авто-создание squad в setup) — берём сохранённый.
-    squadUuid: (cfg.lazeikaOnlySquadUuid ?? "").trim() || state.squadUuid || null,
+    squadUuid: effectiveSquadUuid,
     messageTemplate: cfg.lazeikaOnlyMessageTemplate || DEFAULT_LAZEIKA_MESSAGE_TEMPLATE,
     ready,
+    settingsInSync,
   };
 }
 

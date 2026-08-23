@@ -212,6 +212,7 @@ test("setup from clean state creates exactly one profile, squad, working host an
     saveState: store.saveState,
     persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
+    beginSetup: async () => true,
   });
 
   const result = await service.setup(SETUP_INPUT);
@@ -254,6 +255,7 @@ test("second setup does not duplicate resources", async () => {
     remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
+    beginSetup: async () => true,
   });
   await service.setup(SETUP_INPUT);
   const snapshot = {
@@ -279,6 +281,7 @@ test("manual squad containing foreign inbounds is rejected without changes", asy
     remna: env.remna, ssh: createSshFake().ssh, sshEnvLoader: () => SSH_ENV,
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
+    beginSetup: async () => true,
   });
   await assert.rejects(
     () => service.setup({ ...SETUP_INPUT, squadUuid: MANUAL_SQUAD_UUID }),
@@ -296,6 +299,7 @@ test("rollback restores the node after a Remna profile failure", async () => {
     remna: env.remna, ssh: createSshFake().ssh, sshEnvLoader: () => SSH_ENV,
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
+    beginSetup: async () => true,
   });
   await assert.rejects(() => service.setup(SETUP_INPUT), /profile create failed/);
   assert.equal(store.state.status, "ERROR");
@@ -313,6 +317,7 @@ test("rollback removes only resources created by the failed run after an SSH fai
     remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
+    beginSetup: async () => true,
   });
   const persistedSquadUuids: Array<string | null> = [];
   // переопределяем сервис с записью persistSquadUuid
@@ -321,6 +326,7 @@ test("rollback removes only resources created by the failed run after an SSH fai
     loadState: store.loadState, saveState: store.saveState,
     persistProfileUuid: async () => {},
     persistSquadUuid: async (uuid) => { persistedSquadUuids.push(uuid); },
+    beginSetup: async () => true,
   });
   await assert.rejects(() => service2.setup(SETUP_INPUT), /tc-фильтры/);
   assert.equal(store.state.status, "ERROR");
@@ -352,6 +358,7 @@ test("auto-created squad uuid is persisted to settings for mergeSquads", async (
     loadState: store.loadState, saveState: store.saveState,
     persistProfileUuid: async () => {},
     persistSquadUuid: async (uuid) => { persisted.push(uuid); },
+    beginSetup: async () => true,
   });
   await service.setup(SETUP_INPUT);
   assert.equal(persisted.length, 1);
@@ -366,6 +373,7 @@ test("reconcile recreates missing hosts without duplicating existing ones", asyn
     remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
+    beginSetup: async () => true,
   });
   await service.setup(SETUP_INPUT);
   // админ удалил все хосты вручную
@@ -376,4 +384,49 @@ test("reconcile recreates missing hosts without duplicating existing ones", asyn
   assert.equal(lazeikaHosts.length, 4, "рабочий + 3 notification пересозданы");
   assert.ok(env.state.profiles.length <= 2, "профиль не дублируется");
   void before;
+});
+
+test("parallel setup is rejected by the APPLYING CAS lock", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createStateStore();
+  let applying = false;
+  const service = createLazeikaService({
+    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    loadState: store.loadState, saveState: store.saveState,
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    beginSetup: async () => {
+      if (applying) return false;
+      applying = true;
+      return true;
+    },
+  });
+  await service.setup(SETUP_INPUT);
+  applying = true; // имитируем незавершённый параллельный запуск
+  await assert.rejects(
+    () => service.setup(SETUP_INPUT),
+    /уже выполняется/,
+  );
+});
+
+test("node change after READY is rejected with a clear error", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createStateStore();
+  const service = createLazeikaService({
+    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    loadState: store.loadState, saveState: store.saveState,
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    beginSetup: async () => true,
+  });
+  await service.setup(SETUP_INPUT);
+  assert.equal(store.state.status, "READY");
+  const otherNode = "99999999-9999-9999-9999-999999999999";
+  await assert.rejects(
+    () => service.setup({ ...SETUP_INPUT, nodeUuid: otherNode }),
+    /Смена ноды/,
+  );
+  // состояние не изменилось
+  assert.equal(store.state.status, "READY");
+  assert.equal(store.state.nodeUuid, NODE_UUID);
 });

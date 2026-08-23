@@ -106,7 +106,15 @@ function mockExpiredSubscriptions(rows: Array<Record<string, unknown>>) {
   subscription.findUnique = async (args: Record<string, unknown>) => {
     const id = (args.where as Record<string, unknown>).id;
     const row = rows.find((candidate) => candidate.id === id);
-    return row ? { remnawaveUuid: row.remnawaveUuid } : null;
+    // Полная строка для race-перечитывания под локом (expireAt/graceUntil сравниваются).
+    return row ? {
+      remnawaveUuid: row.remnawaveUuid,
+      expireAt: row.expireAt ?? null,
+      graceUntil: row.graceUntil ?? null,
+      deletionRequestedAt: null,
+      extraDevices: row.extraDevices ?? 0,
+      tariffId: null,
+    } : null;
   };
   subscription.update = async (args: Record<string, unknown>) => {
     updates.push(args);
@@ -135,7 +143,10 @@ type ProcessExpired = (
   configLoader: () => Promise<ExpiredConfig>,
   now: Date,
   lazeikaGateLoader?: (config: ExpiredConfig) => Promise<{ enabled: boolean; days: number; squadUuid: string | null; ready: boolean }>,
+  lock?: <T>(clientId: string, fn: () => Promise<T>) => Promise<T>,
 ) => Promise<{ checked: number; grace: number; disabled: number; failed: number }>;
+
+const noLock = async <T>(_clientId: string, fn: () => Promise<T>): Promise<T> => fn();
 
 type SyncToRemna = (
   dependencies: {
@@ -356,6 +367,8 @@ test("expired access activates grace for exactly one owning Remnawave UUID", asy
       },
       async () => ({ expiredGraceEnabled: true, expiredGraceDays: 7, expiredGraceSquadUuid: "grace-squad" }),
       now,
+      undefined,
+      noLock,
     );
     assert.deepEqual(result, { checked: 1, grace: 1, disabled: 0, failed: 0 });
     assert.deepEqual(calls, [{
@@ -395,6 +408,8 @@ test("elapsed grace disables one user without extending the original expiry", as
       async (body) => { calls.push(body); return { status: 200, data: {} }; },
       async () => ({ expiredGraceEnabled: true, expiredGraceDays: 7, expiredGraceSquadUuid: "grace-squad" }),
       now,
+      undefined,
+      noLock,
     );
     assert.deepEqual(result, { checked: 1, grace: 0, disabled: 1, failed: 0 });
     assert.equal(calls[0]?.uuid, "remna-elapsed");
@@ -427,6 +442,8 @@ test("disabled grace configuration preserves past expiry and disables access", a
       async (body) => { calls.push(body); return { status: 200, data: {} }; },
       async () => ({ expiredGraceEnabled: false, expiredGraceDays: 7, expiredGraceSquadUuid: "grace-squad" }),
       now,
+      undefined,
+      noLock,
     );
     assert.equal(calls[0]?.expireAt, expireAt.toISOString());
     assert.equal(calls[0]?.status, "DISABLED");
@@ -456,6 +473,8 @@ test("active grace is not recomputed when the global days setting changes", asyn
       async (body) => { calls.push(body); return { status: 200, data: {} }; },
       async () => ({ expiredGraceEnabled: true, expiredGraceDays: 30, expiredGraceSquadUuid: "grace-squad" }),
       now,
+      undefined,
+      noLock,
     );
     assert.deepEqual(result, { checked: 1, grace: 1, disabled: 0, failed: 0 });
     // expireAt остаётся прежним graceUntil — пересчёта нет.
@@ -487,6 +506,7 @@ test("not-ready Lazeika-Only infrastructure disables instead of granting grace",
       async () => ({ expiredGraceEnabled: true, expiredGraceDays: 7, expiredGraceSquadUuid: null }),
       now,
       async () => ({ enabled: true, days: 7, squadUuid: "grace-squad", ready: false }),
+      noLock,
     );
     assert.deepEqual(result, { checked: 1, grace: 0, disabled: 1, failed: 0 });
     assert.equal(calls[0]?.status, "DISABLED");
@@ -512,6 +532,8 @@ test("Remnawave failure does not persist graceUntil", async () => {
       async () => ({ status: 502, error: "boom" }),
       async () => ({ expiredGraceEnabled: true, expiredGraceDays: 7, expiredGraceSquadUuid: "grace-squad" }),
       now,
+      undefined,
+      noLock,
     );
     assert.deepEqual(result, { checked: 1, grace: 0, disabled: 0, failed: 1 });
     const failure = mock.updates[0]?.data as Record<string, unknown>;
@@ -543,6 +565,7 @@ test("disabling the feature closes an already active grace on the next tick", as
       now,
       // Функция выключена после выдачи grace → активный доступ закрывается (§4.4 disable).
       async () => ({ enabled: false, days: 7, squadUuid: "grace-squad", ready: true }),
+      noLock,
     );
     assert.deepEqual(result, { checked: 1, grace: 0, disabled: 1, failed: 0 });
     assert.equal(calls[0]?.status, "DISABLED");
@@ -571,6 +594,8 @@ test("expired access missing UUID records PENDING without an API call", async ()
       async () => { calls++; return { status: 200 }; },
       async () => ({ expiredGraceEnabled: false, expiredGraceDays: 0, expiredGraceSquadUuid: null }),
       now,
+      undefined,
+      noLock,
     );
     assert.deepEqual(result, { checked: 1, grace: 0, disabled: 0, failed: 1 });
     assert.equal(calls, 0);

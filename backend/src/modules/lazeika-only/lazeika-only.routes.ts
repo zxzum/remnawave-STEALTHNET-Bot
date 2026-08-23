@@ -74,6 +74,8 @@ lazeikaOnlyRouter.get("/status", async (_req: Request, res: Response) => {
       messageTemplate: config.messageTemplate,
     },
     state,
+    /** false → настройки (нода/squad) разошлись с resource_state, нужен reconcile. */
+    settingsInSync: config.settingsInSync,
     workingHost: hosts.find((h) => !h.tags?.includes("LAZEIKA_ONLY_NOTIFICATION")) ?? null,
     notificationHosts: hosts.filter((h) => h.tags?.includes("LAZEIKA_ONLY_NOTIFICATION")),
   });

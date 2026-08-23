@@ -198,6 +198,7 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
         select: {
           id: true, remnawaveUuid: true, ownerId: true, giftedToClientId: true,
           customPrice: true, extraDevices: true, extraDevicesMonthlyPrice: true,
+          graceUntil: true,
         },
       });
       const option = parseMetadataExtraOption(fresh.metadata);
@@ -217,6 +218,18 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
     if (claimed === "APPLIED") return { ok: true, outcome: "ALREADY_APPLIED" };
     if (claimed === "QUEUED") return { ok: true, outcome: "QUEUED" };
     if (claimed === "INVALID") return pre("Некорректная привязка платежа опции", 409);
+
+    // Активный Lazeika-Only grace (§4.4): PENDING-план НЕ создаём — рассчитанный сейчас
+    // план (сквады/лимиты) устарел бы к моменту применения. После восстановления тарифа
+    // платёж переиграется и план пересчитается от актуального состояния.
+    const { isActiveSubscriptionGrace } = await import("../subscription/single-subscription-lifecycle.service.js");
+    if (isActiveSubscriptionGrace(claimed.subscription.graceUntil ?? null)) {
+      await prisma.payment.updateMany({
+        where: { id: paymentId, extraOptionState: "PLANNING", extraOptionClaimToken: claimToken },
+        data: { extraOptionState: "NEEDS_PLAN", extraOptionClaimToken: null, extraOptionNextAttemptAt: new Date(Date.now() + 10 * 60_000) },
+      });
+      return pre("Подписка в режиме продления Lazeika-Only: применение опции отложено до восстановления тарифа", 409);
+    }
 
     const userRes = await remnaGetUser(claimed.uuid);
     if (userRes.error) {
@@ -294,11 +307,22 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
     return pendingFailure("Привязка сохранённого плана изменилась; требуется ручная проверка", 409, false);
   }
 
-  // Активный Lazeika-Only grace: опция не должна перезаписывать grace-сквады/лимиты.
-  // Контролируемый конфликт с ретраем — применится после восстановления тарифа (§4.4).
+  // Активный Lazeika-Only grace: сохранённый план рассчитан ДО grace и устарел.
+  // Сбрасываем к NEEDS_PLAN — после восстановления тарифа план пересчитается (§4.4).
   const { isActiveSubscriptionGrace } = await import("../subscription/single-subscription-lifecycle.service.js");
   if (isActiveSubscriptionGrace(liveSubscription.graceUntil ?? null)) {
-    return pendingFailure("Подписка в режиме продления Lazeika-Only: применение опции отложено до восстановления тарифа", 409);
+    const released = await prisma.payment.updateMany({
+      where: { id: paymentId, extraOptionState: "PENDING", extraOptionClaimToken: pendingClaimToken },
+      data: {
+        metadata: JSON.stringify({ ...metadata, extraOptionApplication: undefined }),
+        extraOptionState: "NEEDS_PLAN",
+        extraOptionClaimToken: null,
+        extraOptionNextAttemptAt: new Date(Date.now() + 10 * 60_000),
+      },
+    });
+    if (!released.count) return { ok: true, outcome: "QUEUED" };
+    console.warn("[extra-options] stale plan dropped for grace subscription", { paymentId });
+    return { ok: true, outcome: "QUEUED" };
   }
 
   const applying = await prisma.$transaction(async (tx) => {

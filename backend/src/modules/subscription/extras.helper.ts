@@ -138,6 +138,11 @@ export async function removeAllExtraDevicesForSub(subId: string): Promise<Remove
     // Уже нет extras — ничего не делаем.
     return { ok: true, extraDevicesRemoved: 0, hwidKicked: 0, newDeviceLimit: 0 };
   }
+  // Активный Lazeika-Only grace: изменение HWID-лимита отложено до восстановления (§4.4).
+  const graceRow = await prisma.subscription.findUnique({ where: { id: subId }, select: { graceUntil: true } });
+  if (isActiveSubscriptionGrace(graceRow?.graceUntil ?? null)) {
+    return { ok: false, extraDevicesRemoved: 0, hwidKicked: 0, newDeviceLimit: 0, error: "Подписка в режиме продления Lazeika-Only: сначала продлите тариф" };
+  }
 
   const tariff = sub.tariffId
     ? await prisma.tariff.findUnique({

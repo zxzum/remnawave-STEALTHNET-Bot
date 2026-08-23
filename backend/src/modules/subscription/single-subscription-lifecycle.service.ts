@@ -45,6 +45,18 @@ function legacyGateFromConfig(config: ExpiredGraceConfig): LazeikaGate {
   };
 }
 
+/**
+ * Тот же advisory-ключ, что у оплаты (withClientSubscriptionLock в tariff-activation):
+ * cron и активация платежа не могут одновременно мутатить одну подписку (§4.4 race).
+ * Отдельная функция, а не импорт из tariff-activation — там импортируется этот модуль.
+ */
+async function withSubscriptionClientLock<T>(clientId: string, fn: () => Promise<T>): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${clientId}))`;
+    return fn();
+  });
+}
+
 export async function requireSubscriptionRemnaUuid(subscriptionId: string): Promise<string> {
   const row = await prisma.subscription.findUnique({
     where: { id: subscriptionId },
@@ -114,6 +126,8 @@ export async function processExpiredSingleSubscriptionAccess(
   /** Реальный cron передаёт loader с проверкой READY; тесты/legacy используют дефолт. */
   lazeikaGateLoader: (config: ExpiredGraceConfig) => Promise<LazeikaGate> = async (config) =>
     legacyGateFromConfig(config),
+  /** Инъекция для тестов; прод — advisory-лок по клиенту (общий с оплатой). */
+  lock: <T>(clientId: string, fn: () => Promise<T>) => Promise<T> = withSubscriptionClientLock,
 ) {
   const config = await configLoader();
   const lazeika = await lazeikaGateLoader(config);
@@ -123,10 +137,12 @@ export async function processExpiredSingleSubscriptionAccess(
     take: Math.max(1, Math.min(1000, Math.trunc(limit))),
     select: {
       id: true,
+      ownerId: true,
       remnawaveUuid: true,
       expireAt: true,
       graceUntil: true,
       extraDevices: true,
+      tariffId: true,
       tariff: {
         select: {
           trafficLimitBytes: true,
@@ -138,12 +154,13 @@ export async function processExpiredSingleSubscriptionAccess(
       },
     },
   });
-  let grace = 0;
-  let disabled = 0;
-  let failed = 0;
-  for (const subscription of subscriptions) {
+
+  /** Обработка одной истёкшей строки под клиентским локом (§4.4 race). */
+  const processRow = async (
+    subscription: (typeof subscriptions)[number],
+  ): Promise<"GRACE" | "DISABLED" | "FAILED"> => {
     const expireAt = subscription.expireAt;
-    if (!expireAt) continue;
+    if (!expireAt) return "DISABLED";
     const graceActiveBefore = isActiveSubscriptionGrace(subscription.graceUntil, now);
     const graceElapsed = subscription.graceUntil != null && !graceActiveBefore;
 
@@ -173,7 +190,7 @@ export async function processExpiredSingleSubscriptionAccess(
       expireAt: (enteringGrace ? desiredGraceUntil! : expireAt).toISOString(),
       status: enteringGrace ? "ACTIVE" : "DISABLED",
       ...(enteringGrace ? {
-        // Grace: трафик не ограничиваем лимитом тарифа — NO_RESET/0 (§4.1.5), HWID сохраняем.
+        // Grace: трафик NO_RESET/0 (§4.1.5), HWID сохраняем.
         trafficLimitBytes: 0,
         trafficLimitStrategy: "NO_RESET",
         hwidDeviceLimit: subscription.tariff
@@ -194,10 +211,7 @@ export async function processExpiredSingleSubscriptionAccess(
         activeInternalSquads: [],
       }),
     }));
-    if (result.requiredFailure) {
-      failed++;
-      continue;
-    }
+    if (result.requiredFailure) return "FAILED";
     // Успех: фиксируем/очищаем graceUntil локально.
     if (subscription.graceUntil?.getTime() !== desiredGraceUntil?.getTime()) {
       await prisma.subscription.update({
@@ -205,7 +219,33 @@ export async function processExpiredSingleSubscriptionAccess(
         data: { graceUntil: desiredGraceUntil },
       });
     }
-    if (enteringGrace) grace++;
+    return enteringGrace ? "GRACE" : "DISABLED";
+  };
+
+  let grace = 0;
+  let disabled = 0;
+  let failed = 0;
+  for (const subscription of subscriptions) {
+    if (!subscription.expireAt) continue;
+    const outcome = await lock(subscription.ownerId, async () => {
+      // Перечитываем ПОД локом: параллельная оплата могла изменить строку между
+      // выборкой и PATCH — тогда этот тик её не трогает (§4.4 race).
+      const fresh = await prisma.subscription.findUnique({
+        where: { id: subscription.id },
+        select: { remnawaveUuid: true, expireAt: true, graceUntil: true, deletionRequestedAt: true, extraDevices: true, tariffId: true },
+      });
+      const unchanged = fresh
+        && !fresh.deletionRequestedAt
+        && fresh.expireAt?.getTime() === subscription.expireAt?.getTime()
+        && (fresh.graceUntil?.getTime() ?? null) === (subscription.graceUntil?.getTime() ?? null)
+        && fresh.extraDevices === subscription.extraDevices
+        && (fresh.tariffId ?? null) === (subscription.tariffId ?? null);
+      if (!unchanged) return "CHANGED" as const;
+      return processRow(subscription);
+    });
+    if (outcome === "CHANGED") continue;
+    if (outcome === "FAILED") failed++;
+    else if (outcome === "GRACE") grace++;
     else disabled++;
   }
   return { checked: subscriptions.length, grace, disabled, failed };

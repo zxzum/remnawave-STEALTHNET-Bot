@@ -12,6 +12,7 @@ import { Prisma } from "@prisma/client";
 import { prisma, createPayment } from "../../db.js";
 import { requireAuth, requireAdminSection, requireAction } from "../auth/middleware.js";
 import { validateMessageTemplate } from "../lazeika-only/lazeika-only.config.js";
+import { remnaTrafficSettings } from "../squad-traffic/traffic-remna-policy.js";
 import { hashPassword } from "../auth/auth.service.js";
 import { hashPassword as hashClientPassword } from "../client/client.service.js";
 import {
@@ -2499,6 +2500,15 @@ async function applySingleRemnaPatch(
   }
   const patch = { ...data } as Record<string, unknown>;
   if (data.expireAt && data.status === undefined && new Date(data.expireAt).getTime() > Date.now()) patch.status = "ACTIVE";
+  // Явное восстановление во время grace: UI всегда присылает текущий expireAt, поэтому
+  // восстанавливаем ПОЛНОЦЕННО по тарифу (сквады/трафик/HWID), а не только дату (§4.4).
+  if (data.expireAt && subscription.tariff) {
+    Object.assign(patch, {
+      ...remnaTrafficSettings(subscription.tariff),
+      hwidDeviceLimit: Math.max(1, subscription.tariff.includedDevices + Math.max(0, subscription.extraDevices ?? 0)),
+      activeInternalSquads: subscription.tariff.internalSquadUuids,
+    });
+  }
   // Сначала Remna, затем локальная запись — БД не опережает панель (§4.1.6).
   const result = await runSingleSubscriptionOperation(subscriptionId, (uuid) => remnaUpdateUser({ uuid, ...patch }));
   if (!result.requiredFailure) {
@@ -2522,7 +2532,8 @@ adminRouter.patch("/clients/:id/remna", async (req, res) => {
   const subscriptionId = await getClientPrimarySubscriptionId(parsed.data.id);
   if (!subscriptionId) return res.status(400).json({ message: "У клиента нет основной подписки" });
   const result = await applySingleRemnaPatch(subscriptionId, body.data);
-  return res.status(result.requiredFailure ? 502 : 200).json({
+  const status = (result as { graceConflict?: boolean }).graceConflict ? 409 : result.requiredFailure ? 502 : 200;
+  return res.status(status).json({
     ok: !result.requiredFailure,
     degraded: result.failures.length > 0,
     failures: result.failures,
@@ -3434,6 +3445,7 @@ adminRouter.post("/clients/:id/remna/squads/add", async (req, res) => {
   if (!target) return res.status(400).json({ message: "Клиент не привязан к Remna" });
   const body = squadActionSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Invalid input" });
+  if (await clientHasActiveGrace(parsed.data.id)) return res.status(409).json({ message: "Активен режим продления Lazeika-Only: изменение сквадов заблокировано" });
   // Получаем текущие сквады пользователя, чтобы добавить новый без потери существующих
   const userRes = await remnaGetUser(target.remnawaveUuid);
   const userData = userRes.data as Record<string, unknown> | undefined;
@@ -3461,6 +3473,7 @@ adminRouter.post("/clients/:id/remna/squads/remove", async (req, res) => {
   if (!target) return res.status(400).json({ message: "Клиент не привязан к Remna" });
   const body = squadActionSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Invalid input" });
+  if (await clientHasActiveGrace(parsed.data.id)) return res.status(409).json({ message: "Активен режим продления Lazeika-Only: изменение сквадов заблокировано" });
   // По api-1.yaml у DELETE .../remove-users нет requestBody — только uuid сквада в path; эндпоинт может убирать всех из сквада. Поэтому убираем сквад только у этого пользователя через PATCH user (как при add).
   const userRes = await remnaGetUser(target.remnawaveUuid);
   if (userRes.error) return res.status(userRes.status >= 400 ? userRes.status : 500).json({ message: userRes.error });
@@ -7883,8 +7896,26 @@ async function getAdminSubscription(subId: string) {
       subscriptionIndex: true,
       remnawaveUuid: true,
       graceUntil: true,
+      extraDevices: true,
+      tariff: {
+        select: {
+          internalSquadUuids: true,
+          trafficLimitBytes: true,
+          trafficLimitMode: true,
+          trafficResetMode: true,
+          includedDevices: true,
+        },
+      },
     },
   });
+}
+
+/** Активен ли Lazeika-Only grace у primary-подписки клиента. */
+async function clientHasActiveGrace(clientId: string): Promise<boolean> {
+  const subId = await getClientPrimarySubscriptionId(clientId);
+  if (!subId) return false;
+  const sub = await prisma.subscription.findUnique({ where: { id: subId }, select: { graceUntil: true } });
+  return isActiveSubscriptionGrace(sub?.graceUntil ?? null);
 }
 
 const subIdParam = z.object({ subId: z.string().min(1) });
@@ -8061,6 +8092,10 @@ adminRouter.post("/subscriptions/:subId/remna/squads/add", asyncRoute(async (req
   if (!parsed.success) return res.status(400).json({ message: "Invalid subscription id" });
   const body = squadActionSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Invalid input" });
+  const graceSub = await prisma.subscription.findUnique({ where: { id: parsed.data.subId }, select: { graceUntil: true } });
+  if (isActiveSubscriptionGrace(graceSub?.graceUntil ?? null)) {
+    return res.status(409).json({ message: "Активен режим продления Lazeika-Only: изменение сквадов заблокировано" });
+  }
   let updatedSquads: string[] = [];
   const result = await runSingleSubscriptionOperation(parsed.data.subId, async (uuid) => {
     const user = await remnaGetUser(uuid);
@@ -8077,6 +8112,10 @@ adminRouter.post("/subscriptions/:subId/remna/squads/remove", asyncRoute(async (
   if (!parsed.success) return res.status(400).json({ message: "Invalid subscription id" });
   const body = squadActionSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Invalid input" });
+  const graceSub = await prisma.subscription.findUnique({ where: { id: parsed.data.subId }, select: { graceUntil: true } });
+  if (isActiveSubscriptionGrace(graceSub?.graceUntil ?? null)) {
+    return res.status(409).json({ message: "Активен режим продления Lazeika-Only: изменение сквадов заблокировано" });
+  }
   let updatedSquads: string[] = [];
   const result = await runSingleSubscriptionOperation(parsed.data.subId, async (uuid) => {
     const user = await remnaGetUser(uuid);

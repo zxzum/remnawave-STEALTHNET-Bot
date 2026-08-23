@@ -8,7 +8,9 @@ import {
   LAZEIKA_NOTIFICATION_HOST_TAG,
   LAZEIKA_PROFILE_KEY,
   LAZEIKA_SQUAD_NAME,
+  LAZEIKA_STATE_KEY,
   loadResourceState,
+  parseResourceState,
   saveResourceState,
   type LazeikaResourceState,
 } from "./lazeika-only.config.js";
@@ -136,6 +138,8 @@ export type LazeikaServiceDependencies = {
   persistProfileUuid?: (uuid: string | null) => Promise<void>;
   /** Авто-созданный squad пишется и в lazeika_only_squad_uuid (его читает mergeSquads). */
   persistSquadUuid?: (uuid: string | null) => Promise<void>;
+  /** CAS-захват APPLYING; false → параллельный setup отклонён. */
+  beginSetup?: () => Promise<boolean>;
 };
 
 export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
@@ -147,6 +151,28 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     saveState = saveResourceState,
     persistProfileUuid = defaultPersistUuid(LAZEIKA_PROFILE_KEY),
     persistSquadUuid = defaultPersistUuid("lazeika_only_squad_uuid"),
+    // CAS по сырому значению SystemSetting: два параллельных setup'а не могут оба пройти updateMany.
+    beginSetup = async () => {
+      const { prisma } = await import("../../db.js");
+      const row = await prisma.systemSetting.findUnique({ where: { key: LAZEIKA_STATE_KEY } });
+      const raw = row?.value ?? "";
+      if (raw.includes('"status":"APPLYING"') || raw.includes('"status": "APPLYING"')) return false;
+      const next = JSON.stringify({
+        ...parseResourceState(raw),
+        status: "APPLYING",
+        lastError: null,
+        updatedAt: new Date().toISOString(),
+      });
+      if (!row) {
+        await prisma.systemSetting.create({ data: { key: LAZEIKA_STATE_KEY, value: next } });
+        return true;
+      }
+      const updated = await prisma.systemSetting.updateMany({
+        where: { key: LAZEIKA_STATE_KEY, value: raw },
+        data: { value: next },
+      });
+      return updated.count > 0;
+    },
   } = dependencies;
 
   async function fetchNodes(): Promise<RemnaNodeShape[]> {
@@ -217,6 +243,21 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     let detectedIface: string | null = null;
     let autoSquadCreatedUuid: string | null = null;
 
+    // Смена ноды после READY запрещена (§7): старый managed-профиль/snapshot/hosts
+    // завязаны на текущую ноду — безопасный путь: disable + настройка заново.
+    if (state.status === "READY" && state.nodeUuid && input.nodeUuid !== state.nodeUuid) {
+      throw new SetupError(
+        "Смена ноды при настроенной инфраструктуре не поддерживается: выключите режим и выполните настройку заново на другой ноде",
+        "VALIDATION",
+      );
+    }
+
+    // CAS-захват APPLYING (§5 ревью): параллельный setup/reconcile отклоняется,
+    // дубли профиля/squad/hosts невозможны.
+    const claimed = await beginSetup();
+    if (!claimed) {
+      throw new SetupError("Настройка Lazeika-Only уже выполняется, подождите её завершения", "LOCK");
+    }
     state = { ...state, status: "APPLYING", lastError: null };
     await saveState(state);
 
@@ -391,6 +432,8 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
           await remna.createHost({
             remark: NOTIFICATION_REMARKS[i],
             address: `notification-${i + 1}.lazeika.invalid`,
+            // Контракт Remnawave требует port (remna.client.ts); host disabled — порт служебный.
+            port,
             isDisabled: true,
             inbound: binding,
             tags: [LAZEIKA_HOST_TAG, LAZEIKA_NOTIFICATION_HOST_TAG],
@@ -407,21 +450,47 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       const detectScript = [
         'IF="$(ip -o route show default 2>/dev/null | awk \'{print $5}\' | head -1)"',
         '[ -n "$IF" ] || exit 3',
-        `LISTEN="$(ss -Hltnp "sport = :${port}" 2>/dev/null)"`,
+        `TCP="$(ss -Hltnp "sport = :${port}" 2>/dev/null)"`,
+        `UDP="$(ss -Hlunp "sport = :${port}" 2>/dev/null)"`,
+        'LISTEN="$TCP"',
+        'case "$UDP" in',
+        '  *xray*|*docker-proxy*) ;; # udp нашего xray — ок',
+        '  "") ;; # udp не занят',
+        '  *) LISTEN="$LISTEN foreign-udp:$UDP" ;;',
+        'esac',
         'case "$LISTEN" in',
+        '  *foreign-udp*) MODE=foreign ;;',
         '  *docker-proxy*) MODE=docker ;;',
         '  *xray*) MODE=host ;;',
         '  "") MODE=unknown ;;',
-        '  *) MODE=foreign; echo "FOREIGN=$LISTEN" | cut -c1-120 ;;',
+        '  *) MODE=foreign; echo "FOREIGN=$LISTEN" | cut -c1-160 ;;',
         'esac',
         'echo "IFACE=$IF"',
         'echo "MODE=$MODE"',
         "command -v tc >/dev/null 2>&1 && echo TC=ok || echo TC=missing",
       ].join("\n");
       if (!detectedIface) {
-        const detected = await ssh(node.address, detectScript);
-        if (!detected.ok) throw new SetupError(`Детект топологии не удался (exit ${detected.exitCode})`, "SSH_TC");
-        ({ iface: detectedIface } = parseDetectOutput(detected.stdout || detected.stderr));
+        // До 3 попыток с паузой: после применения профиля xray на ноде стартует не мгновенно.
+        let lastText = "";
+        for (let attempt = 0; attempt < 3 && !detectedIface; attempt++) {
+          const detected = await ssh(node.address, detectScript);
+          if (!detected.ok) throw new SetupError(`Детект топологии не удался (exit ${detected.exitCode})`, "SSH_TC");
+          lastText = detected.stdout || detected.stderr;
+          try {
+            const parsed = parseDetectOutput(lastText);
+            detectedIface = parsed.iface;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            // foreign/нет tc — не ретраим, это терминальные состояния.
+            if (message.includes("процессом") || message.includes("tc")) throw error;
+            if (attempt === 2) throw error;
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+        }
+        if (!detectedIface) {
+          throw new SetupError("Топология ноды не поддерживается автоматически: порт inbound не виден на хосте", "SSH_TC");
+        }
+        void lastText;
       }
 
       const remoteInstall = [
@@ -520,6 +589,10 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     const profile = profiles.find((p) => p.uuid === state.profileUuid);
     add("profile", !!profile);
     add("inbound", !!profile?.inbounds?.some((ib) => ib.uuid === state.managedInboundUuid));
+    // Routing: три managed-правила по нашему inboundTag должны присутствовать в конфиге.
+    const managedRules = ((profile?.config?.routing?.rules ?? []) as Array<{ inboundTag?: unknown }>)
+      .filter((r) => Array.isArray(r.inboundTag) && (r.inboundTag as string[]).includes(state.managedInboundTag ?? ""));
+    add("routing_rules", managedRules.length >= 3, String(managedRules.length));
 
     let squad: SquadShape | undefined;
     try {
@@ -542,7 +615,14 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
 
     try {
       const hosts = await fetchHosts();
-      add("working_host", hosts.some((h) => h.uuid && h.uuid === state.workingHostUuid));
+      const workingHost = hosts.find((h) => h.uuid && h.uuid === state.workingHostUuid);
+      add("working_host", !!workingHost);
+      // Binding рабочего host должен указывать на managed профиль/inbound.
+      add(
+        "working_host_binding",
+        workingHost?.inbound?.configProfileUuid === state.profileUuid
+        && workingHost?.inbound?.configProfileInboundUuid === state.managedInboundUuid,
+      );
       add(
         "notification_hosts",
         hosts.filter(isNotificationHost).length >= NOTIFICATION_REMARKS.length,
@@ -556,21 +636,41 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       add("node_inbound_active", nodeActiveInboundUuids(node ?? { uuid: "" }).includes(state.managedInboundUuid ?? ""));
       if (node?.address && state.managedInboundPort && state.ssh.interface) {
         try {
+          // Все 8 собственных pref + фактический rate из фильтров.
+          const prefChecks = Array.from({ length: 8 }, (_, i) =>
+            `tc filter show dev "${state.ssh.interface}" | grep -q pref ${TC_PREF_BASE + 1 + i} || echo PREF_${i + 1}_MISSING`);
           const probe = await ssh(
             node.address,
             [
-              `tc filter show dev "${state.ssh.interface}" | grep -q pref ${TC_PREF_BASE + 1} && echo FILTER_OK || echo FILTER_MISSING`,
+              ...prefChecks,
               `[ -f ${TC_SCRIPT_PATH} ] && [ -f /etc/systemd/system/${TC_UNIT_NAME} ] && echo FILES_OK || echo FILES_MISSING`,
               `systemctl is-enabled ${TC_UNIT_NAME} >/dev/null 2>&1 && echo UNIT_ENABLED || echo UNIT_DISABLED`,
               `ss -Hltn "sport = :${state.managedInboundPort}" | grep -q . && echo PORT_LISTENING || echo PORT_SILENT`,
+              `tc filter show dev "${state.ssh.interface}" | grep -oE 'rate [0-9]+mbit' | head -1`,
             ].join("\n"),
           );
           const out = probe.stdout + probe.stderr;
-          add("ssh", true);
-          add("tc_filters", out.includes("FILTER_OK"), out.includes("FILTER_MISSING") ? "filters отсутствуют" : undefined);
-          add("tc_files", out.includes("FILES_OK"), out.includes("FILES_MISSING") ? "скрипт/unit отсутствуют" : undefined);
-          add("systemd_unit", out.includes("UNIT_ENABLED"));
-          add("port_listening", out.includes("PORT_LISTENING"));
+          // SSH сам по себе должен быть успешен — «дошли до конца скрипта» ≠ успех.
+          if (!probe.ok) {
+            add("ssh", false, `exit ${probe.exitCode}`);
+          } else {
+            add("ssh", true);
+            const missingPrefs = Array.from(out.matchAll(/PREF_(\d)_MISSING/g)).map((m) => m[1]);
+            add(
+              "tc_filters",
+              missingPrefs.length === 0,
+              missingPrefs.length ? `нет pref: ${missingPrefs.join(", ")}` : undefined,
+            );
+            const actualRate = /rate (\d+)mbit/.exec(out)?.[1];
+            add(
+              "tc_rate",
+              actualRate === String(state.ssh.rateMbit),
+              actualRate ? `${actualRate} Mbit/s` : "rate не определён",
+            );
+            add("tc_files", out.includes("FILES_OK"), out.includes("FILES_MISSING") ? "скрипт/unit отсутствуют" : undefined);
+            add("systemd_unit", out.includes("UNIT_ENABLED"));
+            add("port_listening", out.includes("PORT_LISTENING"));
+          }
         } catch (e) {
           add("ssh", false, e instanceof Error ? e.message : String(e));
         }
