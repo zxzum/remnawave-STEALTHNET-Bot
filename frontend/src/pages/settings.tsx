@@ -435,6 +435,7 @@ export function SettingsPage() {
   const [yookassaWebhookCopied, setYookassaWebhookCopied] = useState(false);
   const [cryptopayWebhookCopied, setCryptopayWebhookCopied] = useState(false);
   const [heleketWebhookCopied, setHeleketWebhookCopied] = useState(false);
+  const [rollypayWebhookCopied, setRollypayWebhookCopied] = useState(false);
   const [lavaWebhookCopied, setLavaWebhookCopied] = useState(false);
   const [overpayWebhookCopied, setOverpayWebhookCopied] = useState(false);
   const [defaultSubpageConfig, setDefaultSubpageConfig] = useState<SubscriptionPageConfig | null>(null);
@@ -890,6 +891,10 @@ export function SettingsPage() {
         cryptopayTestnet: settings.cryptopayTestnet ?? false,
         heleketMerchantId: settings.heleketMerchantId ?? null,
         heleketApiKey: settings.heleketApiKey && settings.heleketApiKey !== "********" ? settings.heleketApiKey : undefined,
+        rollypayApiKey: settings.rollypayApiKey === "********" ? undefined : settings.rollypayApiKey ?? null,
+        rollypaySigningSecret: settings.rollypaySigningSecret === "********" ? undefined : settings.rollypaySigningSecret ?? null,
+        rollypayEnabled: settings.rollypayEnabled ?? false,
+        rollypayTestMode: settings.rollypayTestMode ?? false,
         lavaShopId: settings.lavaShopId ?? null,
         lavaSecretKey: settings.lavaSecretKey && settings.lavaSecretKey !== "********" ? settings.lavaSecretKey : undefined,
         lavaAdditionalKey: settings.lavaAdditionalKey && settings.lavaAdditionalKey !== "********" ? settings.lavaAdditionalKey : undefined,
@@ -3234,6 +3239,107 @@ export function SettingsPage() {
                     <Button type="submit" disabled={saving}>
                       {saving ? t("admin.settings.saving") : t("admin.settings.save")}
                     </Button>
+                  </CardContent>
+                </CollapsibleContent>
+              </Collapsible>
+
+              <Collapsible defaultOpen={false} className="group mt-4">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="w-full cursor-pointer rounded-t-lg text-left transition-colors hover:bg-muted/50 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                  >
+                    <CardHeader className="pointer-events-none [&_.chevron]:transition-transform [&_.chevron]:duration-200 group-data-[state=open]:[&_.chevron]:rotate-180">
+                      <div className="flex items-center justify-between pr-2">
+                        <div className="flex items-center gap-2">
+                          <Wallet className="h-5 w-5 text-primary" />
+                          <CardTitle>RollyPay</CardTitle>
+                          <span className="text-xs font-normal text-muted-foreground">Рублёвая оплата</span>
+                        </div>
+                        <ChevronDown className="chevron h-5 w-5 shrink-0 text-muted-foreground" />
+                      </div>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Настройте API-доступ и подпись платежей RollyPay.
+                      </p>
+                    </CardHeader>
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <CardContent className="space-y-4 border-t pt-4">
+                    <div className="space-y-2">
+                      <Label>Webhook URL</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          readOnly
+                          value={(settings.publicAppUrl ?? "").replace(/\/$/, "") ? `${(settings.publicAppUrl ?? "").replace(/\/$/, "")}/api/webhooks/rollypay` : "Укажите Public App URL"}
+                          className="font-mono text-sm bg-muted/50"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="shrink-0"
+                          onClick={async () => {
+                            const url = (settings.publicAppUrl ?? "").replace(/\/$/, "") ? `${(settings.publicAppUrl ?? "").replace(/\/$/, "")}/api/webhooks/rollypay` : "";
+                            if (url && navigator.clipboard) {
+                              await navigator.clipboard.writeText(url);
+                              setRollypayWebhookCopied(true);
+                              setTimeout(() => setRollypayWebhookCopied(false), 2000);
+                            }
+                          }}
+                          disabled={!(settings.publicAppUrl ?? "").trim()}
+                          title="Копировать"
+                        >
+                          {rollypayWebhookCopied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">Укажите этот URL в настройках webhook RollyPay. Запросы проверяются по signing secret.</p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>API key</Label>
+                        <Input
+                          type="password"
+                          value={settings.rollypayApiKey ?? ""}
+                          onChange={(e) => setSettings((s) => (s ? { ...s, rollypayApiKey: e.target.value || null } : s))}
+                          placeholder="RollyPay API key"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Signing secret</Label>
+                        <Input
+                          type="password"
+                          value={settings.rollypaySigningSecret ?? ""}
+                          onChange={(e) => setSettings((s) => (s ? { ...s, rollypaySigningSecret: e.target.value || null } : s))}
+                          placeholder="RollyPay signing secret"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-3 border-t pt-3 sm:flex-row sm:gap-6">
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={settings.rollypayEnabled ?? false}
+                          onChange={(e) => setSettings((s) => (s ? { ...s, rollypayEnabled: e.target.checked } : s))}
+                          className="rounded border"
+                        />
+                        Включить RollyPay
+                      </label>
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={settings.rollypayTestMode ?? false}
+                          onChange={(e) => setSettings((s) => (s ? { ...s, rollypayTestMode: e.target.checked } : s))}
+                          className="rounded border"
+                        />
+                        Тестовый режим
+                      </label>
+                    </div>
+                    <div className="pt-2 border-t">
+                      <Button type="submit" disabled={saving} className="min-w-[140px]">
+                        {saving ? t("admin.settings.saving") : t("admin.settings.save")}
+                      </Button>
+                    </div>
                   </CardContent>
                 </CollapsibleContent>
               </Collapsible>

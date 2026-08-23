@@ -2548,6 +2548,35 @@ export const api = {
     return request("/client/heleket/create-payment", { method: "POST", body: JSON.stringify(data), token });
   },
 
+  /** RollyPay — создание рублёвого платежа, возвращает ссылку на оплату */
+  async rollypayCreatePayment(
+    token: string,
+    data: {
+      amount?: number;
+      currency?: string;
+      tariffId?: string;
+      tariffPriceOptionId?: string;
+      deviceCount?: number;
+      proxyTariffId?: string;
+      singboxTariffId?: string;
+      promoCode?: string;
+      extraOption?: { kind: "traffic" | "devices" | "servers"; productId: string; targetSubscriptionId?: string };
+      customBuild?: { days: number; devices: number; trafficGb?: number };
+      extendsSecondarySubId?: string;
+      asAdditional?: boolean;
+      asGift?: boolean;
+      removeExtrasOnActivate?: boolean;
+      replaceTrialSubId?: string;
+    }
+  ): Promise<{ paymentId: string; payUrl: string }> {
+    const result = await request<{ url: string; paymentId: string }>("/client/rollypay/create-payment", {
+      method: "POST",
+      body: JSON.stringify(data),
+      token,
+    });
+    return { paymentId: result.paymentId, payUrl: result.url };
+  },
+
   /** LAVA Business — создание счёта (RUB: СБП / Карты / СберPay), возвращает ссылку на оплату */
   async lavaCreatePayment(
     token: string,
@@ -3472,6 +3501,10 @@ export type UpdateSettingsPayload = {
   cryptopayTestnet?: boolean;
   heleketMerchantId?: string | null;
   heleketApiKey?: string | null;
+  rollypayApiKey?: string | null;
+  rollypaySigningSecret?: string | null;
+  rollypayEnabled?: boolean;
+  rollypayTestMode?: boolean;
   lavaShopId?: string | null;
   lavaSecretKey?: string | null;
   lavaAdditionalKey?: string | null;
@@ -4070,6 +4103,10 @@ export interface AdminSettings {
   cryptopayTestnet?: boolean;
   heleketMerchantId?: string | null;
   heleketApiKey?: string | null;
+  rollypayApiKey?: string | null;
+  rollypaySigningSecret?: string | null;
+  rollypayEnabled?: boolean;
+  rollypayTestMode?: boolean;
   lavaShopId?: string | null;
   lavaSecretKey?: string | null;
   lavaAdditionalKey?: string | null;
@@ -5607,6 +5644,7 @@ export interface PublicConfig {
   yookassaEnabled?: boolean;
   cryptopayEnabled?: boolean;
   heleketEnabled?: boolean;
+  rollypayEnabled?: boolean;
   lavaEnabled?: boolean;
   lavatopEnabled?: boolean;
   overpayEnabled?: boolean;

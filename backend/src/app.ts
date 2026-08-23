@@ -20,6 +20,7 @@ import { yoomoneyWebhooksRouter } from "./modules/webhooks/yoomoney.webhooks.rou
 import { yookassaWebhooksRouter } from "./modules/webhooks/yookassa.webhooks.routes.js";
 import { cryptopayWebhooksRouter } from "./modules/webhooks/cryptopay.webhooks.routes.js";
 import { heleketWebhooksRouter } from "./modules/webhooks/heleket.webhooks.routes.js";
+import { rollypayWebhooksRouter } from "./modules/webhooks/rollypay.webhooks.routes.js";
 import { lavaWebhooksRouter } from "./modules/webhooks/lava.webhooks.routes.js";
 import { lavatopWebhooksRouter } from "./modules/webhooks/lavatop.webhooks.routes.js";
 import { botAdminRouter } from "./modules/bot-admin/bot-admin.routes.js";
@@ -139,6 +140,7 @@ app.use(cors({
 // Crypto Pay, Heleket и Lava webhooks нужен raw body для проверки подписи (до express.json)
 app.use("/api/webhooks/cryptopay", express.raw({ type: "application/json" }), cryptopayWebhooksRouter);
 app.use("/api/webhooks/heleket", express.raw({ type: "application/json" }), heleketWebhooksRouter);
+app.use("/api/webhooks/rollypay", express.raw({ type: "application/json" }), rollypayWebhooksRouter);
 app.use("/api/webhooks/lava", express.raw({ type: "application/json" }), lavaWebhooksRouter);
 // Platega: высокий отдельный лимит от мусора до записи в webhook inbox.
 const plategaWebhookLimiter = rateLimit({

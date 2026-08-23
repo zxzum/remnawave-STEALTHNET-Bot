@@ -125,6 +125,7 @@ const SYSTEM_CONFIG_KEYS = [
   "yookassa_webhook_basic_user", "yookassa_webhook_basic_password",
   "cryptopay_api_token", "cryptopay_testnet",
   "heleket_merchant_id", "heleket_api_key",
+  "rollypay_api_key", "rollypay_signing_secret", "rollypay_enabled", "rollypay_test_mode",
   "lava_shop_id", "lava_secret_key", "lava_additional_key",
   "lavatop_api_key", "lavatop_default_offer_id",
   "overpay_api_url", "overpay_project_id", "overpay_login", "overpay_password",
@@ -664,6 +665,10 @@ async function loadSystemConfigFromDb() {
     cryptopayTestnet: map.cryptopay_testnet === "true" || map.cryptopay_testnet === "1",
     heleketMerchantId: (map.heleket_merchant_id ?? "").trim() || null,
     heleketApiKey: (map.heleket_api_key ?? "").trim() || null,
+    rollypayApiKey: (map.rollypay_api_key ?? "").trim() || null,
+    rollypaySigningSecret: (map.rollypay_signing_secret ?? "").trim() || null,
+    rollypayEnabled: (map.rollypay_enabled ?? "false").trim() === "true",
+    rollypayTestMode: (map.rollypay_test_mode ?? "false").trim() === "true",
     lavaShopId: (map.lava_shop_id ?? "").trim() || null,
     lavaSecretKey: (map.lava_secret_key ?? "").trim() || null,
     lavaAdditionalKey: (map.lava_additional_key ?? "").trim() || null,
@@ -1015,6 +1020,7 @@ const DEFAULT_PAYMENT_PROVIDERS: PaymentProviderConfig[] = [
   { id: "lava", label: "LAVA (СБП / Карты / СберPay)", sortOrder: 4 },
   { id: "lavatop", label: "Lava.top (СБП / Карты)", sortOrder: 5 },
   { id: "overpay", label: "Overpay (Карты / СБП)", sortOrder: 6 },
+  { id: "rollypay", label: "RollyPay", sortOrder: 7 },
 ];
 
 function parsePaymentProviders(raw: string | undefined): PaymentProviderConfig[] {
@@ -1300,6 +1306,11 @@ export async function getPublicConfig(_forCloneBot?: { markupPercent?: number | 
     yookassaRecurringEnabled: full.yookassaRecurringEnabled ?? false,
     cryptopayEnabled: Boolean((full as { cryptopayApiToken?: string | null }).cryptopayApiToken?.trim()),
     heleketEnabled: Boolean((full as { heleketMerchantId?: string | null }).heleketMerchantId?.trim() && (full as { heleketApiKey?: string | null }).heleketApiKey?.trim()),
+    rollypayEnabled: Boolean(
+      full.rollypayEnabled === true &&
+      (full as { rollypayApiKey?: string | null }).rollypayApiKey?.trim() &&
+      (full as { rollypaySigningSecret?: string | null }).rollypaySigningSecret?.trim(),
+    ),
     lavaEnabled: Boolean((full as { lavaShopId?: string | null }).lavaShopId?.trim() && (full as { lavaSecretKey?: string | null }).lavaSecretKey?.trim()),
     lavatopEnabled: Boolean((full as { lavatopApiKey?: string | null }).lavatopApiKey?.trim()),
     overpayEnabled: Boolean(
