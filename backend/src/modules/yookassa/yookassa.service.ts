@@ -205,11 +205,26 @@ export type YookassaPayment = {
   };
 };
 
-export async function getYookassaPayment(id: string, config: YookassaConfig): Promise<YookassaPayment | null> {
+export type YookassaPaymentLookup =
+  | { ok: true; payment: YookassaPayment }
+  | { ok: false; retryable: boolean; status: number; error: string };
+
+export function yookassaPaymentLookupFailure(error: string, status = 503): Extract<YookassaPaymentLookup, { ok: false }> {
+  return {
+    ok: false,
+    retryable: status === 429 || status >= 500,
+    status,
+    error,
+  };
+}
+
+export async function getYookassaPayment(id: string, config: YookassaConfig): Promise<YookassaPaymentLookup> {
   const paymentId = id.trim();
   const shopId = config.yookassaShopId?.trim() ?? "";
   const secretKey = config.yookassaSecretKey?.trim() ?? "";
-  if (!paymentId || !shopId || !secretKey) return null;
+  if (!paymentId || !shopId || !secretKey) {
+    return { ok: false, retryable: false, status: 503, error: "YooKassa not configured" };
+  }
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 12_000);
@@ -220,10 +235,17 @@ export async function getYookassaPayment(id: string, config: YookassaConfig): Pr
       headers: { Authorization: `Basic ${auth}` },
       signal: controller.signal,
     }, proxy);
-    if (!response.ok) return null;
-    return (await response.json()) as YookassaPayment;
-  } catch {
-    return null;
+    if (!response.ok) {
+      return yookassaPaymentLookupFailure(`YooKassa API returned HTTP ${response.status}`, response.status);
+    }
+    try {
+      return { ok: true, payment: (await response.json()) as YookassaPayment };
+    } catch {
+      return yookassaPaymentLookupFailure("YooKassa returned invalid JSON", 502);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return yookassaPaymentLookupFailure(message);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -241,10 +263,14 @@ export function validateYookassaPayment(
   const providerId = expectedId.trim();
   if (!remotePayment) return { ok: false, reason: "payment_not_confirmed" };
   if (!providerId || remotePayment.id !== providerId) return { ok: false, reason: "payment_id_mismatch" };
-  if (localPayment.externalId?.trim() && localPayment.externalId.trim() !== remotePayment.id) {
+  const storedExternalId = localPayment.externalId?.trim();
+  if (storedExternalId && storedExternalId !== remotePayment.id) {
     return { ok: false, reason: "stored_external_id_mismatch" };
   }
-  if (remotePayment.metadata?.payment_id && remotePayment.metadata.payment_id !== localPayment.id) {
+  if (!storedExternalId && remotePayment.metadata?.payment_id !== localPayment.id) {
+    return { ok: false, reason: "metadata_payment_id_mismatch" };
+  }
+  if (storedExternalId && remotePayment.metadata?.payment_id && remotePayment.metadata.payment_id !== localPayment.id) {
     return { ok: false, reason: "metadata_payment_id_mismatch" };
   }
   if (remotePayment.status !== "succeeded") return { ok: false, reason: "payment_not_succeeded" };

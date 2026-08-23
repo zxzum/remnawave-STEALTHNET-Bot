@@ -171,11 +171,21 @@ yookassaWebhooksRouter.post("/yookassa", async (req, res) => {
   await auditPaymentClientBotAlignment(payment);
 
   const config = await getSystemConfig();
-  const confirmedPayment = await getYookassaPayment(externalId, config);
-  if (!confirmedPayment) {
-    console.warn("[YooKassa Webhook] Payment was not confirmed by YooKassa", { paymentId, externalId });
+  const paymentLookup = await getYookassaPayment(externalId, config);
+  if (!paymentLookup.ok) {
+    console.warn("[YooKassa Webhook] Payment confirmation lookup failed", {
+      paymentId,
+      externalId,
+      error: paymentLookup.error,
+      status: paymentLookup.status,
+      retryable: paymentLookup.retryable,
+    });
+    if (paymentLookup.retryable) {
+      return res.status(503).send("Retry");
+    }
     return res.status(200).send("OK");
   }
+  const confirmedPayment = paymentLookup.payment;
   const validation = validateYookassaPayment(payment, confirmedPayment, externalId);
   if (!validation.ok) {
     console.warn("[YooKassa Webhook] Payment confirmation mismatch", {
@@ -222,6 +232,7 @@ yookassaWebhooksRouter.post("/yookassa", async (req, res) => {
       paymentId: payment.id,
       error: result.error,
     });
+    return res.status(503).send("Retry");
   }
   await recordPromoCodeUsageFromPayment(payment.id);
 

@@ -18,6 +18,13 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/gif",
 ]);
 
+const IMAGE_EXTENSION_BY_MIME: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+};
+
 export function isAllowedUploadedImage(mimetype: string): boolean {
   return ALLOWED_IMAGE_MIME_TYPES.has(mimetype.trim().toLowerCase());
 }
@@ -27,8 +34,10 @@ function ensureUploadDir(dir: string): string {
   return dir;
 }
 
-function makeFilename(originalname: string): string {
-  const ext = path.extname(originalname).toLowerCase();
+export function makeFilename(originalname: string, mimetype?: string): string {
+  const normalizedMime = mimetype?.trim().toLowerCase();
+  const ext = (normalizedMime && IMAGE_EXTENSION_BY_MIME[normalizedMime])
+    || path.extname(originalname).toLowerCase();
   const hash = crypto.randomBytes(12).toString("hex");
   return `${hash}${ext}`;
 }
@@ -78,7 +87,7 @@ export const uploadVideo = multer({
 // так и админской (POST /admin/tickets/:id/messages).
 const ticketStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, ensureUploadDir(UPLOAD_DIRS.tickets)),
-  filename: (_req, file, cb) => cb(null, makeFilename(file.originalname)),
+  filename: (_req, file, cb) => cb(null, makeFilename(file.originalname, file.mimetype)),
 });
 
 export const uploadTicketAttachment = multer({
