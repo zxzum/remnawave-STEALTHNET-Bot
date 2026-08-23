@@ -25,6 +25,7 @@ import {
   deleteSingleSubscription,
   disableSingleSubscription,
   enableSingleSubscription,
+  isActiveSubscriptionGrace,
   revokeSingleSubscription,
   runSingleSubscriptionOperation,
   type SingleSubscriptionOperationResult,
@@ -83,6 +84,7 @@ async function fetchSubscriptions(clientId: string) {
       tariffId: true,
       autoRenewEnabled: true,
       expireAt: true,
+      graceUntil: true,
       extraDevices: true,
       tariff: { select: { internalSquadUuids: true, trafficLimitBytes: true, trafficResetMode: true, includedDevices: true, durationDays: true } },
     },
@@ -208,6 +210,11 @@ export async function syncAllSubscriptionsToRemna(clientId: string): Promise<Bul
     }
     if (!sub.tariff) {
       pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "skipped", message: "нет тарифа — нечего пушить" });
+      continue;
+    }
+    // Активный Lazeika-Only grace защищён от перезаписи (§4.4).
+    if (isActiveSubscriptionGrace(sub.graceUntil ?? null)) {
+      pushItem(report, { subscriptionId: sub.id, subscriptionIndex: sub.subscriptionIndex, remnawaveUuid: sub.remnawaveUuid, status: "skipped", message: "активен режим продления Lazeika-Only — sync пропущен" });
       continue;
     }
     const tariff = sub.tariff;

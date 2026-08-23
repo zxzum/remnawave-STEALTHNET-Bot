@@ -26,6 +26,7 @@ import {
   isPaidVpnPurchase,
   markTrialUsedForPaidPurchase,
 } from "../trial/trial-purchase-lock.service.js";
+import { loadResourceState as loadLazeikaResourceState } from "../lazeika-only/lazeika-only.config.js";
 import {
   applyTrafficEntitlement,
   validateTrafficEntitlement,
@@ -376,9 +377,15 @@ async function getAllTariffSquadUuids(): Promise<Set<string>> {
  * Исключение: managed Lazeika-Only squad не сохраняется как «чужой» (§4.4).
  */
 async function mergeSquads(tariffSquadUuids: string[], currentSquadUuids: string[]): Promise<string[]> {
-  const [allTariffSquads, cfg] = await Promise.all([getAllTariffSquadUuids(), getSystemConfig()]);
+  const [allTariffSquads, cfg, lazeikaState] = await Promise.all([
+    getAllTariffSquadUuids(),
+    getSystemConfig(),
+    loadLazeikaResourceState().catch(() => null),
+  ]);
+  // Ключ настроек может отставать от resource_state (squad создан setup'ом, настройки не пересохраняли).
   const managed = new Set(
-    [cfg.lazeikaOnlySquadUuid, cfg.expiredGraceSquadUuid].filter((u): u is string => Boolean(u)),
+    [cfg.lazeikaOnlySquadUuid, cfg.expiredGraceSquadUuid, lazeikaState?.squadUuid ?? null]
+      .filter((u): u is string => Boolean(u)),
   );
   const preserved = currentSquadUuids.filter(
     (u) => !allTariffSquads.has(u) && !tariffSquadUuids.includes(u) && !managed.has(u),

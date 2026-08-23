@@ -2497,15 +2497,20 @@ async function applySingleRemnaPatch(
       requiredFailure: true,
     };
   }
-  if (data.expireAt) {
-    await prisma.subscription.update({
-      where: { id: subscriptionId },
-      data: { expireAt: new Date(data.expireAt) },
-    });
-  }
   const patch = { ...data } as Record<string, unknown>;
   if (data.expireAt && data.status === undefined && new Date(data.expireAt).getTime() > Date.now()) patch.status = "ACTIVE";
+  // Сначала Remna, затем локальная запись — БД не опережает панель (§4.1.6).
   const result = await runSingleSubscriptionOperation(subscriptionId, (uuid) => remnaUpdateUser({ uuid, ...patch }));
+  if (!result.requiredFailure) {
+    await prisma.subscription.update({
+      where: { id: subscriptionId },
+      data: {
+        ...(data.expireAt ? { expireAt: new Date(data.expireAt) } : {}),
+        // Явное восстановление срока снимает Lazeika-Only grace.
+        ...(data.expireAt ? { graceUntil: null } : {}),
+      },
+    });
+  }
   return { notFound: false, ...result };
 }
 

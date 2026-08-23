@@ -15,9 +15,9 @@ export type XrayConfig = {
 /** Правило применяется строго к нашему inboundTag — глобальный routing не трогаем. */
 export function buildRoutingRules(inboundTag: string, blockOutboundTag: string): XrayRoutingRule[] {
   return [
-    { inboundTag: [inboundTag], domain: ["geosite:telegram"], outbound: "DIRECT", network: "tcp,udp" },
-    { inboundTag: [inboundTag], domain: ["domain:lazeika.xyz"], outbound: "DIRECT" },
-    { inboundTag: [inboundTag], network: "tcp,udp", outbound: blockOutboundTag },
+    { inboundTag: [inboundTag], domain: ["geosite:telegram"], outboundTag: "DIRECT", network: "tcp,udp" },
+    { inboundTag: [inboundTag], domain: ["domain:lazeika.xyz"], outboundTag: "DIRECT" },
+    { inboundTag: [inboundTag], network: "tcp,udp", outboundTag: blockOutboundTag },
   ];
 }
 
@@ -97,12 +97,14 @@ export function applyLazeikaToConfig(
     // ponytail: geosite:telegram — штатный matcher Xray-core; валидность проверяем наличием BLOCK.
   }
 
-  // Удаляем только свои прежние правила (по inboundTag), затем добавляем актуальные.
+  // Удаляем только свои прежние правила (по inboundTag). Managed-правила ставим
+  // ПЕРВЫМИ: глобальный catch-all (например network tcp,udp → auto-wl) иначе
+  // перехватит трафик managed inbound до наших allowlist-правил.
   const foreignRules = config.routing.rules.filter(
     (r) => !Array.isArray(r.inboundTag) || !(r.inboundTag as string[]).includes(tag),
   );
   const rules = buildRoutingRules(tag, block.tag);
-  config.routing.rules = [...foreignRules, ...rules];
+  config.routing.rules = [...rules, ...foreignRules];
   if (!outbounds.some((o) => o.tag === "DIRECT")) {
     outbounds.push({ tag: "DIRECT", protocol: "freedom" });
   }

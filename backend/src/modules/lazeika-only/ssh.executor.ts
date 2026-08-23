@@ -33,29 +33,46 @@ export function readSshEnv(env: NodeJS.ProcessEnv = process.env): SshEnv {
 export type SshResult = { ok: boolean; exitCode: number | null; stdout: string; stderr: string };
 
 /**
- * Выполнить скрипт на ноде: stdin = script. Никакой конкатенации команд:
- * адрес ноды приходит только из списка Remnawave nodes и валидируется выше.
+ * Аргументы ssh: опции → "--" → destination → удалённая команда.
+ * "--" ДОЛЖЕН стоять до destination (конец опций), команда — строго после.
  */
-export function runSsh(nodeAddress: string, script: string, sshEnv: SshEnv = readSshEnv()): Promise<SshResult> {
+export function buildSshArgs(nodeAddress: string, sshEnv: SshEnv): string[] {
+  return [
+    "-i", sshEnv.privateKeyPath,
+    "-p", String(sshEnv.port),
+    "-o", "BatchMode=yes",
+    "-o", "StrictHostKeyChecking=yes",
+    "-o", `UserKnownHostsFile=${sshEnv.knownHostsFile}`,
+    "-o", "ConnectTimeout=10",
+    "--",
+    `${sshEnv.user}@${nodeAddress}`,
+    "bash", "-s",
+  ];
+}
+
+/** Выполнить скрипт на ноде: stdin = script. Никакой конкатенации команд. */
+export function runSsh(nodeAddress: string, script: string, sshEnv: SshEnv = readSshEnv(), timeoutMs = 120_000): Promise<SshResult> {
   return new Promise((resolve, reject) => {
-    // ponytail: StrictHostKeyChecking=yes + известный user@host; ключ не передаём аргументами команды.
-    const args = [
-      "-i", sshEnv.privateKeyPath,
-      "-p", String(sshEnv.port),
-      "-o", "BatchMode=yes",
-      "-o", "StrictHostKeyChecking=yes",
-      "-o", `UserKnownHostsFile=${sshEnv.knownHostsFile}`,
-      "-o", "ConnectTimeout=10",
-      `${sshEnv.user}@${nodeAddress}`,
-      "--", "bash -s",
-    ];
-    const child = spawn("ssh", args, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn("ssh", buildSshArgs(nodeAddress, sshEnv), { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (result: SshResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    // Общий таймаут: ConnectTimeout покрывает только соединение, не выполнение скрипта.
+    const timer = setTimeout(() => {
+      stderr += `\nlazeika-only: timeout after ${timeoutMs}ms`;
+      child.kill("SIGKILL");
+      finish({ ok: false, exitCode: null, stdout, stderr });
+    }, timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
     child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.on("error", reject);
-    child.on("close", (exitCode) => resolve({ ok: exitCode === 0, exitCode, stdout, stderr }));
+    child.on("error", (error) => { clearTimeout(timer); reject(error); });
+    child.on("close", (exitCode) => finish({ ok: exitCode === 0, exitCode, stdout, stderr }));
     child.stdin.end(script);
   });
 }

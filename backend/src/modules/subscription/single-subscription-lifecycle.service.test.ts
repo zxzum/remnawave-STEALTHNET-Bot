@@ -522,6 +522,38 @@ test("Remnawave failure does not persist graceUntil", async () => {
   }
 });
 
+test("disabling the feature closes an already active grace on the next tick", async () => {
+  const now = new Date("2026-07-18T12:00:00.000Z");
+  const expireAt = new Date("2026-07-16T12:00:00.000Z");
+  const fixedGraceUntil = new Date("2026-07-25T12:00:00.000Z");
+  const mock = mockExpiredSubscriptions([{
+    id: "sub-disable-grace",
+    remnawaveUuid: "remna-disable-grace",
+    expireAt,
+    graceUntil: fixedGraceUntil,
+    extraDevices: 0,
+    tariff,
+  }]);
+  const calls: Array<Record<string, unknown>> = [];
+  try {
+    const result = await (service.processExpiredSingleSubscriptionAccess as ProcessExpired)(
+      10,
+      async (body) => { calls.push(body); return { status: 200, data: {} }; },
+      async () => ({ expiredGraceEnabled: false, expiredGraceDays: 7, expiredGraceSquadUuid: null }),
+      now,
+      // Функция выключена после выдачи grace → активный доступ закрывается (§4.4 disable).
+      async () => ({ enabled: false, days: 7, squadUuid: "grace-squad", ready: true }),
+    );
+    assert.deepEqual(result, { checked: 1, grace: 0, disabled: 1, failed: 0 });
+    assert.equal(calls[0]?.status, "DISABLED");
+    assert.deepEqual(calls[0]?.activeInternalSquads, []);
+    assert.equal(mock.updates.length, 2);
+    assert.deepEqual(mock.updates[1], { where: { id: "sub-disable-grace" }, data: { graceUntil: null } });
+  } finally {
+    mock.restore();
+  }
+});
+
 test("expired access missing UUID records PENDING without an API call", async () => {
   const now = new Date("2026-07-18T12:00:00.000Z");
   const mock = mockExpiredSubscriptions([{

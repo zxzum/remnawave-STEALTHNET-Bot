@@ -30,7 +30,15 @@ function service() {
       createConfigProfile: remnaCreateConfigProfile,
       updateConfigProfile: remnaUpdateConfigProfile,
       deleteConfigProfile: remnaDeleteConfigProfile,
-      updateNode: remnaUpdateNode,
+      updateNode: (body) => remnaUpdateNode({
+        uuid: body.uuid,
+        ...(body.configProfile ? {
+          configProfile: {
+            activeConfigProfileUuid: body.configProfile.activeConfigProfileUuid ?? "",
+            activeInbounds: body.configProfile.activeInbounds ?? [],
+          },
+        } : {}),
+      }),
       getInternalSquads: remnaGetInternalSquads,
       createInternalSquad: remnaCreateInternalSquad,
       updateInternalSquad: remnaUpdateInternalSquad,

@@ -24,7 +24,7 @@ export type LazeikaRemnaDeps = {
   createConfigProfile: (body: { name: string; config: unknown }) => Promise<RemnaResult>;
   updateConfigProfile: (body: { uuid: string; name?: string; config?: unknown }) => Promise<RemnaResult>;
   deleteConfigProfile: (uuid: string) => Promise<RemnaResult>;
-  updateNode: (body: { uuid: string; activeConfigProfileUuid?: string | null; activeInbounds?: string[] }) => Promise<RemnaResult>;
+  updateNode: (body: { uuid: string; configProfile?: { activeConfigProfileUuid?: string | null; activeInbounds?: string[] } }) => Promise<RemnaResult>;
   getInternalSquads: () => Promise<RemnaResult>;
   createInternalSquad: (body: { name: string; inbounds: string[] }) => Promise<RemnaResult>;
   updateInternalSquad: (body: { uuid: string; inbounds?: string[] }) => Promise<RemnaResult>;
@@ -48,20 +48,54 @@ function unwrap(data: unknown): unknown {
   const d = data as { response?: unknown } | undefined;
   return d?.response !== undefined ? d.response : data;
 }
+
+/** upsert UUID в SystemSetting (без секретов, только идентификаторы). */
+function defaultPersistUuid(key: string) {
+  return async (uuid: string | null): Promise<void> => {
+    const { prisma } = await import("../../db.js");
+    await prisma.systemSetting.upsert({
+      where: { key },
+      create: { key, value: uuid ?? "" },
+      update: { value: uuid ?? "" },
+    });
+  };
+}
 async function requireOk(res: RemnaResult, phase: string): Promise<unknown> {
   const e = res.error ?? (res.status >= 400 ? `Remnawave request failed (${res.status})` : null);
   if (e) throw new SetupError(e, phase);
   return res.data;
 }
 
+type RemnaNodeConfigProfile = {
+  activeConfigProfileUuid?: string | null;
+  activeInbounds?: Array<string | { uuid: string }>;
+};
 type RemnaNodeShape = {
   uuid: string;
   name?: string;
   address?: string;
   isDisabled?: boolean;
-  activeConfigProfileUuid?: string | null;
-  activeInbounds?: string[];
+  /** Контракт Remnawave: профиль и активные инбаунды вложены в configProfile. */
+  configProfile?: RemnaNodeConfigProfile | null;
 };
+
+function nodeActiveProfileUuid(node: RemnaNodeShape): string | null {
+  return node.configProfile?.activeConfigProfileUuid ?? null;
+}
+/** activeInbounds приходят строками UUID либо объектами {uuid} — нормализуем. */
+function nodeActiveInboundUuids(node: RemnaNodeShape): string[] {
+  return (node.configProfile?.activeInbounds ?? [])
+    .map((ib) => (typeof ib === "string" ? ib : ib?.uuid))
+    .filter((u): u is string => Boolean(u));
+}
+function nodeConfigProfilePatch(uuid: string | null | undefined, inboundUuids: string[]) {
+  return {
+    configProfile: {
+      ...(uuid ? { activeConfigProfileUuid: uuid } : {}),
+      activeInbounds: inboundUuids,
+    },
+  };
+}
 type ProfileInbound = { uuid?: string; tag?: string; port?: number };
 type ProfileShape = { uuid?: string; name?: string; config?: XrayConfig; inbounds?: ProfileInbound[] };
 type SquadShape = { uuid?: string; name?: string; inbounds?: Array<{ uuid?: string } | string> };
@@ -100,6 +134,8 @@ export type LazeikaServiceDependencies = {
   loadState?: typeof loadResourceState;
   saveState?: typeof saveResourceState;
   persistProfileUuid?: (uuid: string | null) => Promise<void>;
+  /** Авто-созданный squad пишется и в lazeika_only_squad_uuid (его читает mergeSquads). */
+  persistSquadUuid?: (uuid: string | null) => Promise<void>;
 };
 
 export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
@@ -109,14 +145,8 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     sshEnvLoader = readSshEnv,
     loadState = loadResourceState,
     saveState = saveResourceState,
-    persistProfileUuid = async (uuid) => {
-      const { prisma } = await import("../../db.js");
-      await prisma.systemSetting.upsert({
-        where: { key: LAZEIKA_PROFILE_KEY },
-        create: { key: LAZEIKA_PROFILE_KEY, value: uuid ?? "" },
-        update: { value: uuid ?? "" },
-      });
-    },
+    persistProfileUuid = defaultPersistUuid(LAZEIKA_PROFILE_KEY),
+    persistSquadUuid = defaultPersistUuid("lazeika_only_squad_uuid"),
   } = dependencies;
 
   async function fetchNodes(): Promise<RemnaNodeShape[]> {
@@ -166,6 +196,10 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     const iface = /IFACE=(\S+)/.exec(text)?.[1] ?? "";
     const mode = /MODE=(\S+)/.exec(text)?.[1];
     if (!iface) throw new SetupError("Не удалось определить внешний интерфейс ноды", "SSH_TC");
+    if (mode === "foreign") {
+      // Порт занят чужим процессом — вешать лимитер нельзя, ограничили бы не только Xray.
+      throw new SetupError("Топология ноды не поддерживается автоматически: порт занят процессом, который не является Xray/docker-proxy", "SSH_TC");
+    }
     if (mode === "unknown") {
       throw new SetupError("Топология ноды не поддерживается автоматически: порт inbound не виден на хосте", "SSH_TC");
     }
@@ -179,6 +213,9 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     let state = await loadState();
     const created: CreatedResource[] = [];
     let nodeChanged = false;
+    let nodeAddress: string | null = null;
+    let detectedIface: string | null = null;
+    let autoSquadCreatedUuid: string | null = null;
 
     state = { ...state, status: "APPLYING", lastError: null };
     await saveState(state);
@@ -190,9 +227,10 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       if (!node) throw new SetupError("Нода не найдена в Remnawave", "VALIDATION");
       if (node.isDisabled) throw new SetupError("Нода отключена", "VALIDATION");
       if (!node.address) throw new SetupError("У ноды нет address", "VALIDATION");
+      nodeAddress = node.address;
 
       const profiles = await fetchProfiles();
-      const baseProfile = profiles.find((p) => p.uuid === node.activeConfigProfileUuid);
+      const baseProfile = profiles.find((p) => p.uuid === nodeActiveProfileUuid(node));
       if (!baseProfile?.config) throw new SetupError("Не удалось получить активный config-профиль ноды", "VALIDATION");
 
       // ── Squad: ручной UUID либо авто-поиск по имени ──
@@ -251,16 +289,16 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       state.nodeUuid = input.nodeUuid;
 
       // ── Применяем профиль к ноде, сохраняя прежние activeInbounds (§2.2) ──
+      const previousInboundUuids = nodeActiveInboundUuids(node);
       state.previousNodeConfig ??= {
-        activeConfigProfileUuid: node.activeConfigProfileUuid ?? null,
-        activeInbounds: [...(node.activeInbounds ?? [])],
+        activeConfigProfileUuid: nodeActiveProfileUuid(node),
+        activeInbounds: [...previousInboundUuids],
       };
       await saveState(state);
       await requireOk(
         await remna.updateNode({
           uuid: input.nodeUuid,
-          activeConfigProfileUuid: managedProfileUuid,
-          activeInbounds: Array.from(new Set([...(node.activeInbounds ?? []), managedInboundUuid])),
+          ...nodeConfigProfilePatch(managedProfileUuid, Array.from(new Set([...previousInboundUuids, managedInboundUuid]))),
         }),
         "NODE_APPLY",
       );
@@ -276,6 +314,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         if (!createdSquad?.uuid) throw new SetupError("Remnawave не вернул UUID созданного squad", "SQUAD");
         squadUuid = createdSquad.uuid;
         created.push({ kind: "squad", uuid: squadUuid });
+        autoSquadCreatedUuid = squadUuid;
         squadSource = "AUTO";
       } else {
         const squad = (await fetchSquads()).find((s) => s.uuid === squadUuid);
@@ -334,12 +373,24 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       }
 
       const existingNotifications = hosts.filter(isNotificationHost);
+      // Binding существующих notification-host обновляем к текущему профилю/inbound
+      // (reconcile), не трогая ручные remark/address (§7.4.7).
+      for (const existing of existingNotifications) {
+        if (!existing.uuid) continue;
+        const currentBinding = existing.inbound ?? null;
+        if (currentBinding?.configProfileUuid === managedProfileUuid
+          && currentBinding.configProfileInboundUuid === managedInboundUuid) continue;
+        await requireOk(
+          await remna.updateHost({ uuid: existing.uuid, inbound: binding }),
+          "HOSTS",
+        );
+        state.notificationHostUuids = Array.from(new Set([...state.notificationHostUuids, existing.uuid]));
+      }
       for (let i = existingNotifications.length; i < NOTIFICATION_REMARKS.length; i++) {
         const raw = await requireOk(
           await remna.createHost({
             remark: NOTIFICATION_REMARKS[i],
             address: `notification-${i + 1}.lazeika.invalid`,
-            port: null,
             isDisabled: true,
             inbound: binding,
             tags: [LAZEIKA_HOST_TAG, LAZEIKA_NOTIFICATION_HOST_TAG],
@@ -356,21 +407,27 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       const detectScript = [
         'IF="$(ip -o route show default 2>/dev/null | awk \'{print $5}\' | head -1)"',
         '[ -n "$IF" ] || exit 3',
-        `LISTEN=$(ss -Hltn "sport = :${port}" 2>/dev/null | wc -l)`,
-        `DOCKERPROXY=$(docker ps --format "{{.Ports}}" 2>/dev/null | grep -c ":${port}->" || true)`,
-        'if [ "${LISTEN:-0}" -gt 0 ]; then MODE=host; elif [ "${DOCKERPROXY:-0}" -gt 0 ]; then MODE=docker; else MODE=unknown; fi',
+        `LISTEN="$(ss -Hltnp "sport = :${port}" 2>/dev/null)"`,
+        'case "$LISTEN" in',
+        '  *docker-proxy*) MODE=docker ;;',
+        '  *xray*) MODE=host ;;',
+        '  "") MODE=unknown ;;',
+        '  *) MODE=foreign; echo "FOREIGN=$LISTEN" | cut -c1-120 ;;',
+        'esac',
         'echo "IFACE=$IF"',
         'echo "MODE=$MODE"',
         "command -v tc >/dev/null 2>&1 && echo TC=ok || echo TC=missing",
       ].join("\n");
-      const detected = await ssh(node.address, detectScript);
-      if (!detected.ok) throw new SetupError(`Детект топологии не удался (exit ${detected.exitCode})`, "SSH_TC");
-      const { iface } = parseDetectOutput(detected.stdout || detected.stderr);
+      if (!detectedIface) {
+        const detected = await ssh(node.address, detectScript);
+        if (!detected.ok) throw new SetupError(`Детект топологии не удался (exit ${detected.exitCode})`, "SSH_TC");
+        ({ iface: detectedIface } = parseDetectOutput(detected.stdout || detected.stderr));
+      }
 
       const remoteInstall = [
         "install -d /usr/local/sbin",
         `cat > ${TC_SCRIPT_PATH}.tmp <<'LAZEIKA_TC_EOF'`,
-        buildTcScript({ iface, port, speedMbit: speed }).trimEnd(),
+        buildTcScript({ iface: detectedIface!, port, speedMbit: speed }).trimEnd(),
         "LAZEIKA_TC_EOF",
         `chmod 0755 ${TC_SCRIPT_PATH}.tmp && mv ${TC_SCRIPT_PATH}.tmp ${TC_SCRIPT_PATH}`,
         `cat > /etc/systemd/system/${TC_UNIT_NAME}.tmp <<'LAZEIKA_UNIT_EOF'`,
@@ -380,13 +437,13 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         "systemctl daemon-reload",
         `systemctl enable --now ${TC_UNIT_NAME}`,
         TC_SCRIPT_PATH,
-        `tc filter show dev "${iface}" | grep -q pref ${TC_PREF_BASE + 1}`,
+        `tc filter show dev "${detectedIface}" | grep -q pref ${TC_PREF_BASE + 1}`,
       ].join("\n");
       const applied = await ssh(node.address, remoteInstall);
       if (!applied.ok) {
         throw new SetupError(`tc-фильтры не применились (exit ${applied.exitCode})`, "SSH_TC");
       }
-      state.ssh = { interface: iface, rateMbit: speed };
+      state.ssh = { interface: detectedIface!, rateMbit: speed };
 
       // ── Готово (только теперь READY, §7.5) ──
       state.createdResourceUuids = [];
@@ -394,6 +451,8 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       state.status = "READY";
       await saveState(state);
       await persistProfileUuid(managedProfileUuid);
+      // Авто-созданный squad должен попасть в настройки: mergeSquads читает ключ (§4.4.3).
+      await persistSquadUuid(squadUuid);
       return { status: "READY", state };
     } catch (error) {
       const phase = error instanceof SetupError ? error.phase : "UNKNOWN";
@@ -403,15 +462,39 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         if (nodeChanged && state.previousNodeConfig) {
           await remna.updateNode({
             uuid: input.nodeUuid,
-            activeConfigProfileUuid: state.previousNodeConfig.activeConfigProfileUuid,
-            activeInbounds: state.previousNodeConfig.activeInbounds,
+            ...nodeConfigProfilePatch(state.previousNodeConfig.activeConfigProfileUuid, state.previousNodeConfig.activeInbounds),
           }).catch(() => {});
         }
         for (const r of [...created].reverse()) {
           if (r.kind === "host") await remna.deleteHost(r.uuid).catch(() => {});
           else if (r.kind === "profile") await remna.deleteConfigProfile(r.uuid).catch(() => {});
-          else await remna.deleteInternalSquad(r.uuid).catch(() => {});
+          else {
+            await remna.deleteInternalSquad(r.uuid).catch(() => {});
+            // Удалённый авто-squad не должен оставаться в state — иначе повторный
+            // setup вечно падает с «squad не найден».
+            if (state.squadUuid === r.uuid) {
+              state.squadUuid = null;
+              state.squadSource = "AUTO";
+              autoSquadCreatedUuid = null;
+            }
+          }
         }
+        // tc: снимаем свои фильтры и unit, если детект уже определил интерфейс (§7.6).
+        if (detectedIface && nodeAddress) {
+          const cleanupLines = [
+            `systemctl disable --now ${TC_UNIT_NAME} 2>/dev/null || true`,
+            `rm -f /etc/systemd/system/${TC_UNIT_NAME} ${TC_SCRIPT_PATH}`,
+            "systemctl daemon-reload 2>/dev/null || true",
+          ];
+          for (const direction of ["ingress", "egress"] as const) {
+            for (let i = 1; i <= 8; i++) {
+              cleanupLines.push(`tc filter del dev "${detectedIface}" ${direction} pref ${TC_PREF_BASE + i} 2>/dev/null || true`);
+            }
+          }
+          await ssh(nodeAddress, cleanupLines.join("\n")).catch(() => {});
+        }
+        // Удалённый авто-squad не должен остаться в настройках для mergeSquads.
+        if (!state.squadUuid) await persistSquadUuid(null).catch(() => {});
       } catch (rollbackError) {
         console.error("[lazeika-only] rollback failed", rollbackError);
       }
@@ -469,8 +552,8 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
 
     if (state.nodeUuid) {
       const node = (await fetchNodes().catch(() => [])).find((n) => n.uuid === state.nodeUuid);
-      add("node_profile", node?.activeConfigProfileUuid === state.profileUuid);
-      add("node_inbound_active", !!node?.activeInbounds?.includes(state.managedInboundUuid ?? ""));
+      add("node_profile", node ? nodeActiveProfileUuid(node) === state.profileUuid : false);
+      add("node_inbound_active", nodeActiveInboundUuids(node ?? { uuid: "" }).includes(state.managedInboundUuid ?? ""));
       if (node?.address && state.managedInboundPort && state.ssh.interface) {
         try {
           const probe = await ssh(

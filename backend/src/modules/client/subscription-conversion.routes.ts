@@ -410,6 +410,8 @@ async function applyQuote(clientId: string, tokenQuote: ManualConversionToken) {
         tariffId: target.id,
         trialId: null,
         expireAt,
+        // Конвертация тарифа — платное восстановление: grace снимается (§4.4).
+        graceUntil: null,
         customPrice: option.price,
         currentPricePerDay: option.durationDays > 0 ? option.price / option.durationDays : null,
       },

@@ -148,8 +148,11 @@ export async function processExpiredSingleSubscriptionAccess(
     const graceElapsed = subscription.graceUntil != null && !graceActiveBefore;
 
     // Fixed graceUntil: уже выданный доступ не пересчитывается при каждом запуске (§4.1.4).
+    // НО: если функция выключена/инфраструктура не готова — активный grace закрывается
+    // ближайшим тиком (§4.4 disable, state-diagram GRACE_ACTIVE → DISABLED).
     let desiredGraceUntil: Date | null = null;
-    if (graceActiveBefore) {
+    const graceStillAllowed = Boolean(lazeika.enabled && lazeika.ready && lazeika.squadUuid && lazeika.days > 0);
+    if (graceActiveBefore && graceStillAllowed) {
       desiredGraceUntil = subscription.graceUntil;
     } else if (!graceElapsed) {
       const computed = new Date(expireAt.getTime() + Math.max(0, lazeika.days) * 86_400_000);
@@ -177,13 +180,14 @@ export async function processExpiredSingleSubscriptionAccess(
           ? Math.max(1, subscription.tariff.includedDevices + subscription.extraDevices)
           : undefined,
         activeInternalSquads: [lazeika.squadUuid],
-      } : subscription.tariff && !graceElapsed ? {
+      } : subscription.tariff && subscription.graceUntil == null ? {
         // Обычное истечение без grace — прежнее поведение.
         ...remnaTrafficSettings(subscription.tariff),
         hwidDeviceLimit: Math.max(1, subscription.tariff.includedDevices + subscription.extraDevices),
         activeInternalSquads: subscription.tariff.internalSquadUuids,
       } : {
-        // Окончание grace (§4.2): рабочий тарифный squad не оставляем.
+        // Grace-подписка теряет доступ (истёк §4.2 ИЛИ функция выключена §4.4):
+        // рабочий тарифный squad не оставляем.
         ...(subscription.tariff
           ? { hwidDeviceLimit: Math.max(1, subscription.tariff.includedDevices + subscription.extraDevices) }
           : {}),

@@ -285,13 +285,20 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
   }
   const liveSubscription = await prisma.subscription.findFirst({
     where: { id: payment.subscriptionId ?? "", deletionRequestedAt: null },
-    select: { id: true, remnawaveUuid: true, ownerId: true, giftedToClientId: true },
+    select: { id: true, remnawaveUuid: true, ownerId: true, giftedToClientId: true, graceUntil: true },
   });
   if (!payment.subscriptionId || plan.subscriptionId !== payment.subscriptionId
     || !liveSubscription || plan.uuid !== liveSubscription.remnawaveUuid
     || (liveSubscription.ownerId !== payment.clientId && liveSubscription.giftedToClientId !== payment.clientId)) {
     if (!await quarantine("PENDING", pendingClaimToken, "persisted plan binding mismatch")) return { ok: true, outcome: "QUEUED" };
     return pendingFailure("Привязка сохранённого плана изменилась; требуется ручная проверка", 409, false);
+  }
+
+  // Активный Lazeika-Only grace: опция не должна перезаписывать grace-сквады/лимиты.
+  // Контролируемый конфликт с ретраем — применится после восстановления тарифа (§4.4).
+  const { isActiveSubscriptionGrace } = await import("../subscription/single-subscription-lifecycle.service.js");
+  if (isActiveSubscriptionGrace(liveSubscription.graceUntil ?? null)) {
+    return pendingFailure("Подписка в режиме продления Lazeika-Only: применение опции отложено до восстановления тарифа", 409);
   }
 
   const applying = await prisma.$transaction(async (tx) => {

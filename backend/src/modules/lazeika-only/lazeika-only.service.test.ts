@@ -22,6 +22,14 @@ const baseInbound = {
   sniffing: { enabled: true, destOverride: ["tls"] },
 };
 
+type FakeNode = {
+  uuid: string;
+  name?: string;
+  address?: string;
+  isDisabled?: boolean;
+  configProfile?: { activeConfigProfileUuid?: string; activeInbounds?: string[] };
+};
+
 /** Полностью fake-окружение Remna в памяти. */
 function createFakeRemna(options: {
   failCreateProfile?: boolean;
@@ -41,9 +49,14 @@ function createFakeRemna(options: {
       name: "Alpha",
       address: "203.0.113.10",
       isDisabled: false,
-      activeConfigProfileUuid: BASE_PROFILE_UUID,
-      activeInbounds: ["inbound-base-uuid"],
-    }],
+      // Реальный контракт Remnawave: профиль/инбаунды вложены в configProfile.
+      configProfile: {
+        activeConfigProfileUuid: BASE_PROFILE_UUID,
+        activeInbounds: ["inbound-base-uuid"],
+      },
+    }] as FakeNode[],
+    // PATCH-тела updateNode — для проверки формы запроса к реальной панели.
+    updateNodeBodies: [] as Array<Record<string, unknown>>,
     profiles: [{
       uuid: BASE_PROFILE_UUID,
       name: "Main",
@@ -111,9 +124,15 @@ function createFakeRemna(options: {
     updateNode: async (body: Record<string, unknown>) => {
       const n = state.nodes.find((x) => x.uuid === body.uuid);
       if (!n) return { status: 404, error: "node not found" };
-      Object.assign(n, body);
-      state.calls.updateNode.push(body);
-      return ok(n);
+      const patch = body.configProfile as Record<string, unknown> | undefined;
+      if (patch) {
+        n.configProfile = {
+          ...(patch.activeConfigProfileUuid !== undefined ? { activeConfigProfileUuid: patch.activeConfigProfileUuid as string } : {}),
+          activeInbounds: patch.activeInbounds as string[],
+        };
+      }
+      state.updateNodeBodies.push(body);
+      return ok({ ...n });
     },
     getInternalSquads: async () => ok({ response: { internalSquads: state.squads } }),
     createInternalSquad: async (body: { name: string; inbounds: string[] }) => {
@@ -192,6 +211,7 @@ test("setup from clean state creates exactly one profile, squad, working host an
     loadState: store.loadState,
     saveState: store.saveState,
     persistProfileUuid: async () => {},
+    persistSquadUuid: async () => {},
   });
 
   const result = await service.setup(SETUP_INPUT);
@@ -203,9 +223,13 @@ test("setup from clean state creates exactly one profile, squad, working host an
   assert.equal(env.state.squads[0].name, "Lazeika-Only");
   assert.deepEqual(env.state.squads[0].inbounds, [{ uuid: store.state.managedInboundUuid }]);
   // нода переключена на managed профиль + managed inbound добавлен к прежним
-  assert.equal(env.state.nodes[0].activeConfigProfileUuid, store.state.profileUuid);
-  assert.ok(env.state.nodes[0].activeInbounds.includes(store.state.managedInboundUuid ?? ""));
-  assert.ok(env.state.nodes[0].activeInbounds.includes("inbound-base-uuid"));
+  assert.equal(env.state.nodes[0].configProfile?.activeConfigProfileUuid, store.state.profileUuid);
+  assert.ok(env.state.nodes[0].configProfile?.activeInbounds?.includes(store.state.managedInboundUuid ?? ""));
+  assert.ok(env.state.nodes[0].configProfile?.activeInbounds?.includes("inbound-base-uuid"));
+  // PATCH ноды уходит во вложенном контракте configProfile (не плоские поля)
+  const appliedPatch = env.state.updateNodeBodies.find((b) => b.configProfile && (b.configProfile as { activeConfigProfileUuid?: string }).activeConfigProfileUuid === store.state.profileUuid);
+  assert.ok(appliedPatch, "updateNode body must use nested configProfile");
+  assert.deepEqual((appliedPatch!.configProfile as { activeInbounds: string[] }).activeInbounds.sort(), ["inbound-base-uuid", store.state.managedInboundUuid].sort());
   const lazeikaHosts = env.state.hosts.filter((h) => (h.tags as string[])?.includes("LAZEIKA_ONLY"));
   assert.equal(lazeikaHosts.length, 4);
   assert.equal(lazeikaHosts.filter((h) => h.isDisabled).length, 3);
@@ -229,6 +253,7 @@ test("second setup does not duplicate resources", async () => {
   const service = createLazeikaService({
     remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
+    persistSquadUuid: async () => {},
   });
   await service.setup(SETUP_INPUT);
   const snapshot = {
@@ -253,6 +278,7 @@ test("manual squad containing foreign inbounds is rejected without changes", asy
   const service = createLazeikaService({
     remna: env.remna, ssh: createSshFake().ssh, sshEnvLoader: () => SSH_ENV,
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
+    persistSquadUuid: async () => {},
   });
   await assert.rejects(
     () => service.setup({ ...SETUP_INPUT, squadUuid: MANUAL_SQUAD_UUID }),
@@ -260,7 +286,7 @@ test("manual squad containing foreign inbounds is rejected without changes", asy
   );
   assert.equal(store.state.status, "ERROR");
   // нода не была изменена
-  assert.equal(env.state.nodes[0].activeConfigProfileUuid, BASE_PROFILE_UUID);
+  assert.equal(env.state.nodes[0].configProfile?.activeConfigProfileUuid, BASE_PROFILE_UUID);
 });
 
 test("rollback restores the node after a Remna profile failure", async () => {
@@ -269,12 +295,13 @@ test("rollback restores the node after a Remna profile failure", async () => {
   const service = createLazeikaService({
     remna: env.remna, ssh: createSshFake().ssh, sshEnvLoader: () => SSH_ENV,
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
+    persistSquadUuid: async () => {},
   });
   await assert.rejects(() => service.setup(SETUP_INPUT), /profile create failed/);
   assert.equal(store.state.status, "ERROR");
   assert.match(store.state.lastError ?? "", /\[PROFILE\]/);
-  assert.equal(env.state.nodes[0].activeConfigProfileUuid, BASE_PROFILE_UUID);
-  assert.deepEqual(env.state.nodes[0].activeInbounds, ["inbound-base-uuid"]);
+  assert.equal(env.state.nodes[0].configProfile?.activeConfigProfileUuid, BASE_PROFILE_UUID);
+  assert.deepEqual(env.state.nodes[0].configProfile?.activeInbounds, ["inbound-base-uuid"]);
   assert.equal(env.state.squads.length, 0);
 });
 
@@ -285,8 +312,17 @@ test("rollback removes only resources created by the failed run after an SSH fai
   const service = createLazeikaService({
     remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
+    persistSquadUuid: async () => {},
   });
-  await assert.rejects(() => service.setup(SETUP_INPUT), /tc-фильтры/);
+  const persistedSquadUuids: Array<string | null> = [];
+  // переопределяем сервис с записью persistSquadUuid
+  const service2 = createLazeikaService({
+    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    loadState: store.loadState, saveState: store.saveState,
+    persistProfileUuid: async () => {},
+    persistSquadUuid: async (uuid) => { persistedSquadUuids.push(uuid); },
+  });
+  await assert.rejects(() => service2.setup(SETUP_INPUT), /tc-фильтры/);
   assert.equal(store.state.status, "ERROR");
   assert.match(store.state.lastError ?? "", /\[SSH_TC\]/);
   // созданные этим запуском ресурсы удалены
@@ -294,8 +330,32 @@ test("rollback removes only resources created by the failed run after an SSH fai
   assert.deepEqual(deletedKinds.sort(), ["host", "host", "host", "host", "profile", "squad"].sort());
   assert.equal(env.state.profiles.length, 1);
   assert.equal(env.state.squads.length, 0);
+  // stale auto-squad UUID сброшен в state и в настройках — иначе повторный setup вечно падает
+  assert.equal(store.state.squadUuid, null);
+  assert.ok(persistedSquadUuids.includes(null), "persisted squad uuid cleared");
+  // tc-cleanup отправлен: свои pref'ы + unit
+  const cleanup = sshf.scripts.find((sc) => sc.includes("systemctl disable --now lazeika-only-tc.service"));
+  assert.ok(cleanup, "tc cleanup script sent");
+  assert.match(cleanup!, /tc filter del dev "eth0" ingress pref 11001/);
+  assert.match(cleanup!, /tc filter del dev "eth0" egress pref 11008/);
   // нода восстановлена
-  assert.equal(env.state.nodes[0].activeConfigProfileUuid, BASE_PROFILE_UUID);
+  assert.equal(env.state.nodes[0].configProfile?.activeConfigProfileUuid, BASE_PROFILE_UUID);
+});
+
+test("auto-created squad uuid is persisted to settings for mergeSquads", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createStateStore();
+  const persisted: Array<string | null> = [];
+  const service = createLazeikaService({
+    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    loadState: store.loadState, saveState: store.saveState,
+    persistProfileUuid: async () => {},
+    persistSquadUuid: async (uuid) => { persisted.push(uuid); },
+  });
+  await service.setup(SETUP_INPUT);
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0], store.state.squadUuid);
 });
 
 test("reconcile recreates missing hosts without duplicating existing ones", async () => {
@@ -305,6 +365,7 @@ test("reconcile recreates missing hosts without duplicating existing ones", asyn
   const service = createLazeikaService({
     remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
+    persistSquadUuid: async () => {},
   });
   await service.setup(SETUP_INPUT);
   // админ удалил все хосты вручную

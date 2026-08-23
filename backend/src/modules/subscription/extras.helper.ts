@@ -20,6 +20,7 @@ import {
   remnaDeleteUserHwidDevice,
   remnaUpdateUser,
 } from "../remna/remna.client.js";
+import { isActiveSubscriptionGrace } from "./single-subscription-lifecycle.service.js";
 
 export interface RemoveExtrasResult {
   ok: boolean;
@@ -182,11 +183,16 @@ export async function applyDevicesToSubscription(subId: string, deviceCount: num
       id: true,
       remnawaveUuid: true,
       extraDevices: true,
+      graceUntil: true,
       tariff: { select: { includedDevices: true, deviceLimit: true } },
     },
   });
   if (!sub) return { ok: false, newDeviceLimit: 0, error: "подписка не найдена" };
   if (!sub.remnawaveUuid) return { ok: false, newDeviceLimit: 0, error: "подписка не привязана к панели" };
+  // Активный Lazeika-Only grace: выдача устройств отложена до восстановления тарифа (§4.4).
+  if (isActiveSubscriptionGrace(sub.graceUntil ?? null)) {
+    return { ok: false, newDeviceLimit: 0, error: "Подписка в режиме продления Lazeika-Only: сначала продлите тариф" };
+  }
   const includedDevices = sub.tariff?.includedDevices ?? sub.tariff?.deviceLimit ?? 1;
   const newDevices = includedDevices + sub.extraDevices + deviceCount;
 
