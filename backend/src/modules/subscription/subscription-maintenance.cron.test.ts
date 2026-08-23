@@ -5,7 +5,12 @@ import test from "node:test";
 process.env.DATABASE_URL ??= "postgresql://postgres:postgres@localhost:5432/stealthnet_test";
 process.env.JWT_SECRET ??= "test-secret-that-is-long-enough-for-validation";
 
-const { expiryReminderOffset, expiringSubscriptionKind, parseReminderHours } = await import("./subscription-maintenance.cron.js");
+const {
+  expiryReminderOffset,
+  expiringSubscriptionKind,
+  parseReminderHours,
+  reminderKeyClaimWhere,
+} = await import("./subscription-maintenance.cron.js");
 const { SUBSCRIPTION_UPDATE_TEXT, renderExpiryReminderText, subscriptionExpiryMarkup } = await import("../notification/telegram-notify.service.js");
 
 test("trial reminders are scheduled at 3 hours and 30 minutes", () => {
@@ -18,6 +23,22 @@ test("trial reminders are scheduled at 3 hours and 30 minutes", () => {
   assert.equal(expiryReminderOffset(new Date("2026-07-27T18:00:00.000Z"), now), null);
   assert.equal(expiryReminderOffset(new Date("2026-07-27T12:00:00.000Z"), now), null);
   assert.deepEqual(parseReminderHours("72, 24, 3, 0.5"), [4320, 1440, 180, 30]);
+});
+
+test("a NULL reminder key is eligible for the first Telegram and email claim", () => {
+  const key = "telegram:paid-expiry:1440:2026-07-28T12:00:00.000Z";
+  assert.deepEqual(reminderKeyClaimWhere("expiryReminderKey", key), {
+    OR: [
+      { expiryReminderKey: null },
+      { NOT: { expiryReminderKey: key } },
+    ],
+  });
+  assert.deepEqual(reminderKeyClaimWhere("expiryEmailReminderKey", key), {
+    OR: [
+      { expiryEmailReminderKey: null },
+      { NOT: { expiryEmailReminderKey: key } },
+    ],
+  });
 });
 
 test("trial chooses a tariff while paid subscription renews itself", () => {

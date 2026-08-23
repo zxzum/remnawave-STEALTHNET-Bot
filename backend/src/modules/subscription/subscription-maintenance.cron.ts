@@ -1,4 +1,5 @@
 import cron from "node-cron";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../../db.js";
 import { registerCron, wrapCronTick } from "../diagnostics/cron-registry.js";
 import {
@@ -56,6 +57,18 @@ export function expiryReminderKey(
   expireAt: Date,
 ): string {
   return `${channel}:${kind}-expiry:${offset}:${expireAt.toISOString()}`;
+}
+
+export function reminderKeyClaimWhere(
+  field: "expiryReminderKey" | "expiryEmailReminderKey",
+  key: string,
+): Prisma.SubscriptionWhereInput {
+  return {
+    OR: [
+      { [field]: null },
+      { NOT: { [field]: key } },
+    ],
+  };
 }
 
 const ONBOARDING_REMINDER_DELAYS_MS = [15 * 60_000, 6 * 60 * 60_000, 24 * 60 * 60_000];
@@ -221,7 +234,7 @@ async function processExpiringSubscription(
     if (telegramOffset && subscription.owner.telegramId) {
       const key = expiryReminderKey("telegram", kind, telegramOffset, subscription.expireAt);
       const claimed = await prisma.subscription.updateMany({
-        where: { id: subscription.id, NOT: { expiryReminderKey: key } },
+        where: { id: subscription.id, ...reminderKeyClaimWhere("expiryReminderKey", key) },
         data: { expiryReminderKey: key },
       });
       if (claimed.count > 0) {
@@ -257,7 +270,7 @@ async function processExpiringSubscription(
     if (emailOffset && subscription.owner.email) {
       const key = expiryReminderKey("email", kind, emailOffset, subscription.expireAt);
       const claimed = await prisma.subscription.updateMany({
-        where: { id: subscription.id, NOT: { expiryEmailReminderKey: key } },
+        where: { id: subscription.id, ...reminderKeyClaimWhere("expiryEmailReminderKey", key) },
         data: { expiryEmailReminderKey: key },
       });
       if (claimed.count > 0) {
