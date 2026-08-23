@@ -542,6 +542,7 @@ export function SettingsPage() {
           return out;
         })(),
         ticketsEnabled: (data as AdminSettings).ticketsEnabled ?? false,
+        cabinetDesign: data.cabinetDesign === "aurora" ? "aurora" : "default",
         aiChatEnabled: (data as AdminSettings).aiChatEnabled !== false,
         sellOptionsEnabled: (data as AdminSettings).sellOptionsEnabled ?? false,
         sellOptionsTrafficEnabled: (data as AdminSettings).sellOptionsTrafficEnabled ?? false,
@@ -948,6 +949,7 @@ export function SettingsPage() {
         ticketsEnabled: settings.ticketsEnabled ?? false,
         adminFrontNotificationsEnabled: settings.adminFrontNotificationsEnabled ?? true,
         aiChatEnabled: settings.aiChatEnabled !== false,
+        cabinetDesign: settings.cabinetDesign === "aurora" ? "aurora" : "default",
         themeAccent: settings.themeAccent ?? "default",
         forceSubscribeEnabled: settings.forceSubscribeEnabled ?? false,
         forceSubscribeChannelId: settings.forceSubscribeChannelId ?? null,
@@ -4495,6 +4497,19 @@ export function SettingsPage() {
               </div>
             </div>
             <CardContent className="space-y-6 p-4 sm:p-6">
+              <div className="space-y-2 rounded-xl border border-white/10 bg-card/40 p-4">
+                <Label htmlFor="cabinet-design" className="text-base font-medium">Дизайн кабинета</Label>
+                <p className="text-xs text-muted-foreground">Выберите текущий вид кабинета для клиентов.</p>
+                <select
+                  id="cabinet-design"
+                  value={settings?.cabinetDesign === "aurora" ? "aurora" : "default"}
+                  onChange={(e) => setSettings((s) => s ? { ...s, cabinetDesign: e.target.value === "aurora" ? "aurora" : "default" } : s)}
+                  className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
+                >
+                  <option value="default">Основной</option>
+                  <option value="aurora">Aurora</option>
+                </select>
+              </div>
               <div className="flex items-center justify-between rounded-xl border border-white/10 p-4 bg-card/40">
                 <div className="space-y-0.5">
                   <Label className="text-base font-medium">{t("admin.settings.theme_user_choice")}</Label>
@@ -4542,7 +4557,7 @@ export function SettingsPage() {
                   onClick={() => {
                     setSaving(true);
                     setMessage("");
-                    api.updateSettings(token, { themeAccent: settings.themeAccent ?? "default", allowUserThemeChange: (settings as any).allowUserThemeChange ?? true })
+                    api.updateSettings(token, { cabinetDesign: settings.cabinetDesign === "aurora" ? "aurora" : "default", themeAccent: settings.themeAccent ?? "default", allowUserThemeChange: (settings as any).allowUserThemeChange ?? true })
                       .then(() => setMessage(t("admin.settings.theme_saved")))
                       .catch(() => setMessage(t("admin.settings.save_error")))
                       .finally(() => setSaving(false));

@@ -28,6 +28,7 @@ const DEFAULTS: Array<[string, string]> = [
   ["auto_renew_grace_period_days", "2"],
   ["auto_renew_max_retries", "3"],
   ["yookassa_recurring_enabled", "false"],
+  ["cabinet_design", "default"],
   ["rollypay_api_key", ""],
   ["rollypay_signing_secret", ""],
   ["rollypay_enabled", "false"],

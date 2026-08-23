@@ -3785,6 +3785,7 @@ const updateSettingsSchema = z.object({
   installSecondDeviceText: z.string().max(8000).nullable().optional(),
   helpIntroText: z.string().max(8000).nullable().optional(),
   ticketsEnabled: z.boolean().optional(),
+  cabinetDesign: z.enum(["default", "aurora"]).optional(),
   themeAccent: z.string().max(50).optional(),
   allowUserThemeChange: z.boolean().optional(),
   forceSubscribeEnabled: z.boolean().optional(),
@@ -4543,6 +4544,13 @@ adminRouter.patch("/settings", async (req, res) => {
       where: { key: "theme_accent" },
       create: { key: "theme_accent", value: updates.themeAccent },
       update: { value: updates.themeAccent },
+    });
+  }
+  if (updates.cabinetDesign !== undefined) {
+    await prisma.systemSetting.upsert({
+      where: { key: "cabinet_design" },
+      create: { key: "cabinet_design", value: updates.cabinetDesign },
+      update: { value: updates.cabinetDesign },
     });
   }
   for (const [key, settingKey] of [

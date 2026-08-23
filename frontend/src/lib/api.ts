@@ -3558,6 +3558,7 @@ export type UpdateSettingsPayload = {
   /** текст шапки «📱 Мои устройства» в боте. */
   botDevicesText?: string | null;
   ticketsEnabled?: boolean;
+  cabinetDesign?: "default" | "aurora";
   themeAccent?: string;
   forceSubscribeEnabled?: boolean;
   forceSubscribeChannelId?: string | null;
@@ -4173,6 +4174,7 @@ export interface AdminSettings {
   botDevicesText?: string | null;
   /** Тикет-система включена (кабинет + мини-апп) */
   ticketsEnabled?: boolean;
+  cabinetDesign?: "default" | "aurora";
   /** Глобальная цветовая тема */
   themeAccent?: string;
   /** Принудительная подписка на канал/группу */
@@ -5652,6 +5654,7 @@ export interface PublicConfig {
   trialEnabled?: boolean;
   trialDays?: number;
   themeAccent?: string;
+  cabinetDesign?: "default" | "aurora" | string;
   ticketsEnabled?: boolean;
   sellOptionsEnabled?: boolean;
   sellOptions?: PublicSellOption[];

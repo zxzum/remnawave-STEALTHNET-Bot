@@ -178,6 +178,7 @@ const SYSTEM_CONFIG_KEYS = [
   "bot_welcome_enabled", "bot_welcome_text", "bot_welcome_image", "bot_welcome_show_once",
   "tickets_enabled", // Тикет-система: true/false
   "admin_front_notifications_enabled", // Всплывающие уведомления в админке: true/false
+  "cabinet_design", // Дизайн кабинета: default или aurora
   "theme_accent", // Глобальная цветовая тема: default, blue, violet, rose, orange, green, emerald, cyan, amber, red, pink, indigo
   "allow_user_theme_change", // Разрешить пользователям менять тему: true/false
   "force_subscribe_enabled", "force_subscribe_channel_id", "force_subscribe_message", // Принудительная подписка на канал/группу
@@ -613,6 +614,7 @@ async function loadSystemConfigFromDb() {
     trialDeviceLimit: map.trial_device_limit != null && map.trial_device_limit !== "" ? parseInt(map.trial_device_limit, 10) : null,
     trialTrafficLimitBytes: map.trial_traffic_limit != null && map.trial_traffic_limit !== "" ? parseInt(map.trial_traffic_limit, 10) : null,
     serviceName: map.service_name || "STEALTHNET",
+    cabinetDesign: map.cabinet_design === "aurora" ? "aurora" : "default",
     logo: map.logo || null,
     logoBot: map.logo_bot || null,
     favicon: map.favicon || null,
@@ -1392,6 +1394,7 @@ export async function getPublicConfig(_forCloneBot?: { markupPercent?: number | 
     videoInstructionsEnabled: full.videoInstructionsEnabled ?? false,
     videoInstructions: full.videoInstructionsEnabled ? (full.videoInstructions ?? []) : [],
     ticketsEnabled: (full as { ticketsEnabled?: boolean }).ticketsEnabled ?? false,
+    cabinetDesign: full.cabinetDesign === "aurora" ? "aurora" : "default",
     themeAccent: full.themeAccent ?? "default",
     allowUserThemeChange: (full as any).allowUserThemeChange ?? true,
     googleAnalyticsId: full.googleAnalyticsId ?? null,
