@@ -27,6 +27,7 @@ import {
   enableSingleSubscription,
   isActiveSubscriptionGrace,
   revokeSingleSubscription,
+  withSubscriptionClientLock,
   runSingleSubscriptionOperation,
   type SingleSubscriptionOperationResult,
 } from "../subscription/single-subscription-lifecycle.service.js";
@@ -79,6 +80,7 @@ async function fetchSubscriptions(clientId: string) {
     orderBy: { subscriptionIndex: "asc" },
     select: {
       id: true,
+      ownerId: true,
       subscriptionIndex: true,
       remnawaveUuid: true,
       tariffId: true,
@@ -218,13 +220,14 @@ export async function syncAllSubscriptionsToRemna(clientId: string): Promise<Bul
       continue;
     }
     const tariff = sub.tariff;
-    const result = await runSingleSubscriptionOperation(sub.id, (uuid) => remnaUpdateUser({
+    // Тот же клиентский advisory-лок, что у cron/оплаты: check-then-act гонки исключены.
+    const result = await withSubscriptionClientLock(sub.ownerId, () => runSingleSubscriptionOperation(sub.id, (uuid) => remnaUpdateUser({
       uuid,
       ...(sub.expireAt ? { expireAt: sub.expireAt.toISOString() } : {}),
       ...remnaTrafficSettings(tariff),
       hwidDeviceLimit: Math.max(1, tariff.includedDevices + sub.extraDevices),
       activeInternalSquads: tariff.internalSquadUuids,
-    }));
+    })));
     pushItem(report, {
       subscriptionId: sub.id,
       subscriptionIndex: sub.subscriptionIndex,

@@ -446,13 +446,16 @@ botAdminRouter.post("/clients/:id/remna/squads/add", async (req, res) => {
   if (graceSub?.graceUntil && graceSub.graceUntil.getTime() > Date.now()) {
     return res.status(409).json({ message: "Активен режим продления Lazeika-Only: изменение сквадов заблокировано" });
   }
-  const userRes = await remnaGetUser(target.remnawaveUuid);
-  if (userRes.error) return res.status(userRes.status >= 400 ? userRes.status : 500).json({ message: userRes.error });
-  const currentSquads = getRemnaUserSquads(userRes.data);
-  if (!currentSquads.includes(body.data.squadUuid)) currentSquads.push(body.data.squadUuid);
-  const updateRes = await remnaUpdateUser({ uuid: target.remnawaveUuid, activeInternalSquads: currentSquads });
-  if (updateRes.error) return res.status(updateRes.status >= 400 ? updateRes.status : 500).json({ message: updateRes.error });
-  return res.json({ ok: true, activeInternalSquads: currentSquads });
+  const { withSubscriptionClientLock } = await import("../subscription/single-subscription-lifecycle.service.js");
+  const updateRes = await withSubscriptionClientLock(parsed.data.id, async () => {
+    const userRes = await remnaGetUser(target.remnawaveUuid);
+    if (userRes.error) throw new Error(userRes.error);
+    const currentSquads = getRemnaUserSquads(userRes.data);
+    if (!currentSquads.includes(body.data.squadUuid)) currentSquads.push(body.data.squadUuid);
+    return remnaUpdateUser({ uuid: target.remnawaveUuid, activeInternalSquads: currentSquads });
+  }).catch((error: unknown): { data?: unknown; error: string; status: number } => ({ data: undefined, error: error instanceof Error ? error.message : String(error), status: 500 }));
+  if (updateRes.error) return res.status((updateRes.status ?? 500) >= 400 ? updateRes.status : 500).json({ message: updateRes.error });
+  return res.json({ ok: true, activeInternalSquads: getRemnaUserSquads(updateRes.data) });
 });
 
 /** POST /api/bot-admin/clients/:id/remna/squads/remove */
@@ -472,12 +475,15 @@ botAdminRouter.post("/clients/:id/remna/squads/remove", async (req, res) => {
   if (graceSub?.graceUntil && graceSub.graceUntil.getTime() > Date.now()) {
     return res.status(409).json({ message: "Активен режим продления Lazeika-Only: изменение сквадов заблокировано" });
   }
-  const userRes = await remnaGetUser(target.remnawaveUuid);
-  if (userRes.error) return res.status(userRes.status >= 400 ? userRes.status : 500).json({ message: userRes.error });
-  const currentSquads = getRemnaUserSquads(userRes.data).filter((u) => u !== body.data.squadUuid);
-  const updateRes = await remnaUpdateUser({ uuid: target.remnawaveUuid, activeInternalSquads: currentSquads });
-  if (updateRes.error) return res.status(updateRes.status >= 400 ? updateRes.status : 500).json({ message: updateRes.error });
-  return res.json({ ok: true, activeInternalSquads: currentSquads });
+  const { withSubscriptionClientLock } = await import("../subscription/single-subscription-lifecycle.service.js");
+  const updateRes = await withSubscriptionClientLock(parsed.data.id, async () => {
+    const userRes = await remnaGetUser(target.remnawaveUuid);
+    if (userRes.error) throw new Error(userRes.error);
+    const currentSquads = getRemnaUserSquads(userRes.data).filter((u) => u !== body.data.squadUuid);
+    return remnaUpdateUser({ uuid: target.remnawaveUuid, activeInternalSquads: currentSquads });
+  }).catch((error: unknown): { data?: unknown; error: string; status?: number } => ({ data: undefined, error: error instanceof Error ? error.message : String(error), status: 500 }));
+  if (updateRes.error) return res.status(500).json({ message: updateRes.error });
+  return res.json({ ok: true, activeInternalSquads: getRemnaUserSquads(updateRes.data) });
 });
 
 // ——— Платежи ———

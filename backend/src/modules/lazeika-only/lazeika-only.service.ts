@@ -140,6 +140,8 @@ export type LazeikaServiceDependencies = {
   persistSquadUuid?: (uuid: string | null) => Promise<void>;
   /** CAS-захват APPLYING; false → параллельный setup отклонён. */
   beginSetup?: () => Promise<boolean>;
+  /** Атомарная фиксация входных настроек (нода/squad/скорость) после успешного setup. */
+  persistSetupInputs?: (input: { nodeUuid: string; squadUuid: string | null; speedMbit: number }) => Promise<void>;
 };
 
 export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
@@ -152,26 +154,65 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     persistProfileUuid = defaultPersistUuid(LAZEIKA_PROFILE_KEY),
     persistSquadUuid = defaultPersistUuid("lazeika_only_squad_uuid"),
     // CAS по сырому значению SystemSetting: два параллельных setup'а не могут оба пройти updateMany.
+    // CAS по сырому значению + lockToken/lockedAt. APPLYING свежее 10 минут = чужая
+    // активная работа; протухший (падение процесса) — забираем себе (§6 ревью).
     beginSetup = async () => {
       const { prisma } = await import("../../db.js");
+      const token = randomUUID();
+      const nowIso = new Date().toISOString();
       const row = await prisma.systemSetting.findUnique({ where: { key: LAZEIKA_STATE_KEY } });
       const raw = row?.value ?? "";
-      if (raw.includes('"status":"APPLYING"') || raw.includes('"status": "APPLYING"')) return false;
+      if (raw.includes('"status":"APPLYING"') || raw.includes('"status": "APPLYING"')) {
+        let lockedAtMs = NaN;
+        try { lockedAtMs = new Date(String((JSON.parse(raw) as Record<string, unknown>).lockedAt)).getTime(); } catch { /* нет метки */ }
+        if (Number.isFinite(lockedAtMs) && Date.now() - lockedAtMs < 10 * 60_000) return false;
+      }
+      let current: Record<string, unknown> = {};
+      try { current = JSON.parse(raw) as Record<string, unknown>; } catch { current = {}; }
       const next = JSON.stringify({
-        ...parseResourceState(raw),
+        ...current,
         status: "APPLYING",
         lastError: null,
-        updatedAt: new Date().toISOString(),
+        lockToken: token,
+        lockedAt: nowIso,
+        updatedAt: nowIso,
       });
       if (!row) {
-        await prisma.systemSetting.create({ data: { key: LAZEIKA_STATE_KEY, value: next } });
-        return true;
+        try {
+          await prisma.systemSetting.create({ data: { key: LAZEIKA_STATE_KEY, value: next } });
+          return true;
+        } catch (error) {
+          // P2002 unique — параллельный создатель выиграл гонку создания строки.
+          if ((error as { code?: string }).code === "P2002") return false;
+          throw error;
+        }
       }
       const updated = await prisma.systemSetting.updateMany({
         where: { key: LAZEIKA_STATE_KEY, value: raw },
         data: { value: next },
       });
       return updated.count > 0;
+    },
+    // Настройки фиксируются самим setup'ом: UI мог не сохранить форму перед «Настроить»
+    // (иначе resource_state=READY при пустом lazeika_only_node_uuid, §4 ревью).
+    persistSetupInputs = async ({ nodeUuid, squadUuid, speedMbit }) => {
+      const { prisma } = await import("../../db.js");
+      const { invalidateSystemConfigCache } = await import("../client/client.service.js");
+      const entries: Array<[string, string]> = [
+        ["lazeika_only_node_uuid", nodeUuid],
+        ["lazeika_only_squad_uuid", squadUuid ?? ""],
+        ["lazeika_only_speed_mbit", String(speedMbit)],
+        // legacy-алиас squad'а — mergeSquads читает его напрямую из настроек.
+        ["expired_grace_squad_uuid", squadUuid ?? ""],
+      ];
+      for (const [key, value] of entries) {
+        await prisma.systemSetting.upsert({
+          where: { key },
+          create: { key, value },
+          update: { value },
+        });
+      }
+      invalidateSystemConfigCache();
     },
   } = dependencies;
 
@@ -242,6 +283,12 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     let nodeAddress: string | null = null;
     let detectedIface: string | null = null;
     let autoSquadCreatedUuid: string | null = null;
+    // Снапшоты УЖЕ СУЩЕСТВУЮЩИХ объектов, которые setup изменяет (§5 ревью):
+    // rollback обязан вернуть их к состоянию до запуска, а не только удалить созданное.
+    let profileSnapshot: { uuid: string; name?: string; config?: unknown } | null = null;
+    const hostSnapshots: Array<{ uuid: string; inbound: unknown; tags: string[] }> = [];
+    let tcFilesExisted = false;
+    const prevSsh = { ...state.ssh };
 
     // Смена ноды после READY запрещена (§7): старый managed-профиль/snapshot/hosts
     // завязаны на текущую ноду — безопасный путь: disable + настройка заново.
@@ -299,6 +346,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       const sourceConfig = managedProfile?.config ?? baseProfile.config;
       const { config: newConfig } = applyLazeikaToConfig(sourceConfig as XrayConfig, cloneSource, tag, port);
       if (managedProfile?.uuid) {
+        profileSnapshot = { uuid: managedProfile.uuid, name: managedProfile.name, config: managedProfile.config };
         await requireOk(
           await remna.updateConfigProfile({ uuid: managedProfile.uuid, name: markerName, config: newConfig }),
           "PROFILE",
@@ -386,6 +434,11 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         hosts.find((h) => h.uuid && h.uuid === state.workingHostUuid)
         ?? hosts.find((h) => isLazeikaHost(h) && !isNotificationHost(h));
       if (workingExisting?.uuid) {
+        hostSnapshots.push({
+          uuid: workingExisting.uuid,
+          inbound: workingExisting.inbound ?? null,
+          tags: [...(workingExisting.tags ?? [])],
+        });
         await requireOk(
           await remna.updateHost({
             uuid: workingExisting.uuid,
@@ -421,6 +474,11 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         const currentBinding = existing.inbound ?? null;
         if (currentBinding?.configProfileUuid === managedProfileUuid
           && currentBinding.configProfileInboundUuid === managedInboundUuid) continue;
+        hostSnapshots.push({
+          uuid: existing.uuid,
+          inbound: currentBinding,
+          tags: [...(existing.tags ?? [])],
+        });
         await requireOk(
           await remna.updateHost({ uuid: existing.uuid, inbound: binding }),
           "HOSTS",
@@ -493,6 +551,12 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         void lastText;
       }
 
+      // Существовали ли unit/скрипт до этого запуска (решает rollback: restore vs cleanup).
+      try {
+        const probe = await ssh(node.address, `[ -f ${TC_SCRIPT_PATH} ] && [ -f /etc/systemd/system/${TC_UNIT_NAME} ] && echo TCFILES_EXIST || echo TCFILES_NEW`);
+        tcFilesExisted = (probe.stdout + probe.stderr).includes("TCFILES_EXIST");
+      } catch { tcFilesExisted = false; }
+
       const remoteInstall = [
         "install -d /usr/local/sbin",
         `cat > ${TC_SCRIPT_PATH}.tmp <<'LAZEIKA_TC_EOF'`,
@@ -522,6 +586,8 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       await persistProfileUuid(managedProfileUuid);
       // Авто-созданный squad должен попасть в настройки: mergeSquads читает ключ (§4.4.3).
       await persistSquadUuid(squadUuid);
+      // Фиксируем входные настройки вместе с READY.
+      await persistSetupInputs?.({ nodeUuid: input.nodeUuid, squadUuid, speedMbit: speed });
       return { status: "READY", state };
     } catch (error) {
       const phase = error instanceof SetupError ? error.phase : "UNKNOWN";
@@ -548,19 +614,47 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
             }
           }
         }
-        // tc: снимаем свои фильтры и unit, если детект уже определил интерфейс (§7.6).
+        // Изменённые существующие объекты возвращаем к снапшоту (до удаления созданного).
+        if (profileSnapshot) {
+          await remna.updateConfigProfile({
+            uuid: profileSnapshot.uuid,
+            ...(profileSnapshot.name !== undefined ? { name: profileSnapshot.name } : {}),
+            ...(profileSnapshot.config !== undefined ? { config: profileSnapshot.config } : {}),
+          }).catch(() => {});
+        }
+        for (const h of hostSnapshots) {
+          await remna.updateHost({ uuid: h.uuid, inbound: h.inbound, tags: h.tags }).catch(() => {});
+        }
+        // tc: если лимитер уже стоял — переустанавливаем прежний; иначе снимаем наши фильтры и unit.
         if (detectedIface && nodeAddress) {
-          const cleanupLines = [
-            `systemctl disable --now ${TC_UNIT_NAME} 2>/dev/null || true`,
-            `rm -f /etc/systemd/system/${TC_UNIT_NAME} ${TC_SCRIPT_PATH}`,
-            "systemctl daemon-reload 2>/dev/null || true",
-          ];
-          for (const direction of ["ingress", "egress"] as const) {
-            for (let i = 1; i <= 8; i++) {
-              cleanupLines.push(`tc filter del dev "${detectedIface}" ${direction} pref ${TC_PREF_BASE + i} 2>/dev/null || true`);
+          if (tcFilesExisted && prevSsh.interface && prevSsh.rateMbit) {
+            const restoreScript = [
+              "install -d /usr/local/sbin",
+              `cat > ${TC_SCRIPT_PATH}.tmp <<'LAZEIKA_TC_EOF'`,
+              buildTcScript({ iface: prevSsh.interface, port: state.managedInboundPort ?? 40001, speedMbit: prevSsh.rateMbit }).trimEnd(),
+              "LAZEIKA_TC_EOF",
+              `chmod 0755 ${TC_SCRIPT_PATH}.tmp && mv ${TC_SCRIPT_PATH}.tmp ${TC_SCRIPT_PATH}`,
+              `cat > /etc/systemd/system/${TC_UNIT_NAME}.tmp <<'LAZEIKA_UNIT_EOF'`,
+              buildTcUnit().trimEnd(),
+              "LAZEIKA_UNIT_EOF",
+              `chmod 0644 /etc/systemd/system/${TC_UNIT_NAME}.tmp && mv /etc/systemd/system/${TC_UNIT_NAME}.tmp /etc/systemd/system/${TC_UNIT_NAME}`,
+              "systemctl daemon-reload",
+              TC_SCRIPT_PATH,
+            ].join("\n");
+            await ssh(nodeAddress, restoreScript).catch(() => {});
+          } else {
+            const cleanupLines = [
+              `systemctl disable --now ${TC_UNIT_NAME} 2>/dev/null || true`,
+              `rm -f /etc/systemd/system/${TC_UNIT_NAME} ${TC_SCRIPT_PATH}`,
+              "systemctl daemon-reload 2>/dev/null || true",
+            ];
+            for (const direction of ["ingress", "egress"] as const) {
+              for (let i = 1; i <= 8; i++) {
+                cleanupLines.push(`tc filter del dev "${detectedIface}" ${direction} pref ${TC_PREF_BASE + i} 2>/dev/null || true`);
+              }
             }
+            await ssh(nodeAddress, cleanupLines.join("\n")).catch(() => {});
           }
-          await ssh(nodeAddress, cleanupLines.join("\n")).catch(() => {});
         }
         // Удалённый авто-squad не должен остаться в настройках для mergeSquads.
         if (!state.squadUuid) await persistSquadUuid(null).catch(() => {});
@@ -661,11 +755,14 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
               missingPrefs.length === 0,
               missingPrefs.length ? `нет pref: ${missingPrefs.join(", ")}` : undefined,
             );
-            const actualRate = /rate (\d+)mbit/.exec(out)?.[1];
+            // Rate у КАЖДОГО из 8 фильтров (tc печатает Mbit в разном регистре).
+            const rates = Array.from(out.matchAll(/rate\s+(\d+)\s*mbit/gi)).map((m) => m[1]);
+            const distinct = [...new Set(rates)];
+            const expected = String(state.ssh.rateMbit);
             add(
               "tc_rate",
-              actualRate === String(state.ssh.rateMbit),
-              actualRate ? `${actualRate} Mbit/s` : "rate не определён",
+              rates.length >= 8 && distinct.length === 1 && distinct[0] === expected,
+              rates.length ? `найдено ${rates.length}: ${distinct.join("/")}` : "rate не определён",
             );
             add("tc_files", out.includes("FILES_OK"), out.includes("FILES_MISSING") ? "скрипт/unit отсутствуют" : undefined);
             add("systemd_unit", out.includes("UNIT_ENABLED"));

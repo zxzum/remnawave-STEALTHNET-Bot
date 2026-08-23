@@ -173,10 +173,14 @@ function createFakeRemna(options: {
   return { remna, state };
 }
 
-function createSshFake(options: { failInstall?: boolean } = {}) {
+function createSshFake(options: { failInstall?: boolean; tcFilesExisted?: string } = {}) {
   const scripts: string[] = [];
   const ssh = async (_address: string, script: string) => {
     scripts.push(script);
+    if (script.startsWith("[ -f")) {
+      // probe существования tc-файлов до установки
+      return { ok: true, exitCode: 0, stdout: options.tcFilesExisted ?? "TCFILES_NEW", stderr: "" };
+    }
     if (options.failInstall && script.includes("lazeika-only-tc")) {
       return { ok: false, exitCode: 7, stdout: "", stderr: "tc netem permission denied" };
     }
@@ -213,6 +217,7 @@ test("setup from clean state creates exactly one profile, squad, working host an
     persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     beginSetup: async () => true,
+    persistSetupInputs: async () => {},
   });
 
   const result = await service.setup(SETUP_INPUT);
@@ -256,6 +261,7 @@ test("second setup does not duplicate resources", async () => {
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     beginSetup: async () => true,
+    persistSetupInputs: async () => {},
   });
   await service.setup(SETUP_INPUT);
   const snapshot = {
@@ -282,6 +288,7 @@ test("manual squad containing foreign inbounds is rejected without changes", asy
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     beginSetup: async () => true,
+    persistSetupInputs: async () => {},
   });
   await assert.rejects(
     () => service.setup({ ...SETUP_INPUT, squadUuid: MANUAL_SQUAD_UUID }),
@@ -300,6 +307,7 @@ test("rollback restores the node after a Remna profile failure", async () => {
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     beginSetup: async () => true,
+    persistSetupInputs: async () => {},
   });
   await assert.rejects(() => service.setup(SETUP_INPUT), /profile create failed/);
   assert.equal(store.state.status, "ERROR");
@@ -318,6 +326,7 @@ test("rollback removes only resources created by the failed run after an SSH fai
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     beginSetup: async () => true,
+    persistSetupInputs: async () => {},
   });
   const persistedSquadUuids: Array<string | null> = [];
   // переопределяем сервис с записью persistSquadUuid
@@ -327,6 +336,7 @@ test("rollback removes only resources created by the failed run after an SSH fai
     persistProfileUuid: async () => {},
     persistSquadUuid: async (uuid) => { persistedSquadUuids.push(uuid); },
     beginSetup: async () => true,
+    persistSetupInputs: async () => {},
   });
   await assert.rejects(() => service2.setup(SETUP_INPUT), /tc-фильтры/);
   assert.equal(store.state.status, "ERROR");
@@ -359,6 +369,7 @@ test("auto-created squad uuid is persisted to settings for mergeSquads", async (
     persistProfileUuid: async () => {},
     persistSquadUuid: async (uuid) => { persisted.push(uuid); },
     beginSetup: async () => true,
+    persistSetupInputs: async () => {},
   });
   await service.setup(SETUP_INPUT);
   assert.equal(persisted.length, 1);
@@ -374,6 +385,7 @@ test("reconcile recreates missing hosts without duplicating existing ones", asyn
     loadState: store.loadState, saveState: store.saveState, persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     beginSetup: async () => true,
+    persistSetupInputs: async () => {},
   });
   await service.setup(SETUP_INPUT);
   // админ удалил все хосты вручную
@@ -400,6 +412,7 @@ test("parallel setup is rejected by the APPLYING CAS lock", async () => {
       applying = true;
       return true;
     },
+    persistSetupInputs: async () => {},
   });
   await service.setup(SETUP_INPUT);
   applying = true; // имитируем незавершённый параллельный запуск
@@ -418,6 +431,7 @@ test("node change after READY is rejected with a clear error", async () => {
     loadState: store.loadState, saveState: store.saveState,
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     beginSetup: async () => true,
+    persistSetupInputs: async () => {},
   });
   await service.setup(SETUP_INPUT);
   assert.equal(store.state.status, "READY");
@@ -429,4 +443,47 @@ test("node change after READY is rejected with a clear error", async () => {
   // состояние не изменилось
   assert.equal(store.state.status, "READY");
   assert.equal(store.state.nodeUuid, NODE_UUID);
+});
+
+test("failed re-setup restores modified existing profile/hosts and reinstalls previous tc", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake({ tcFilesExisted: "TCFILES_EXIST" });
+  const store = createStateStore();
+  let failNow = false;
+  const service = createLazeikaService({
+    remna: env.remna,
+    ssh: async (addr: string, script: string) => {
+      if (script.startsWith("[ -f")) return sshf.ssh(addr, script); // probe файлов не фейлим
+      if (failNow && script.includes("lazeika-only-tc")) {
+        sshf.scripts.push(script);
+        return { ok: false, exitCode: 9, stdout: "", stderr: "boom" };
+      }
+      return sshf.ssh(addr, script);
+    },
+    sshEnvLoader: () => SSH_ENV,
+    loadState: store.loadState, saveState: store.saveState,
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    persistSetupInputs: async () => {}, beginSetup: async () => true,
+  });
+
+  // Успешный setup №1.
+  await service.setup(SETUP_INPUT);
+  const profileAfterFirst = JSON.parse(JSON.stringify(env.state.profiles.find((p) => p.uuid === store.state.profileUuid)));
+  const hostAfterFirst = JSON.parse(JSON.stringify(env.state.hosts.find((h) => h.uuid === store.state.workingHostUuid)));
+
+  // Повторный setup падает на tc — но уже изменил существующие профиль/hosts.
+  failNow = true;
+  await assert.rejects(() => service.setup(SETUP_INPUT), /tc-фильтры/);
+
+  // Профиль восстановлен к снапшоту (имя и конфиг как после первого setup).
+  const profileNow = env.state.profiles.find((p) => p.uuid === store.state.profileUuid);
+  assert.equal(profileNow?.name, profileAfterFirst.name);
+  assert.deepEqual(profileNow?.config, profileAfterFirst.config);
+  // Binding рабочего host'а восстановлен.
+  const hostNow = env.state.hosts.find((h) => h.uuid === store.state.workingHostUuid);
+  assert.deepEqual(hostNow?.inbound, hostAfterFirst.inbound);
+  assert.deepEqual(hostNow?.tags, hostAfterFirst.tags);
+  // tc НЕ сносился: cleanup отсутствует, вместо него restore-установка прежнего лимита.
+  assert.ok(!sshf.scripts.some((sc) => sc.includes("systemctl disable --now lazeika-only-tc.service")), "cleanup не должен запускаться при существовавшем лимитере");
+  assert.ok(sshf.scripts.filter((sc) => sc.includes("police rate 5mbit")).length >= 2, "restore переустановил прежний rate");
 });

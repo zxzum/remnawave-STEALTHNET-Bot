@@ -6,7 +6,7 @@ import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { requireAuth, requireAdminSection } from "../auth/middleware.js";
 import { prisma } from "../../db.js";
-import { getSystemConfig } from "../client/client.service.js";
+import { getSystemConfig, invalidateSystemConfigCache } from "../client/client.service.js";
 import { getLazeikaConfig, loadResourceState } from "./lazeika-only.config.js";
 import { createLazeikaService } from "./lazeika-only.service.js";
 import { remnaGetNodes, remnaGetConfigProfiles, remnaCreateConfigProfile, remnaUpdateConfigProfile, remnaDeleteConfigProfile, remnaUpdateNode, remnaGetInternalSquads, remnaCreateInternalSquad, remnaUpdateInternalSquad, remnaDeleteInternalSquad, remnaGetSquadAccessibleNodeUuids, remnaGetHosts, remnaCreateHost, remnaUpdateHost, remnaDeleteHost } from "../remna/remna.client.js";
@@ -127,13 +127,17 @@ lazeikaOnlyRouter.post("/reconcile", async (_req: Request, res: Response) => {
 });
 
 lazeikaOnlyRouter.post("/disable", async (_req: Request, res: Response) => {
-  // Выключаем флаг; инфраструктуру не трогаем (спецификация §6).
-  await prisma.systemSetting.upsert({
-    where: { key: "lazeika_only_enabled" },
-    create: { key: "lazeika_only_enabled", value: "false" },
-    update: { value: "false" },
-  });
+  // Выключаем флаг через те же ключи, что читает cron (новый + legacy-алиас),
+  // и сразу инвалидируем system-config cache — иначе до 30 секунд cron может
+  // продолжать выдавать новые grace-доступы (§5 ревью).
+  for (const key of ["lazeika_only_enabled", "expired_grace_enabled"]) {
+    await prisma.systemSetting.upsert({
+      where: { key },
+      create: { key, value: "false" },
+      update: { value: "false" },
+    });
+  }
   const result = await service().disable();
-  res.locals = res.locals ?? {};
+  invalidateSystemConfigCache();
   return res.json({ ok: true, ...result });
 });

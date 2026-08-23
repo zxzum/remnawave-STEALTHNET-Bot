@@ -220,15 +220,21 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
     if (claimed === "INVALID") return pre("Некорректная привязка платежа опции", 409);
 
     // Активный Lazeika-Only grace (§4.4): PENDING-план НЕ создаём — рассчитанный сейчас
-    // план (сквады/лимиты) устарел бы к моменту применения. После восстановления тарифа
-    // платёж переиграется и план пересчитается от актуального состояния.
+    // план (сквады/лимиты) устарел бы к моменту применения. Платёж уже PAID (списание
+    // прошло) → возвращаем QUEUED, НИКАКОГО refund: платёж остаётся в NEEDS_PLAN и
+    // очередь применит опцию после восстановления тарифа.
     const { isActiveSubscriptionGrace } = await import("../subscription/single-subscription-lifecycle.service.js");
     if (isActiveSubscriptionGrace(claimed.subscription.graceUntil ?? null)) {
       await prisma.payment.updateMany({
         where: { id: paymentId, extraOptionState: "PLANNING", extraOptionClaimToken: claimToken },
-        data: { extraOptionState: "NEEDS_PLAN", extraOptionClaimToken: null, extraOptionNextAttemptAt: new Date(Date.now() + 10 * 60_000) },
+        data: {
+          extraOptionState: "NEEDS_PLAN",
+          extraOptionClaimToken: null,
+          // Ретрай после вероятного окончания grace (дни), не каждые 10 минут.
+          extraOptionNextAttemptAt: new Date(Date.now() + 6 * 60 * 60_000),
+        },
       });
-      return pre("Подписка в режиме продления Lazeika-Only: применение опции отложено до восстановления тарифа", 409);
+      return { ok: true, outcome: "QUEUED" };
     }
 
     const userRes = await remnaGetUser(claimed.uuid);
@@ -335,6 +341,22 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
   });
   if (!applying) return { ok: true, outcome: "QUEUED" };
 
+  // Повторная grace-проверка непосредственно перед PATCH.
+  // ponytail: без advisory-лока — глобальная сериализация очереди применения не допускает
+  // удержание лока на время сетевого PATCH (ломает lease/reclaim-модель). Остаточное окно
+  // гонки само-затирается: cron каждые 5 минут переутверждает состояние активного grace.
+  {
+    const { isActiveSubscriptionGrace: stillInGrace } = await import("../subscription/single-subscription-lifecycle.service.js");
+    const freshSub = await prisma.subscription.findUnique({ where: { id: liveSubscription.id }, select: { graceUntil: true } });
+    if (stillInGrace(freshSub?.graceUntil ?? null)) {
+      await prisma.payment.updateMany({
+        where: { id: paymentId, extraOptionState: "APPLYING", extraOptionClaimToken: pendingClaimToken },
+        data: { extraOptionClaimToken: null, extraOptionNextAttemptAt: new Date(Date.now() + 6 * 60 * 60_000) },
+      });
+      console.warn("[extra-options] grace started before apply; payment requeued", { paymentId });
+      return { ok: true, outcome: "QUEUED" };
+    }
+  }
   const update = await remnaUpdateUser({ uuid: plan.uuid, ...plan.remote });
   if (update.error) {
     const definitelyNotMutated = [400, 401, 403, 404, 409, 422].includes(update.status);

@@ -106,8 +106,11 @@ export async function getLazeikaConfig(
   const state = await loadResourceState();
   // Ключ настроек может отстать от resource_state (авто-создание squad в setup) — берём сохранённый.
   const effectiveSquadUuid = (cfg.lazeikaOnlySquadUuid ?? "").trim() || state.squadUuid || null;
+  // Строгая синхронизация: нода в настройках обязана быть непустой и совпадать с resource_state
+  // (пустая ≠ «синхронно» — иначе reconcile потом откажется работать, §4 ревью).
   const settingsInSync =
-    (!cfg.lazeikaOnlyNodeUuid || cfg.lazeikaOnlyNodeUuid === state.nodeUuid)
+    Boolean(cfg.lazeikaOnlyNodeUuid)
+    && cfg.lazeikaOnlyNodeUuid === state.nodeUuid
     && (!cfg.lazeikaOnlySquadUuid || cfg.lazeikaOnlySquadUuid === state.squadUuid);
   const ready =
     state.status === "READY"

@@ -80,6 +80,7 @@ function queueHarness(options: {
     },
   };
   const subscriptionApi = {
+    findUnique: async () => ({ graceUntil: null }),
     findFirst: async () => {
       subscriptionReads++;
       return {
@@ -105,7 +106,7 @@ function queueHarness(options: {
     let release!: () => void;
     txTail = new Promise<void>((resolve) => { release = resolve; });
     await previous;
-    try { return await callback({ payment: paymentApi, subscription: subscriptionApi, client: clientDelegate, $queryRawUnsafe: async () => [] }); }
+    try { return await callback({ payment: paymentApi, subscription: { ...subscriptionApi, findUnique: async () => ({ graceUntil: null }) }, client: clientDelegate, $queryRawUnsafe: async () => [], $executeRaw: async () => 1 }); }
     finally { release(); }
   };
   globalThis.fetch = async (_input, init) => {

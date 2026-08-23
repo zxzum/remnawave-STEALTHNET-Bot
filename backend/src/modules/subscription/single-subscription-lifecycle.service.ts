@@ -50,7 +50,7 @@ function legacyGateFromConfig(config: ExpiredGraceConfig): LazeikaGate {
  * cron и активация платежа не могут одновременно мутатить одну подписку (§4.4 race).
  * Отдельная функция, а не импорт из tariff-activation — там импортируется этот модуль.
  */
-async function withSubscriptionClientLock<T>(clientId: string, fn: () => Promise<T>): Promise<T> {
+export async function withSubscriptionClientLock<T>(clientId: string, fn: () => Promise<T>): Promise<T> {
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${clientId}))`;
     return fn();
