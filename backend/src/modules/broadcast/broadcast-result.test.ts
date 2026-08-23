@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 process.env.DATABASE_URL ??= "postgresql://postgres:postgres@localhost:5432/stealthnet_test";
@@ -7,6 +8,7 @@ process.env.JWT_SECRET ??= "test-secret-that-is-long-enough-for-validation";
 const { prisma } = await import("../../db.js");
 const broadcast = await import("./broadcast.service.js");
 const { sweepStaleBroadcastJobs } = await import("./broadcast-stale.scheduler.js");
+const workerSource = await readFile(new URL("../../worker/broadcast-worker.ts", import.meta.url), "utf8");
 
 const history = prisma.broadcastHistory as unknown as {
   findUnique: (args: unknown) => Promise<unknown>;
@@ -25,7 +27,7 @@ test("routes SVG and non-raster image MIME types through Telegram documents", ()
   assert.equal(broadcast.isTelegramPhoto("image/x-icon"), false);
 });
 
-test("terminal broadcast jobs always expose their persisted result", async () => {
+test("terminal broadcast jobs expose partial failures as unsuccessful results", async () => {
   const originalFindUnique = history.findUnique;
   const row = {
     id: "job-1",
@@ -47,7 +49,7 @@ test("terminal broadcast jobs always expose their persisted result", async () =>
     history.findUnique = async () => row;
     const completed = await broadcast.getBroadcastJob(row.id);
     assert.deepEqual(completed?.result, {
-      ok: true,
+      ok: false,
       sentTelegram: 2,
       sentEmail: 1,
       failedTelegram: 1,
@@ -69,6 +71,12 @@ test("terminal broadcast jobs always expose their persisted result", async () =>
   } finally {
     history.findUnique = originalFindUnique;
   }
+});
+
+test("worker finalization cannot overwrite a stale terminal job", () => {
+  const finalization = workerSource.split("// Финализируем", 2)[1].split("// Удаляем attachment", 2)[0];
+  assert.match(finalization, /prisma\.broadcastHistory\.updateMany/);
+  assert.match(finalization, /where:\s*\{\s*id:\s*job\.id,\s*status:\s*\"running\"\s*\}/);
 });
 
 test("stale pending and running broadcasts are moved to error", async () => {

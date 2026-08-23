@@ -160,8 +160,8 @@ async function processOne(job: NonNullable<Awaited<ReturnType<typeof claimNextJo
 
   // Финализируем
   try {
-    await prisma.broadcastHistory.update({
-      where: { id: job.id },
+    const finalized = await prisma.broadcastHistory.updateMany({
+      where: { id: job.id, status: "running" },
       data: {
         status: finalStatus,
         // Если pending — finishedAt НЕ ставим (запись снова станет «активной»).
@@ -174,6 +174,10 @@ async function processOne(job: NonNullable<Awaited<ReturnType<typeof claimNextJo
         error: finalError,
       },
     });
+    if (finalized.count === 0) {
+      log(`  finalization skipped for ${job.id}: status changed before worker completed`);
+      return;
+    }
   } catch (e) {
     log(`  WARN: finalize update failed:`, e instanceof Error ? e.message : e);
   }

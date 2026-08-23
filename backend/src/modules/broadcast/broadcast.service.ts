@@ -1018,6 +1018,8 @@ export function isTerminalBroadcastStatus(status: string): boolean {
 export async function getBroadcastJob(jobId: string): Promise<BroadcastJob | null> {
   const row = await prisma.broadcastHistory.findUnique({ where: { id: jobId } });
   if (!row) return null;
+  const resultErrors = Array.isArray(row.errors) ? (row.errors as string[]) : [];
+  const hasFailures = row.failedTelegram > 0 || row.failedEmail > 0 || resultErrors.length > 0 || Boolean(row.error);
   return {
     id: row.id,
     status: (row.status as BroadcastJobStatus),
@@ -1034,12 +1036,12 @@ export async function getBroadcastJob(jobId: string): Promise<BroadcastJob | nul
     },
     result: isTerminalBroadcastStatus(row.status)
       ? {
-          ok: row.status === "completed",
+          ok: row.status === "completed" && !hasFailures,
           sentTelegram: row.sentTelegram,
           sentEmail: row.sentEmail,
           failedTelegram: row.failedTelegram,
           failedEmail: row.failedEmail,
-          errors: Array.isArray(row.errors) ? (row.errors as string[]) : [],
+          errors: resultErrors.length ? resultErrors : row.error ? [row.error] : [],
           ...(row.status === "cancelled" ? { cancelled: true } : {}),
         }
       : undefined,
