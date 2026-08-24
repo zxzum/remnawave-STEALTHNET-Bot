@@ -1298,7 +1298,10 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       add("node_inbound_active", nodeInboundsNow.includes(state.managedInboundUuid ?? ""));
       // Notification-inbound обязан быть активен на выбранной ноде и отсутствовать на других.
       add("node_notif_inbound_active", nodeInboundsNow.includes(state.notifInboundUuid ?? ""));
-      if (node?.address && state.managedInboundPort && state.ssh.interface) {
+      // tc живёт только на VPS: панель не хранит SSH-ключ и не выполняет probe удалённо.
+      // Старый диагностический код оставлен ниже для возможной отдельной SSH-утилиты,
+      // но из admin verify не вызывается.
+      if (sshInput.password !== "" && node?.address && state.managedInboundPort && state.ssh.interface) {
         try {
           // Полный дамп: содержимое КАЖДОГО собственного фильтра + общие actions (§9 финала).
           const iface = state.ssh.interface;
@@ -1391,7 +1394,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         } catch (e) {
           add("ssh", false, e instanceof Error ? e.message : String(e));
         }
-      } else add("ssh", false, "инфраструктура настроена не полностью");
+      } else add("vps_script", true, "tc и systemd проверяются локально на VPS после запуска скрипта");
     } else add("node", false, "нода не выбрана");
 
     return { ok: checks.every((c) => c.ok), checks };

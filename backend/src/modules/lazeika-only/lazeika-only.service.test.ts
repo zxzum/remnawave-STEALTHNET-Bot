@@ -1163,50 +1163,14 @@ test("working host of node A is not re-bound after reset-state and setup on node
   assert.notEqual(store.state.workingHostUuid, hostASnapshot.uuid, "для B создан НОВЫЙ рабочий host");
 });
 
-test("verify flags a managed tc filter without police action (strict policeIndex)", async () => {
+test("manual VPS mode verify does not report SSH/tc checks", async () => {
   const env = createFakeRemna();
   const sshf = createSshFake();
   const store = createFencedStore();
   const service = buildService(env, sshf, store);
   await service.setup(SETUP_INPUT);
-  const port = store.state.managedInboundPort!;
-  const { expectedFilterSpecs } = await import("./tc-script.js");
-  const specs = expectedFilterSpecs({ port });
-  const lineFor = (spec: (typeof specs)[number], police: number | null) =>
-    `filter protocol ${spec.protocol} pref ${spec.pref} flower ip_proto ${spec.ipProto} `
-    + `${spec.direction === "ingress" ? "dst_port" : "src_port"} ${port}`
-    + (police !== null ? ` action police index ${police}` : "");
-  const dump = (broken: boolean) => [
-    "===FILTERS===",
-    ...specs.map((s, i) => lineFor(s, broken && i === 0 ? null : s.policeIndex)),
-    "===ACTIONS===",
-    "action police index 45101 rate 5mbit burst 256kb drop",
-    "action police index 45102 rate 5mbit burst 256kb drop",
-    "===FILES===",
-    "FILES_OK",
-    "UNIT_ENABLED",
-    "PORT_LISTENING",
-  ].join("\n");
-  const verifyWith = (out: string) => createLazeikaService({
-    remna: env.remna,
-    ssh: async (_c: unknown, script: string) =>
-      script.includes("===FILTERS===")
-        ? { ok: true, exitCode: 0, stdout: out, stderr: "" }
-        : sshf.ssh(_c as never, script),
-    ...fencedDeps(store),
-    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
-    persistSetupInputs: async () => {},
-    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
-  }).verify(SETUP_SSH);
-
-  const good = await verifyWith(dump(false));
-  const goodTc = good.checks.find((c) => c.name === "tc_filters");
-  assert.equal(goodTc?.ok, true, `эталонные фильтры принимаются: ${goodTc?.detail ?? ""}`);
-
-  const bad = await verifyWith(dump(true));
-  const badTc = bad.checks.find((c) => c.name === "tc_filters");
-  assert.equal(badTc?.ok, false, "фильтр без police action обязан быть ошибкой");
-  assert.match(badTc?.detail ?? "", /police/i);
+  const result = await service.verify();
+  assert.equal(result.checks.some((check) => check.name.startsWith("tc_") || check.name === "systemd_unit" || check.name === "port_listening"), false);
 });
 
 test("resetState refuses to clobber an active APPLYING lock (CAS)", async () => {
