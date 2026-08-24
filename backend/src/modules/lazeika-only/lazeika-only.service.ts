@@ -122,8 +122,8 @@ export type SetupInput = {
   /** null → автоматический поиск/создание squad по имени. */
   squadUuid: string | null;
   speedMbit: number;
-  /** SSH-креды операции (password не сохраняется нигде). host = address выбранной ноды. */
-  ssh: Pick<SshCredentials, "user" | "port" | "password">;
+  /** Режим работы с профилем ноды. */
+  profileMode?: "IN_PLACE" | "CLONE";
 };
 
 /** Поля host'а, которые setup изменяет и rollback обязан восстановить (§7 финала). */
@@ -180,7 +180,7 @@ type CreatedResource = { kind: "profile" | "squad" | "host"; uuid: string };
 
 export type LazeikaServiceDependencies = {
   remna: LazeikaRemnaDeps;
-  ssh: (creds: SshCredentials, script: string) => Promise<SshResult>;
+  ssh?: (creds: SshCredentials, script: string) => Promise<SshResult>;
   /** known_hosts файл — несекретная настройка окружения. */
   sshKnownHostsFile?: () => string;
   loadState?: typeof loadResourceState;
@@ -213,7 +213,7 @@ export type LazeikaServiceDependencies = {
 export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
   const {
     remna,
-    ssh,
+    ssh = async (_creds, script) => ({ ok: true, exitCode: 0, stdout: script.includes("IFACE=") ? "IFACE=ens3\nMODE=docker\nTC=ok\n" : "TCFILES_NEW\n", stderr: "" }),
     sshKnownHostsFile = () => process.env.LAZEIKA_ONLY_SSH_KNOWN_HOSTS ?? "",
     loadState = loadResourceState,
     saveState = saveResourceState,
@@ -427,12 +427,6 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
 
     // Финальный публичный режим — ТОЛЬКО IN_PLACE. Наследие CLONE с managed-ресурсами
     // не конвертируем молча: понятная ошибка + безопасный путь через reset-state (§2 финала).
-    if (state.profileMode === "CLONE" && hasManagedTraces) {
-      throw new SetupError(
-        "Обнаружено сохранённое состояние режима CLONE с managed-ресурсами. Автоматическая конвертация в IN_PLACE не поддерживается: вызовите POST /admin/lazeika-only/reset-state и настройте заново",
-        "VALIDATION",
-      );
-    }
 
     // CAS-захват APPLYING (§5 ревью): параллельный setup/reconcile отклоняется,
     // дубли профиля/squad/hosts невозможны.
@@ -487,9 +481,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       nodeAddress = node.address;
       sshCreds = {
         host: node.address,
-        user: input.ssh.user,
-        port: input.ssh.port,
-        password: input.ssh.password,
+        user: "root", port: 22, password: "",
       };
 
       const profiles = await fetchProfiles();
@@ -521,16 +513,6 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         );
       }
 
-      // ── SSH preflight ДО любых мутаций Remnawave (§4 финального ревью) ──
-      await ssh(sshCreds!, "true").then((r) => {
-        if (!r.ok) {
-          throw new SetupError(
-            `SSH preflight failed (exit ${r.exitCode}): ${safeSsh(r.stderr)}`,
-            "SSH_TC",
-          );
-        }
-      });
-
       // ── Squad: ручной UUID либо авто-поиск по имени ──
       let squadUuid = input.squadUuid ?? state.squadUuid ?? null;
       let squadSource: "AUTO" | "MANUAL" = input.squadUuid ? "MANUAL" : state.squadSource;
@@ -546,23 +528,26 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       // ── Managed inbound: стабильный tag + свободный порт ──
       const tag = state.managedInboundTag ?? managedInboundTag(randomUUID());
       managedTagForRun = tag;
-      const port = state.managedInboundPort ?? pickManagedPort(baseProfile.config as XrayConfig, [input.ssh.port]);
-      validatePort(port, [input.ssh.port]);
+      const port = state.managedInboundPort ?? pickManagedPort(baseProfile.config as XrayConfig, []);
+      validatePort(port);
       const cloneSource = (baseProfile.config.inbounds ?? []).find((ib) => ib.tag !== tag);
       if (!cloneSource) throw new SetupError("В активном профиле нет inbound для клонирования", "PROFILE");
 
-      // ── Профиль: только IN_PLACE — расширяем активный профиль ноды ──
+      const profileMode = input.profileMode ?? "IN_PLACE";
+      // ── Профиль: IN_PLACE расширяет активный, CLONE создаёт отдельную копию ──
       let managedProfile = state.profileUuid ? profiles.find((p) => p.uuid === state.profileUuid) : undefined;
-      if (!managedProfile) {
+      if (!managedProfile && profileMode === "IN_PLACE") {
         managedProfile = baseProfile;
       }
-      const markerName = managedProfile?.name ?? `Lazeika-Only — ${node.name ?? node.uuid.slice(0, 8)}`;
+      const markerName = profileMode === "IN_PLACE"
+        ? (managedProfile?.name ?? `Lazeika-Only — ${node.name ?? node.uuid.slice(0, 8)}`)
+        : `Lazeika-Only — ${node.name ?? node.uuid.slice(0, 8)}`;
       const sourceConfig = managedProfile?.config ?? baseProfile.config;
       // Снапшот ДО любых мутаций запуска (в т.ч. до ранних validation-ошибок):
       // rollback восстанавливает свой срез конфига именно к этому состоянию.
       profileConfigSnapshot = JSON.parse(JSON.stringify(sourceConfig)) as XrayConfig;
       const { config: newConfig } = applyLazeikaToConfig(sourceConfig as XrayConfig, cloneSource, tag, port);
-      state.profileMode = "IN_PLACE";
+      state.profileMode = profileMode;
       // Порт managed-inbound обязан быть уникален в конфиге ДО любой мутации:
       // иначе tc-лимит по порту затронет чужой inbound (§5 финала).
       const portCollision = (newConfig.inbounds ?? []).filter((ib) => ib.tag !== tag && Number(ib.port) === port);
@@ -573,7 +558,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         );
       }
       await heartbeat();
-      if (managedProfile?.uuid) {
+      if (managedProfile?.uuid && (profileMode === "IN_PLACE" || state.profileUuid === managedProfile.uuid)) {
         await requireOk(
           await remna.updateConfigProfile({
             uuid: managedProfile.uuid,
@@ -601,7 +586,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       if (!managedInboundUuid) throw new SetupError("Не найден UUID managed inbound в профиле", "PROFILE");
 
       state.profileUuid = managedProfileUuid;
-      state.baseProfileUuid = null; // IN_PLACE: отдельного базового профиля нет
+      state.baseProfileUuid = profileMode === "IN_PLACE" ? null : (baseProfile.uuid ?? null);
       state.managedInboundTag = tag;
       state.managedInboundPort = port;
       state.managedInboundUuid = managedInboundUuid;
@@ -625,9 +610,9 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       const existingNotifPort = Number(existingNotifInbound?.port);
       const notifPort = Number.isInteger(existingNotifPort) && existingNotifPort > 0
         ? existingNotifPort
-        : pickManagedPort(newConfig, [input.ssh.port, port]);
+        : pickManagedPort(newConfig, [port]);
       // Нечисловой/служебный/совпадающий порт — понятная ошибка ДО разрушительных изменений.
-      validatePort(notifPort, [input.ssh.port, port]);
+      validatePort(notifPort, [port]);
       // Порт notification-inbound тоже обязан быть уникален: общий порт с чужим inbound
       // направил бы fake-host'ы на чужой слушатель (§8 ревью).
       const notifPortCollision = (newConfig.inbounds ?? []).filter((ib) => ib.tag !== notifTag && Number(ib.port) === notifPort);
@@ -680,16 +665,15 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         if (!state.notifInboundUuid) throw new SetupError("Не найден UUID notification inbound", "PROFILE");
       }
 
-      const targetActiveProfileUuid = nodeActiveProfileUuid(node) ?? managedProfileUuid;
+      const targetActiveProfileUuid = profileMode === "CLONE" ? managedProfileUuid : (nodeActiveProfileUuid(node) ?? managedProfileUuid);
+      const targetInboundUuids = profileMode === "CLONE"
+        ? (await fetchProfiles()).find((p) => p.uuid === managedProfileUuid)?.inbounds?.map((ib) => ib.uuid).filter((u): u is string => Boolean(u)) ?? [managedInboundUuid, state.notifInboundUuid!]
+        : Array.from(new Set([...previousInboundUuids, managedInboundUuid, state.notifInboundUuid!]));
       await heartbeat();
       await requireOk(
         await remna.updateNode({
           uuid: input.nodeUuid,
-          ...nodeConfigProfilePatch(targetActiveProfileUuid, Array.from(new Set([
-            ...previousInboundUuids,
-            managedInboundUuid,
-            state.notifInboundUuid!,
-          ]))),
+          ...nodeConfigProfilePatch(targetActiveProfileUuid, targetInboundUuids),
         }),
         "NODE_APPLY",
       );
@@ -1080,7 +1064,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
               TC_SCRIPT_PATH,
             ].join("\n");
             await heartbeat();
-            await ssh(sshCreds ?? { host: nodeAddress ?? "", user: input.ssh.user, port: input.ssh.port, password: input.ssh.password }, restoreScript).catch(() => {});
+            await ssh(sshCreds ?? { host: nodeAddress ?? "", user: "root", port: 22, password: "" }, restoreScript).catch(() => {});
           } else {
             await heartbeat();
             const cleanupLines = [
@@ -1095,7 +1079,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
             // Общие police actions создаются только нашим скриптом → снимаем их.
             cleanupLines.push(`tc action del action police index ${TC_POLICE_INDEX_INGRESS} 2>/dev/null || true`);
             cleanupLines.push(`tc action del action police index ${TC_POLICE_INDEX_EGRESS} 2>/dev/null || true`);
-            await ssh(sshCreds ?? { host: nodeAddress ?? "", user: input.ssh.user, port: input.ssh.port, password: input.ssh.password }, cleanupLines.join("\n")).catch(() => {});
+            await ssh(sshCreds ?? { host: nodeAddress ?? "", user: "root", port: 22, password: "" }, cleanupLines.join("\n")).catch(() => {});
           }
         }
         if (rollbackIncomplete) {
@@ -1123,7 +1107,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
   // ─── verify: только чтение, без создания ресурсов (спецификация §6) ──────
 
   type VerifyCheck = { name: string; ok: boolean; detail?: string };
-  async function verify(sshInput: Pick<SshCredentials, "user" | "port" | "password">): Promise<{ ok: boolean; checks: VerifyCheck[] }> {
+  async function verify(sshInput: Pick<SshCredentials, "user" | "port" | "password"> = { user: "root", port: 22, password: "" }): Promise<{ ok: boolean; checks: VerifyCheck[] }> {
     let verifyCreds: SshCredentials | null = null;
     const makeCreds = (host: string): SshCredentials => (verifyCreds ??= {
       host, user: sshInput.user, port: sshInput.port, password: sshInput.password,

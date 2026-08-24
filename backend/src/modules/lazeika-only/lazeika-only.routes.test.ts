@@ -10,7 +10,6 @@ const { lazeikaSetupSchema, lazeikaVerifySchema } = await import("./lazeika-only
 
 const VALID = {
   nodeUuid: "11111111-1111-1111-1111-111111111111",
-  ssh: { user: "root", port: 22, password: "secret" },
 };
 
 test("setup route schema accepts valid input and passes params through", () => {
@@ -18,49 +17,38 @@ test("setup route schema accepts valid input and passes params through", () => {
   assert.equal(parsed.success, true);
   if (parsed.success) {
     assert.equal(parsed.data.nodeUuid, VALID.nodeUuid);
-    assert.equal(parsed.data.ssh.port, 22);
-    assert.equal(parsed.data.ssh.user, "root");
+    assert.equal(parsed.data.profileMode, "IN_PLACE");
   }
 });
 
-test("setup route schema strips legacy profileMode instead of applying it", () => {
+test("setup route schema accepts both profile modes", () => {
   const parsed = lazeikaSetupSchema.safeParse({ ...VALID, profileMode: "CLONE" });
   assert.equal(parsed.success, true);
   if (parsed.success) {
-    assert.ok(!("profileMode" in parsed.data), "profileMode не доходит до сервиса");
+    assert.equal(parsed.data.profileMode, "CLONE");
   }
 });
 
-test("setup route schema requires ssh credentials", () => {
+test("setup route schema does not require ssh credentials", () => {
   const parsed = lazeikaSetupSchema.safeParse({ nodeUuid: VALID.nodeUuid });
-  assert.equal(parsed.success, false);
+  assert.equal(parsed.success, true);
 });
 
-test("setup route schema rejects invalid nodeUuid and ssh port", () => {
+test("setup route schema rejects invalid nodeUuid", () => {
   assert.equal(lazeikaSetupSchema.safeParse({ ...VALID, nodeUuid: "not-a-uuid" }).success, false);
-  assert.equal(
-    lazeikaSetupSchema.safeParse({ ...VALID, ssh: { user: "root", port: 70000, password: "x" } }).success,
-    false,
-  );
-  assert.equal(
-    lazeikaSetupSchema.safeParse({ ...VALID, ssh: { user: "root", port: 22, password: "" } }).success,
-    false,
-  );
 });
 
-test("reconcile schema strips nodeUuid/squadUuid/speedMbit from body (SSH only)", () => {
-  // Reconcile обязан игнорировать всё, кроме ssh: нода/squad/скорость берутся из настроек.
+test("verify/reconcile schemas accept an empty body", () => {
   const parsed = lazeikaVerifySchema.safeParse({
-    ssh: { user: "root", port: 22, password: "x" },
     nodeUuid: "99999999-9999-9999-9999-999999999999",
     squadUuid: "33333333-3333-3333-3333-333333333333",
     speedMbit: 1000,
   });
   assert.equal(parsed.success, true);
   if (parsed.success) {
-    assert.deepEqual(Object.keys(parsed.data), ["ssh"], "кроме ssh ничего не доходит до сервиса");
+    assert.deepEqual(Object.keys(parsed.data), [], "в body ничего не требуется");
   }
-  assert.equal(lazeikaVerifySchema.safeParse({}).success, false, "без ssh — ошибка");
+  assert.equal(lazeikaVerifySchema.safeParse({}).success, true, "SSH не требуется");
 });
 
 test("disable route delegates lock check + flags write to the atomic service op", async () => {

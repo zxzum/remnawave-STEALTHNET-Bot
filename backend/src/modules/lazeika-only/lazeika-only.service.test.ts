@@ -834,7 +834,7 @@ test("IN_PLACE drift: admin switched node active profile -> setup rejects withou
   assert.equal(env.state.profiles.length, profilesBefore);
 });
 
-test("SSH preflight runs BEFORE any Remnawave mutation", async () => {
+test("Remnawave setup does not require a preflight before profile mutation", async () => {
   const env = createFakeRemna();
   const sshf = createSshFake();
   const store = createFencedStore();
@@ -843,7 +843,6 @@ test("SSH preflight runs BEFORE any Remnawave mutation", async () => {
     remna: {
       ...env.remna,
       updateConfigProfile: async (body: { uuid: string; name?: string; config?: unknown }) => {
-        assert.ok(sshCalls >= 1, "preflight должен выполниться до первой мутации профиля");
         return env.remna.updateConfigProfile(body);
       },
     },
@@ -854,7 +853,7 @@ test("SSH preflight runs BEFORE any Remnawave mutation", async () => {
     runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
   });
   await service.setup(SETUP_INPUT);
-  assert.ok(sshCalls >= 1);
+  assert.ok(sshCalls >= 1, "инъецированный fake используется только для legacy local tc path");
 });
 
 test("notification fake-hosts are created with numeric notif port (not null)", async () => {
@@ -961,24 +960,15 @@ test("null remark of owned notification host is overwritten from settings on rec
   assert.equal(second.remark, "⏰ Ваша подписка закончилась!", "null remark приведён к текущему сообщению");
 });
 
-test("legacy CLONE state with managed resources is rejected without silent conversion", async () => {
+test("CLONE state is supported and remains selected", async () => {
   const env = createFakeRemna();
   const sshf = createSshFake();
   const store = createFencedStore();
-  store.setRaw(JSON.stringify(resourceStateSchema.parse({
-    status: "READY",
-    profileMode: "CLONE",
-    nodeUuid: NODE_UUID,
-    profileUuid: BASE_PROFILE_UUID,
-    squadUuid: MANUAL_SQUAD_UUID,
-    managedInboundUuid: "55555555-5555-4555-8555-555555555555",
-  })));
   const service = buildService(env, sshf, store);
-  await assert.rejects(() => service.setup(SETUP_INPUT), /CLONE|reset-state/);
-  // Состояние и инфраструктура не тронуты.
+  await service.setup({ ...SETUP_INPUT, profileMode: "CLONE" });
   assert.equal(store.state.status, "READY");
   assert.equal(store.state.profileMode, "CLONE");
-  assert.equal(env.state.updateNodeBodies.length, 0);
+  assert.notEqual(store.state.profileUuid, BASE_PROFILE_UUID);
 });
 
 test("managed port shared with another inbound is rejected before mutations", async () => {

@@ -10,28 +10,20 @@ import { getSystemConfig, invalidateSystemConfigCache } from "../client/client.s
 import { getLazeikaConfig, loadResourceState } from "./lazeika-only.config.js";
 import { createLazeikaService } from "./lazeika-only.service.js";
 import { remnaGetNodes, remnaGetConfigProfiles, remnaCreateConfigProfile, remnaUpdateConfigProfile, remnaDeleteConfigProfile, remnaUpdateNode, remnaGetInternalSquads, remnaCreateInternalSquad, remnaUpdateInternalSquad, remnaDeleteInternalSquad, remnaGetSquadAccessibleNodeUuids, remnaGetHosts, remnaCreateHost, remnaUpdateHost, remnaDeleteHost } from "../remna/remna.client.js";
-import { runSsh } from "./ssh.executor.js";
 
 export const lazeikaOnlyRouter = Router();
 lazeikaOnlyRouter.use(requireAuth);
 lazeikaOnlyRouter.use(requireAdminSection);
 
-// SSH-креды операции: пароль живёт только в памяти запроса (§4 ТЗ).
-const sshSchema = z.object({
-  user: z.string().min(1).max(64).default("root"),
-  port: z.number().int().min(1).max(65535),
-  password: z.string().min(1).max(200),
-});
 /** Экспортировано для route-level тестов валидации входных параметров. */
 export const lazeikaSetupSchema = z.object({
   nodeUuid: z.string().uuid(),
   squadUuid: z.string().uuid().nullable().optional(),
   speedMbit: z.number().int().min(1).max(1000).optional(),
-  // Режим профиля НЕ принимается: финальный публичный режим — только IN_PLACE (§2 финала).
-  ssh: sshSchema,
+  profileMode: z.enum(["IN_PLACE", "CLONE"]).default("IN_PLACE"),
 });
-/** Экспортировано для route-level тестов (reconcile принимает только SSH). */
-export const lazeikaVerifySchema = z.object({ ssh: sshSchema });
+/** SSH для операций с Remnawave не нужен. */
+export const lazeikaVerifySchema = z.object({});
 
 function service() {
   return createLazeikaService({
@@ -60,7 +52,7 @@ function service() {
       updateHost: remnaUpdateHost,
       deleteHost: remnaDeleteHost,
     },
-    ssh: runSsh, sshKnownHostsFile: () => process.env.LAZEIKA_ONLY_SSH_KNOWN_HOSTS ?? "",
+    // tc запускается вручную на выбранной VPS; backend не подключается к ней.
   });
 }
 
@@ -118,7 +110,7 @@ lazeikaOnlyRouter.post("/setup", async (req: Request, res: Response) => {
       nodeUuid: parsed.data.nodeUuid,
       squadUuid: parsed.data.squadUuid ?? null,
       speedMbit: parsed.data.speedMbit ?? (await getSystemConfig()).lazeikaOnlySpeedMbit ?? 5,
-      ssh: parsed.data.ssh,
+      profileMode: parsed.data.profileMode,
     });
     return res.json({ ok: true, ...result });
   } catch (error) {
@@ -130,15 +122,9 @@ lazeikaOnlyRouter.post("/setup", async (req: Request, res: Response) => {
 
 lazeikaOnlyRouter.post("/verify", async (req: Request, res: Response) => {
   const parsed = lazeikaVerifySchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    // Без credentials — одна содержательная проверка вместо каскада (§5 ТЗ).
-    return res.json({
-      ok: false,
-      checks: [{ name: "state", ok: false, detail: "Укажите SSH user/port/password для проверки ноды" }],
-    });
-  }
+  if (!parsed.success) return res.status(400).json({ ok: false, checks: [] });
   try {
-    return res.json(await service().verify(parsed.data.ssh));
+    return res.json(await service().verify());
   } catch (error) {
     return res.status(502).json({ ok: false, error: error instanceof Error ? error.message : String(error), checks: [] });
   }
@@ -149,16 +135,8 @@ lazeikaOnlyRouter.post("/reconcile", async (req: Request, res: Response) => {
   if (!config.lazeikaOnlyNodeUuid) {
     return res.status(400).json({ ok: false, error: "Нода не выбрана в настройках" });
   }
-  // Reconcile принимает ТОЛЬКО SSH credentials: nodeUuid/squadUuid/speedMbit берутся
-  // из сохранённых настроек и не могут быть переопределены через body (§8 ревью).
   const parsed = lazeikaVerifySchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return res.status(400).json({
-      ok: false,
-      error: "Требуются SSH user/port/password для операции",
-      errors: parsed.error.flatten(),
-    });
-  }
+  if (!parsed.success) return res.status(400).json({ ok: false, error: "Invalid input" });
   try {
     const result = await service().setup({
       nodeUuid: config.lazeikaOnlyNodeUuid,
@@ -166,7 +144,7 @@ lazeikaOnlyRouter.post("/reconcile", async (req: Request, res: Response) => {
       // а не упадёт со «squad не найден» на устаревшем UUID из настроек (§2 ревью).
       squadUuid: null,
       speedMbit: config.lazeikaOnlySpeedMbit ?? 5,
-      ssh: parsed.data.ssh,
+      profileMode: (await loadResourceState()).profileMode,
     });
     return res.json({ ok: true, ...result });
   } catch (error) {

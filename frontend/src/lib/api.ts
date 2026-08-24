@@ -584,22 +584,20 @@ export const api = {
       nodeUuid: string;
       squadUuid?: string | null;
       speedMbit?: number;
-      ssh: { user: string; port: number; password: string };
+      profileMode?: "IN_PLACE" | "CLONE";
     },
   ): Promise<{ ok: boolean; status?: string; error?: string }> {
     return request("/admin/lazeika-only/setup", { method: "POST", body: JSON.stringify(body), token });
   },
   async lazeikaOnlyVerify(
     token: string,
-    ssh: { user: string; port: number; password: string },
   ): Promise<{ ok: boolean; checks: Array<{ name: string; ok: boolean; detail?: string }> }> {
-    return request("/admin/lazeika-only/verify", { method: "POST", body: JSON.stringify({ ssh }), token });
+    return request("/admin/lazeika-only/verify", { method: "POST", body: "{}", token });
   },
   async lazeikaOnlyReconcile(
     token: string,
-    ssh: { user: string; port: number; password: string },
   ): Promise<{ ok: boolean; status?: string; error?: string }> {
-    return request("/admin/lazeika-only/reconcile", { method: "POST", body: JSON.stringify({ ssh }), token });
+    return request("/admin/lazeika-only/reconcile", { method: "POST", body: "{}", token });
   },
   async lazeikaOnlyDisable(token: string): Promise<{ ok: boolean; status?: string }> {
     return request("/admin/lazeika-only/disable", { method: "POST", token });

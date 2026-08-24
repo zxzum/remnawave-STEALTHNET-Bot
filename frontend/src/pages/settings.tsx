@@ -430,10 +430,7 @@ export function SettingsPage() {
   const [lazeikaNodes, setLazeikaNodes] = useState<{ uuid: string; name?: string; isDisabled?: boolean }[]>([]);
   const [lazeikaStatus, setLazeikaStatus] = useState<LazeikaOnlyStatus | null>(null);
   const [lazeikaBusy, setLazeikaBusy] = useState<string | null>(null);
-  // SSH-модалка: креды живут только в памяти формы (§4 ТЗ).
-  const [lazeikaSshUser] = useState("luna_worker");
-  const [lazeikaSshPort] = useState(22);
-  const [lazeikaSshPassword, setLazeikaSshPassword] = useState("");
+  const [lazeikaProfileMode, setLazeikaProfileMode] = useState<"IN_PLACE" | "CLONE">("IN_PLACE");
   const [activeTab, setActiveTab] = useState("general");
   const [botSubTab, setBotSubTab] = useState<"menu" | "texts" | "emoji" | "behavior" | "links">("menu");
   const [installedLangCodes, setInstalledLangCodes] = useState<string[]>(FALLBACK_LANGS);
@@ -673,13 +670,6 @@ export function SettingsPage() {
 
   async function confirmLazeikaAction(kind: "setup" | "verify" | "reconcile" | "disable") {
     if (!settings) return;
-    if (kind !== "disable" && (!lazeikaSshUser.trim() || !lazeikaSshPort || !lazeikaSshPassword)) {
-      setMessage("Заполните SSH user, port и password");
-      return;
-    }
-    const ssh = { user: lazeikaSshUser.trim(), port: lazeikaSshPort, password: lazeikaSshPassword };
-    // Пароль очищается сразу после отправки.
-    setLazeikaSshPassword("");
     setLazeikaBusy(kind);
     try {
       if (kind === "setup") {
@@ -691,18 +681,18 @@ export function SettingsPage() {
           nodeUuid: settings.lazeikaOnlyNodeUuid,
           squadUuid: settings.lazeikaOnlySquadUuid || null,
           speedMbit: settings.lazeikaOnlySpeedMbit ?? 5,
-          ssh,
+          profileMode: lazeikaProfileMode,
         });
         if (!res.ok) throw new Error(res.error ?? "Не удалось настроить инфраструктуру");
         setMessage("Инфраструктура Lazeika-Only готова");
       } else if (kind === "verify") {
-        const res = await api.lazeikaOnlyVerify(token, ssh);
+        const res = await api.lazeikaOnlyVerify(token);
         const failed = res.checks.filter((c) => !c.ok);
         setMessage(res.ok
           ? `Проверка пройдена (${res.checks.length} проверок)`
           : `Проблемы: ${failed.map((c) => c.name).join(", ")}`);
       } else if (kind === "reconcile") {
-        const res = await api.lazeikaOnlyReconcile(token, ssh);
+        const res = await api.lazeikaOnlyReconcile(token);
         if (!res.ok) throw new Error(res.error ?? "Reconcile не удался");
         setMessage("Ресурсы Lazeika-Only приведены к сохранённому состоянию");
       } else {
@@ -5716,19 +5706,6 @@ export function SettingsPage() {
                     </p>
                   </div>
                 </div>
-                <div className="rounded-lg border bg-background/40 p-3 space-y-3">
-                  <div>
-                    <Label className="text-sm font-medium">Ручная подготовка VPS</Label>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Нода настраивается вручную, без передачи SSH-пароля в панель. Для этой VPS используется интерфейс <code>ens3</code>.
-                    </p>
-                  </div>
-                  <div className="rounded-md bg-muted/40 p-3 text-xs space-y-2">
-                    <p>После создания managed inbound подставьте его порт вместо <code>PORT</code>:</p>
-                    <code className="block break-all">sudo bash lazeika-only-node-setup.sh PORT {settings.lazeikaOnlySpeedMbit ?? 5}</code>
-                    <p className="text-muted-foreground">Скрипт: <code>scripts/lazeika-only-node-setup.sh</code>. Он ограничивает только этот inbound и восстанавливается после перезагрузки VPS.</p>
-                  </div>
-                </div>
                 <div className="grid grid-cols-1 gap-4">
                   {[1, 2, 3].map((n) => {
                     const key = `lazeikaOnlyNotificationMessage${n}` as keyof AdminSettings;
@@ -5750,9 +5727,12 @@ export function SettingsPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <Label>Режим профиля</Label>
-                    <div className="rounded-md border border-input bg-muted/40 px-3 py-2 text-sm font-medium">IN_PLACE · фиксированный</div>
+                    <select value={lazeikaProfileMode} onChange={(e) => setLazeikaProfileMode(e.target.value as "IN_PLACE" | "CLONE")} className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm">
+                      <option value="IN_PLACE">IN_PLACE — изменить активный профиль</option>
+                      <option value="CLONE">CLONE — создать профиль-копию</option>
+                    </select>
                     <p className="text-xs text-muted-foreground">
-                      Активный профиль ноды расширяется managed+notification inbound&apos;ами. Переключение на копию не поддерживается, чтобы не потерять текущую конфигурацию ноды.
+                      IN_PLACE сохраняет текущий профиль. CLONE создаёт отдельный профиль и применяет его к выбранной ноде.
                     </p>
                   </div>
                   <div className="flex items-end">
@@ -5764,6 +5744,15 @@ export function SettingsPage() {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  <Button type="button" disabled={lazeikaBusy !== null} onClick={() => runLazeikaAction("setup")}>
+                    {lazeikaBusy === "setup" ? "Настраиваю…" : "Настроить Remnawave"}
+                  </Button>
+                  <Button type="button" variant="outline" disabled={lazeikaBusy !== null} onClick={() => runLazeikaAction("verify")}>
+                    Проверить Remnawave
+                  </Button>
+                  <Button type="button" variant="outline" disabled={lazeikaBusy !== null} onClick={() => runLazeikaAction("reconcile")}>
+                    Перенастроить
+                  </Button>
                   {settings.lazeikaOnlyEnabled === true && (
                     <Button type="button" variant="ghost" size="sm" disabled={lazeikaBusy !== null} onClick={() => runLazeikaAction("disable")}>
                       Выключить режим
@@ -5788,6 +5777,14 @@ export function SettingsPage() {
                     <div className="text-muted-foreground">
                       Хосты: рабочий {lazeikaStatus.workingHost ? `«${lazeikaStatus.workingHost.remark ?? ""}»` : "нет"} · уведомления: {lazeikaStatus.notificationHosts.length}/3
                     </div>
+                  </div>
+                )}
+                {lazeikaStatus?.state.managedInboundPort && (
+                  <div className="rounded-lg border bg-background/40 p-3 text-xs space-y-2">
+                    <p className="font-medium">Последний шаг: запустите на выбранной VPS, не на сервере бота</p>
+                    <p className="text-muted-foreground">Интерфейс: <code>ens3</code>; порт managed inbound: <code>{lazeikaStatus.state.managedInboundPort}</code>.</p>
+                    <code className="block break-all rounded bg-muted/50 p-2">sudo bash lazeika-only-node-setup.sh {lazeikaStatus.state.managedInboundPort} {settings.lazeikaOnlySpeedMbit ?? 5}</code>
+                    <p className="text-muted-foreground">Сначала скопируйте <code>scripts/lazeika-only-node-setup.sh</code> на эту VPS. Скрипт ограничивает только этот inbound и создаёт systemd unit.</p>
                   </div>
                 )}
               </div>
