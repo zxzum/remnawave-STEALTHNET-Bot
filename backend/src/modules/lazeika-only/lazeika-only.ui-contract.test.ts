@@ -13,19 +13,11 @@ const settingsSrc = readFileSync(
   "utf8",
 );
 
-test("setup/verify/reconcile use visible SSH fields instead of a hidden modal", () => {
-  for (const kind of ["setup", "verify", "reconcile"]) {
-    assert.ok(
-      settingsSrc.includes(`onClick={() => runLazeikaAction("${kind}")}`),
-      `кнопка «${kind}» вызывает runLazeikaAction`,
-    );
-  }
-  // Кнопки сразу запускают действие с видимыми полями формы.
-  const fn = settingsSrc.match(/function runLazeikaAction[\s\S]*?\n  \}/)?.[0] ?? "";
-  assert.ok(fn.includes("void confirmLazeikaAction(kind)"), "runLazeikaAction запускает действие из формы");
-  assert.ok(!fn.includes("setLazeikaSshOpen"), "SSH modal больше не скрывает обязательные поля");
-  assert.ok(settingsSrc.includes('id="lazeika-ssh-user"'), "SSH user виден в карточке");
-  assert.ok(settingsSrc.includes('id="lazeika-ssh-password"'), "SSH password виден в карточке");
+test("manual VPS setup replaces SSH credentials in the panel", () => {
+  assert.ok(!settingsSrc.includes('id="lazeika-ssh-user"'), "SSH user не показывается в панели");
+  assert.ok(!settingsSrc.includes('id="lazeika-ssh-password"'), "SSH password не показывается в панели");
+  assert.ok(settingsSrc.includes("Ручная подготовка VPS"), "показана карточка ручной подготовки");
+  assert.ok(settingsSrc.includes("lazeika-only-node-setup.sh"), "показана команда скрипта");
 });
 
 test("settings bind notification defaults returned as an array", () => {
@@ -46,7 +38,7 @@ test("cached status without nodes keeps the settings page renderable", () => {
   );
 });
 
-test("confirm posts to backend, shows loading and surfaces errors to the user", () => {
+test("legacy SSH action still surfaces backend errors", () => {
   assert.ok(settingsSrc.includes("api.lazeikaOnlySetup(token,"), "POST /setup вызывается");
   assert.ok(settingsSrc.includes("api.lazeikaOnlyVerify(token, ssh)"), "POST /verify вызывается");
   assert.ok(settingsSrc.includes("api.lazeikaOnlyReconcile(token, ssh)"), "POST /reconcile вызывается");

@@ -431,8 +431,8 @@ export function SettingsPage() {
   const [lazeikaStatus, setLazeikaStatus] = useState<LazeikaOnlyStatus | null>(null);
   const [lazeikaBusy, setLazeikaBusy] = useState<string | null>(null);
   // SSH-модалка: креды живут только в памяти формы (§4 ТЗ).
-  const [lazeikaSshUser, setLazeikaSshUser] = useState("luna_worker");
-  const [lazeikaSshPort, setLazeikaSshPort] = useState(22);
+  const [lazeikaSshUser] = useState("luna_worker");
+  const [lazeikaSshPort] = useState(22);
   const [lazeikaSshPassword, setLazeikaSshPassword] = useState("");
   const [activeTab, setActiveTab] = useState("general");
   const [botSubTab, setBotSubTab] = useState<"menu" | "texts" | "emoji" | "behavior" | "links">("menu");
@@ -5718,37 +5718,15 @@ export function SettingsPage() {
                 </div>
                 <div className="rounded-lg border bg-background/40 p-3 space-y-3">
                   <div>
-                    <Label className="text-sm font-medium">SSH-доступ к выбранной ноде</Label>
+                    <Label className="text-sm font-medium">Ручная подготовка VPS</Label>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Нужен для установки и проверки tc-лимитера. Пароль используется только для действия и сразу очищается.
+                      Нода настраивается вручную, без передачи SSH-пароля в панель. Для этой VPS используется интерфейс <code>ens3</code>.
                     </p>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div className="space-y-1">
-                      <Label htmlFor="lazeika-ssh-user">SSH user</Label>
-                      <Input id="lazeika-ssh-user" value={lazeikaSshUser} onChange={(e) => setLazeikaSshUser(e.target.value)} />
-                    </div>
-                    <div className="space-y-1">
-                      <Label htmlFor="lazeika-ssh-port">SSH port</Label>
-                      <Input
-                        id="lazeika-ssh-port"
-                        type="number"
-                        min={1}
-                        max={65535}
-                        value={lazeikaSshPort}
-                        onChange={(e) => setLazeikaSshPort(Number(e.target.value) || 22)}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label htmlFor="lazeika-ssh-password">SSH password</Label>
-                      <Input
-                        id="lazeika-ssh-password"
-                        type="password"
-                        value={lazeikaSshPassword}
-                        autoComplete="off"
-                        onChange={(e) => setLazeikaSshPassword(e.target.value)}
-                      />
-                    </div>
+                  <div className="rounded-md bg-muted/40 p-3 text-xs space-y-2">
+                    <p>После создания managed inbound подставьте его порт вместо <code>PORT</code>:</p>
+                    <code className="block break-all">sudo bash lazeika-only-node-setup.sh PORT {settings.lazeikaOnlySpeedMbit ?? 5}</code>
+                    <p className="text-muted-foreground">Скрипт: <code>scripts/lazeika-only-node-setup.sh</code>. Он ограничивает только этот inbound и восстанавливается после перезагрузки VPS.</p>
                   </div>
                 </div>
                 <div className="grid grid-cols-1 gap-4">
@@ -5780,21 +5758,12 @@ export function SettingsPage() {
                   <div className="flex items-end">
                     {lazeikaStatus && !lazeikaStatus.settingsInSync && (
                       <p className="text-sm text-amber-500">
-                        ⚠ Настройки разошлись с состоянием — выполните «Перенастроить»
+                        ⚠ Настройки разошлись с состоянием — примените конфигурацию вручную на VPS
                       </p>
                     )}
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button type="button" variant="outline" size="sm" disabled={lazeikaBusy !== null} onClick={() => runLazeikaAction("setup")}>
-                    {lazeikaBusy === "setup" ? "Настройка…" : "Настроить"}
-                  </Button>
-                  <Button type="button" variant="outline" size="sm" disabled={lazeikaBusy !== null} onClick={() => runLazeikaAction("verify")}>
-                    {lazeikaBusy === "verify" ? "Проверка…" : "Проверить"}
-                  </Button>
-                  <Button type="button" variant="outline" size="sm" disabled={lazeikaBusy !== null} onClick={() => runLazeikaAction("reconcile")}>
-                    {lazeikaBusy === "reconcile" ? "Перенастройка…" : "Перенастроить"}
-                  </Button>
                   {settings.lazeikaOnlyEnabled === true && (
                     <Button type="button" variant="ghost" size="sm" disabled={lazeikaBusy !== null} onClick={() => runLazeikaAction("disable")}>
                       Выключить режим
