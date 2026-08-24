@@ -33,6 +33,7 @@ type FakeNode = {
 /** Полностью fake-окружение Remna в памяти. */
 function createFakeRemna(options: {
   failCreateProfile?: boolean;
+  failUpdateProfile?: boolean;
 } = {}) {
   let seq = 0;
   // Валидные v4-style UUID: resource_state прогоняется через Zod при каждом чтении.
@@ -109,6 +110,7 @@ function createFakeRemna(options: {
       return ok({ response: profile });
     },
     updateConfigProfile: async (body: { uuid: string; config?: unknown; name?: string }) => {
+      if (options.failUpdateProfile) return { status: 502, error: "profile update failed" };
       const p = state.profiles.find((x) => x.uuid === body.uuid);
       if (!p) return { status: 404, error: "not found" };
       if (body.name !== undefined) p.name = body.name;
@@ -249,7 +251,6 @@ function fencedDeps(store: ReturnType<typeof createFencedStore>) {
         "⏰ Ваша подписка закончилась!",
         "✅ Доступ сохранён в режиме продления!",
       ],
-      profileName: "Lazeika-Only — уведомления",
     }),
   };
 }
@@ -257,7 +258,6 @@ function fencedDeps(store: ReturnType<typeof createFencedStore>) {
 const SETUP_SSH = { user: "root", port: 22, password: "test-pass" };
 const SETUP_INPUT = {
   nodeUuid: NODE_UUID, squadUuid: null as string | null, speedMbit: 5, ssh: SETUP_SSH,
-  profileMode: "CLONE" as const,
 };
 
 test("setup from clean state creates exactly one profile, squad, working host and three notifications", async () => {
@@ -277,12 +277,17 @@ test("setup from clean state creates exactly one profile, squad, working host an
   const result = await service.setup(SETUP_INPUT);
   assert.equal(result.status, "READY");
   assert.equal(store.state.status, "READY");
-  assert.equal(env.state.profiles.length, 2, "base + один managed профиль");
-  assert.match(env.state.profiles[1].name as string, /^Lazeika-Only — Alpha$/);
+  // IN_PLACE: активный профиль ноды расширен, новый профиль НЕ создаётся.
+  assert.equal(env.state.profiles.length, 1, "только исходный профиль, расширенный in-place");
+  assert.equal(store.state.profileUuid, BASE_PROFILE_UUID);
+  // Managed+notification inbound появились в конфиге того же профиля.
+  const cfg = env.state.profiles[0].config as { inbounds: Array<{ tag: string; port: number }>; routing: { rules: Array<Record<string, unknown>> } };
+  assert.ok(cfg.inbounds.some((ib) => ib.tag === store.state.managedInboundTag));
+  assert.ok(cfg.inbounds.some((ib) => ib.tag === store.state.notifInboundTag));
   assert.equal(env.state.squads.length, 1);
   assert.equal(env.state.squads[0].name, "Lazeika-Only");
   assert.deepEqual(env.state.squads[0].inbounds, [{ uuid: store.state.managedInboundUuid }, { uuid: store.state.notifInboundUuid }]);
-  // нода переключена на managed профиль + managed inbound добавлен к прежним
+  // нода остаётся на своём активном профиле + managed/notif inbound добавлены к прежним
   assert.equal(env.state.nodes[0].configProfile?.activeConfigProfileUuid, store.state.profileUuid);
   assert.ok(env.state.nodes[0].configProfile?.activeInbounds?.includes(store.state.managedInboundUuid ?? ""));
   assert.ok(env.state.nodes[0].configProfile?.activeInbounds?.includes("inbound-base-uuid"));
@@ -364,7 +369,7 @@ test("manual squad containing foreign inbounds is rejected without changes", asy
 });
 
 test("rollback restores the node after a Remna profile failure", async () => {
-  const env = createFakeRemna({ failCreateProfile: true });
+  const env = createFakeRemna({ failUpdateProfile: true });
   const store = createFencedStore();
   const service = createLazeikaService({
     remna: env.remna, ssh: createSshFake().ssh,
@@ -373,7 +378,7 @@ test("rollback restores the node after a Remna profile failure", async () => {
     runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
     persistSetupInputs: async () => {},
   });
-  await assert.rejects(() => service.setup(SETUP_INPUT), /profile create failed/);
+  await assert.rejects(() => service.setup(SETUP_INPUT), /profile update failed/);
   assert.equal(store.state.status, "ERROR");
   assert.match(store.state.lastError ?? "", /\[PROFILE\]/);
   assert.equal(env.state.nodes[0].configProfile?.activeConfigProfileUuid, BASE_PROFILE_UUID);
@@ -405,9 +410,9 @@ test("rollback removes only resources created by the failed run after an SSH fai
   await assert.rejects(() => service2.setup(SETUP_INPUT), /tc-фильтры/);
   assert.equal(store.state.status, "ERROR");
   assert.match(store.state.lastError ?? "", /\[SSH_TC\]/);
-  // созданные этим запуском ресурсы удалены
+  // созданные этим запуском ресурсы удалены (IN_PLACE: профиль НЕ создаётся — только squad+hosts)
   const deletedKinds = env.state.calls.deleted.map((d) => d.split(":")[0]);
-  assert.deepEqual(deletedKinds.sort(), ["host", "host", "host", "host", "profile", "squad"].sort());
+  assert.deepEqual(deletedKinds.sort(), ["host", "host", "host", "host", "squad"].sort());
   assert.equal(env.state.profiles.length, 1);
   assert.equal(env.state.squads.length, 0);
   // stale auto-squad UUID сброшен в state и в настройках — иначе повторный setup вечно падает
@@ -537,11 +542,22 @@ test("failed re-setup restores modified existing profile/hosts and reinstalls pr
   const profileAfterFirst = JSON.parse(JSON.stringify(env.state.profiles.find((p) => p.uuid === store.state.profileUuid)));
   const hostAfterFirst = JSON.parse(JSON.stringify(env.state.hosts.find((h) => h.uuid === store.state.workingHostUuid)));
 
+  // Админ изменил поля host'ов вручную — rollback обязан вернуть ВСЕ изменяемые поля
+  // (port/remark/isDisabled/binding/tags), а не только binding+tags (§7 финала).
+  const workingNow = env.state.hosts.find((h) => h.uuid === store.state.workingHostUuid) as Record<string, unknown>;
+  workingNow.isDisabled = true;
+  workingNow.remark = "admin changed remark";
+  workingNow.port = 12345;
+  const notifNow = env.state.hosts.find((h) => h.uuid === store.state.notificationHostUuids[0]) as Record<string, unknown>;
+  notifNow.remark = "admin custom notif";
+  notifNow.port = 23456;
+  const notifSnap = JSON.parse(JSON.stringify(notifNow));
+
   // Повторный setup падает на tc — но уже изменил существующие профиль/hosts.
   failNow = true;
   await assert.rejects(() => service.setup(SETUP_INPUT), /tc-фильтры/);
 
-  // Профиль восстановлен к снапшоту (имя и конфиг как после первого setup).
+  // Профиль восстановлен к снапшоту (конфиг как после первого setup).
   const profileNow = env.state.profiles.find((p) => p.uuid === store.state.profileUuid);
   assert.equal(profileNow?.name, profileAfterFirst.name);
   assert.deepEqual(profileNow?.config, profileAfterFirst.config);
@@ -549,6 +565,13 @@ test("failed re-setup restores modified existing profile/hosts and reinstalls pr
   const hostNow = env.state.hosts.find((h) => h.uuid === store.state.workingHostUuid);
   assert.deepEqual(hostNow?.inbound, hostAfterFirst.inbound);
   assert.deepEqual(hostNow?.tags, hostAfterFirst.tags);
+  // …и все остальные изменяемые поля — к значениям на момент запуска.
+  assert.equal(hostNow?.isDisabled, true, "isDisabled восстановлен");
+  assert.equal(hostNow?.remark, "admin changed remark", "remark восстановлен");
+  assert.equal(hostNow?.port, 12345, "port восстановлен");
+  const notifAfter = env.state.hosts.find((h) => h.uuid === store.state.notificationHostUuids[0]);
+  assert.equal(notifAfter?.remark, notifSnap.remark, "notif remark восстановлен");
+  assert.equal(notifAfter?.port, notifSnap.port, "notif port восстановлен");
   // tc НЕ сносился: cleanup отсутствует, вместо него restore-установка прежнего лимита.
   assert.ok(!sshf.scripts.some((sc) => sc.includes("systemctl disable --now lazeika-only-tc.service")), "cleanup не должен запускаться при существовавшем лимитере");
   assert.ok(sshf.scripts.filter((sc) => sc.includes("police rate 5mbit")).length >= 2, "restore переустановил прежний rate");
@@ -594,7 +617,7 @@ test("stale worker cannot overwrite READY of the new worker", async () => {
   assert.equal(store.state.status, "READY", "READY нового воркера не затёрт");
 });
 
-test("manual deletion of managed profile recovers from saved base profile", async () => {
+test("manual deletion of managed profile in IN_PLACE is rejected with a clear error", async () => {
   const env = createFakeRemna();
   const sshf = createSshFake();
   const store = createFencedStore();
@@ -606,15 +629,13 @@ test("manual deletion of managed profile recovers from saved base profile", asyn
     runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
   });
   await service.setup(SETUP_INPUT);
-  // Админ удалил managed профиль; нода всё ещё ссылается на него.
+  // Админ удалил managed профиль (= активный профиль ноды в IN_PLACE); восстанавливать
+  // его «с нуля» нельзя — полного снапшота конфига у нас нет. Ожидаем понятную ошибку.
   env.state.profiles = env.state.profiles.filter((p) => p.uuid !== store.state.profileUuid);
-  env.state.nodes[0].configProfile!.activeConfigProfileUuid = store.state.profileUuid ?? null;
-  await service.setup(SETUP_INPUT);
-  assert.equal(store.state.status, "READY");
-  // Профиль пересоздан (ровно один managed) и нода снова на нём.
-  const managedProfiles = (env.state.profiles as Array<{ uuid: string; name?: string }>).filter((p) => typeof p.name === "string" && p.name.startsWith("Lazeika-Only"));
-  assert.equal(managedProfiles.length, 1);
-  assert.equal(env.state.nodes[0].configProfile?.activeConfigProfileUuid, managedProfiles[0]!.uuid);
+  await assert.rejects(() => service.setup(SETUP_INPUT), /активный config-профиль/);
+  assert.equal(store.state.status, "ERROR");
+  // Новый профиль не создавался.
+  assert.equal(env.state.profiles.length, 0);
 });
 
 test("deleted auto-squad is recreated without duplicates", async () => {
@@ -653,17 +674,17 @@ test("stale worker cannot overwrite READY/ERROR written by the new worker (servi
   await serviceB.setup(SETUP_INPUT);
   assert.equal(store.state.status, "READY");
 
-  // Воркер A стартовал ДО B, его claim-raw устарел; Remna у него падает на создании профиля.
+  // Воркер A стартовал ДО B, его claim-raw устарел; Remna у него падает на обновлении профиля.
   const staleClaim = { claimed: true, token: "worker-a", raw: JSON.stringify({ ...resourceStateSchema.parse({}), status: "APPLYING", lockToken: "worker-a", lockedAt: new Date().toISOString() }) };
   const serviceA = createLazeikaService({
-    remna: { ...env.remna, createConfigProfile: async () => ({ status: 502, error: "boom" }) },
+    remna: { ...env.remna, updateConfigProfile: async () => ({ status: 502, error: "boom" }) },
     ssh: sshf.ssh,
     loadState: store.loadState,
     saveState: store.saveState,
     beginSetup: async () => staleClaim,
     casWrite: store.casWrite,
     readStateRaw: async () => store.rawValue,
-    loadNotificationSettings: async () => ({ messages: ["m1", "m2", "m3"], profileName: "notif" }),
+    loadNotificationSettings: async () => ({ messages: ["m1", "m2", "m3"] }),
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     persistSetupInputs: async () => {},
     runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
@@ -671,7 +692,7 @@ test("stale worker cannot overwrite READY/ERROR written by the new worker (servi
   // A выбывает на первом heartbeat с LOCK_LOST, не создав НИЧЕГО и не тронув READY воркера B.
   await assert.rejects(() => serviceA.setup(SETUP_INPUT), /LOCK_LOST: lease потерян/);
   assert.equal(store.state.status, "READY");
-  assert.equal(env.state.profiles.filter((pl) => String(pl.name ?? "").startsWith("Lazeika-Only")).length, 1);
+  assert.equal(env.state.profiles.length, 1, "IN_PLACE: новый профиль не создаётся");
 });
 
 test("node change from ERROR state with managed traces is rejected", async () => {
@@ -786,7 +807,7 @@ test("IN_PLACE drift: admin switched node active profile -> setup rejects withou
     runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
   });
   // Первый setup в IN_PLACE: profileUuid == активный профиль ноды.
-  await service.setup({ ...SETUP_INPUT, profileMode: "IN_PLACE" });
+  await service.setup(SETUP_INPUT);
   assert.equal(env.state.nodes[0].configProfile?.activeConfigProfileUuid, store.state.profileUuid);
   // Админ вручную переключил ноду на ДРУГОЙ (сторонний) профиль.
   env.state.profiles.push({
@@ -798,7 +819,7 @@ test("IN_PLACE drift: admin switched node active profile -> setup rejects withou
   env.state.nodes[0].configProfile!.activeConfigProfileUuid = "77777777-7777-4777-8777-777777777777";
   const profilesBefore = env.state.profiles.length;
   await assert.rejects(
-    () => service.setup({ ...SETUP_INPUT, profileMode: "IN_PLACE" }),
+    () => service.setup(SETUP_INPUT),
     /изменён вручную|reset-state/,
   );
   // Мутаций не было.
@@ -846,4 +867,170 @@ test("notification fake-hosts are created with numeric notif port (not null)", a
   for (const h of notifications) {
     assert.equal(typeof h.port, "number", `port обязателен (${h.port})`);
   }
+});
+
+/** Общий хелпер сборки сервиса поверх fake-окружения. */
+function buildService(env: ReturnType<typeof createFakeRemna>, sshf: ReturnType<typeof createSshFake>, store: ReturnType<typeof createFencedStore>, remnaOverride?: Record<string, unknown>) {
+  return createLazeikaService({
+    remna: { ...env.remna, ...(remnaOverride ?? {}) } as typeof env.remna,
+    ssh: sshf.ssh,
+    ...fencedDeps(store),
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    persistSetupInputs: async () => {},
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
+  });
+}
+
+function profileConfig(env: ReturnType<typeof createFakeRemna>["state"], uuid: string) {
+  return env.profiles.find((p) => p.uuid === uuid)?.config as {
+    inbounds: Array<{ tag?: string; port?: number }>;
+    routing: { rules: Array<Record<string, unknown>> };
+  };
+}
+
+test("second setup keeps notification port stable; all three host ports match it", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  const service = buildService(env, sshf, store);
+
+  await service.setup(SETUP_INPUT);
+  const notifPortFirst = store.state.notificationHostUuids.map(
+    (u) => (env.state.hosts.find((h) => h.uuid === u) as { port?: number })?.port,
+  );
+  assert.equal(new Set(notifPortFirst).size, 1, "все три fake-host имеют один порт");
+  const cfgFirst = profileConfig(env.state, store.state.profileUuid!);
+  const inboundPortFirst = cfgFirst.inbounds.find((ib) => ib.tag === store.state.notifInboundTag)?.port;
+  assert.equal(notifPortFirst[0], inboundPortFirst, "порт host'ов == порт notification-inbound");
+
+  await service.setup(SETUP_INPUT);
+  const cfgSecond = profileConfig(env.state, store.state.profileUuid!);
+  const inboundPortSecond = cfgSecond.inbounds.find((ib) => ib.tag === store.state.notifInboundTag)?.port;
+  assert.equal(inboundPortSecond, inboundPortFirst, "повторный setup НЕ сменил порт notification-inbound");
+  const notifPortSecond = store.state.notificationHostUuids.map(
+    (u) => (env.state.hosts.find((h) => h.uuid === u) as { port?: number })?.port,
+  );
+  assert.deepEqual(notifPortSecond.sort(), notifPortFirst.sort(), "порты fake-host'ов не изменились");
+  assert.ok(notifPortSecond.every((p) => p === inboundPortSecond), "host port == inbound port после reconcile");
+});
+
+test("foreign notification-tagged host is never captured or modified", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  // Чужой host с нашим notification-тегом — не должен быть захвачен.
+  const foreign = {
+    uuid: "44444444-4444-4444-4444-444444444444",
+    remark: "foreign keep me",
+    address: "foreign.example.com",
+    port: 8443,
+    isDisabled: true,
+    inbound: { configProfileUuid: BASE_PROFILE_UUID, configProfileInboundUuid: "inbound-base-uuid" },
+    tags: ["LAZEIKA_ONLY_NOTIFICATION"],
+  };
+  env.state.hosts.push({ ...foreign });
+  const service = buildService(env, sshf, store);
+
+  await service.setup(SETUP_INPUT);
+  await service.setup(SETUP_INPUT); // и reconcile тоже не трогает чужой host
+
+  const foreignNow = env.state.hosts.find((h) => h.uuid === foreign.uuid);
+  assert.deepEqual(foreignNow, foreign, "чужой host не изменён");
+  assert.equal(store.state.notificationHostUuids.length, 3, "ровно три СВОИХ UUID в state");
+  assert.ok(!store.state.notificationHostUuids.includes(foreign.uuid), "чужой UUID не захвачен");
+});
+
+test("null remark of owned notification host is overwritten from settings on reconcile", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  const service = buildService(env, sshf, store);
+  await service.setup(SETUP_INPUT);
+  // Админ/панель обнулила remark второго fake-host'а (null вместо строки).
+  const second = env.state.hosts.find((h) => h.uuid === store.state.notificationHostUuids[1]) as Record<string, unknown>;
+  second.remark = null;
+  await service.setup(SETUP_INPUT);
+  assert.equal(second.remark, "⏰ Ваша подписка закончилась!", "null remark приведён к текущему сообщению");
+});
+
+test("legacy CLONE state with managed resources is rejected without silent conversion", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  store.setRaw(JSON.stringify(resourceStateSchema.parse({
+    status: "READY",
+    profileMode: "CLONE",
+    nodeUuid: NODE_UUID,
+    profileUuid: BASE_PROFILE_UUID,
+    squadUuid: MANUAL_SQUAD_UUID,
+    managedInboundUuid: "55555555-5555-4555-8555-555555555555",
+  })));
+  const service = buildService(env, sshf, store);
+  await assert.rejects(() => service.setup(SETUP_INPUT), /CLONE|reset-state/);
+  // Состояние и инфраструктура не тронуты.
+  assert.equal(store.state.status, "READY");
+  assert.equal(store.state.profileMode, "CLONE");
+  assert.equal(env.state.updateNodeBodies.length, 0);
+});
+
+test("managed port shared with another inbound is rejected before mutations", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  const service = buildService(env, sshf, store);
+  await service.setup(SETUP_INPUT);
+  const managedPort = store.state.managedInboundPort!;
+  // Админ вручную добавил inbound на тот же порт — tc-лимит задел бы чужой трафик.
+  const cfg = profileConfig(env.state, store.state.profileUuid!);
+  cfg.inbounds.push({ tag: "FOREIGN-SAME-PORT", port: managedPort });
+  const installScriptsBefore = sshf.scripts.filter((s) => s.includes("systemctl enable --now")).length;
+
+  await assert.rejects(() => service.setup(SETUP_INPUT), /уже используется|reset-state/);
+  const installScriptsAfter = sshf.scripts.filter((s) => s.includes("systemctl enable --now")).length;
+  assert.equal(installScriptsAfter, installScriptsBefore, "tc-установка не запускалась повторно");
+});
+
+test("lease lost in the middle of rollback stops compensation immediately", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake({ failInstall: true });
+  const store = createFencedStore();
+  let deleteCount = 0;
+  const service = buildService(env, sshf, store, {
+    deleteHost: async (uuid: string) => {
+      deleteCount++;
+      if (deleteCount === 2) {
+        // Другой воркер перезахватил lease прямо посередине rollback.
+        store.setRaw(JSON.stringify({
+          ...resourceStateSchema.parse({}),
+          status: "APPLYING",
+          lockToken: "other-worker",
+          lockedAt: new Date().toISOString(),
+        }));
+      }
+      return env.remna.deleteHost(uuid);
+    },
+  });
+  await assert.rejects(() => service.setup(SETUP_INPUT), /tc-фильтры/);
+  assert.equal(deleteCount, 2, "после LOCK_LOST компенсационные удаления прекращены");
+  // Оставшиеся созданные ресурсы (2 host'а и squad) НЕ тронуты — их удалит новый владелец.
+  assert.equal(env.state.calls.deleted.length, 2);
+  assert.equal(env.state.squads.length, 1, "squad не удалён чужим воркером");
+  // ERROR поверх чужого APPLYING не записан.
+  assert.equal(store.state.lockToken, "other-worker");
+});
+
+test("rollback restores manual squad inbounds to the pre-setup snapshot", async () => {
+  const env = createFakeRemna();
+  env.state.squads.push({ uuid: MANUAL_SQUAD_UUID, name: "Manual", inbounds: [] });
+  const sshf = createSshFake({ failInstall: true });
+  const store = createFencedStore();
+  const service = buildService(env, sshf, store);
+  await assert.rejects(
+    () => service.setup({ ...SETUP_INPUT, squadUuid: MANUAL_SQUAD_UUID }),
+    /tc-фильтры/,
+  );
+  const squad = env.state.squads.find((s) => s.uuid === MANUAL_SQUAD_UUID);
+  assert.deepEqual(squad?.inbounds, [], "inbounds ручного squad восстановлены");
+  // Созданные hosts удалены, squad остался.
+  assert.equal(env.state.calls.deleted.filter((d) => d.startsWith("host:")).length, 4);
 });

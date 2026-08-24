@@ -117,7 +117,6 @@ export type LazeikaConfig = {
   squadUuid: string | null;
   messageTemplate: string;
   notificationMessages: string[];
-  notificationProfileName: string;
   /** Инфраструктура полностью настроена И совпадает с активными настройками. */
   ready: boolean;
   /** Настройки (нода/squad) разошлись с resource_state → нужен reconcile. */
@@ -132,7 +131,6 @@ type SystemConfigLike = {
   lazeikaOnlySquadUuid?: string | null;
   lazeikaOnlyMessageTemplate?: string | null;
   lazeikaOnlyNotificationMessages?: string[];
-  lazeikaOnlyNotificationProfileName?: string | null;
 };
 
 /** Полная конфигурация режима: настройки + готовность инфраструктуры. */
@@ -169,7 +167,6 @@ export async function getLazeikaConfig(
     notificationMessages: cfg.lazeikaOnlyNotificationMessages?.length === 3
       ? cfg.lazeikaOnlyNotificationMessages
       : ["🔐 Доступ к lazeika.xyz и Telegram", "⏰ Ваша подписка закончилась!", "✅ Доступ сохранён в режиме продления!"],
-    notificationProfileName: cfg.lazeikaOnlyNotificationProfileName || "Lazeika-Only — уведомления",
     ready,
     settingsInSync,
   };

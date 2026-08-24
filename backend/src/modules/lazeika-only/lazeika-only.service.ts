@@ -48,29 +48,6 @@ export class SetupError extends Error {
   }
 }
 
-/** Отдельный профиль уведомлений: один dummy-inbound + BLOCK catch-all на его тег. */
-function buildNotificationConfig(notifTag: string, port: number): XrayConfig {
-  return {
-    log: { loglevel: "warning" },
-    inbounds: [
-      {
-        tag: notifTag,
-        port,
-        protocol: "vless",
-        settings: { clients: [], decryption: "none" },
-        streamSettings: { network: "tcp", security: "none" },
-        sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] },
-      },
-    ],
-    outbounds: [
-      { protocol: "freedom", tag: "DIRECT" },
-      { protocol: "blackhole", tag: "BLOCK" },
-    ],
-    // Весь трафик этого inbound блокируется — host остаются только строками подписки.
-    routing: { rules: [{ inboundTag: [notifTag], network: "tcp,udp", outboundTag: "BLOCK" }] },
-  };
-}
-
 function unwrap(data: unknown): unknown {
   const d = data as { response?: unknown } | undefined;
   return d?.response !== undefined ? d.response : data;
@@ -147,9 +124,51 @@ export type SetupInput = {
   speedMbit: number;
   /** SSH-креды операции (password не сохраняется нигде). host = address выбранной ноды. */
   ssh: Pick<SshCredentials, "user" | "port" | "password">;
-  /** Режим профиля: IN_PLACE (по умолчанию) — расширяем активный профиль ноды. */
-  profileMode?: "IN_PLACE" | "CLONE";
 };
+
+/** Поля host'а, которые setup изменяет и rollback обязан восстановить (§7 финала). */
+type HostSnapshot = {
+  uuid: string;
+  inbound: unknown;
+  tags: string[];
+  remark: string | null;
+  port: number | null;
+  isDisabled: boolean | undefined;
+  /** sni/host/path + connection/security-параметры (securityLayer, alpn, fingerprint, pbk, sid, headerType). */
+  extra: Record<string, unknown>;
+};
+
+const HOST_SNAPSHOT_EXTRA_KEYS = ["sni", "host", "path", "securityLayer", "alpn", "fingerprint", "pbk", "sid", "headerType"] as const;
+
+function snapshotHost(h: HostShape): HostSnapshot {
+  const rec = h as Record<string, unknown>;
+  const extra: Record<string, unknown> = {};
+  for (const k of HOST_SNAPSHOT_EXTRA_KEYS) {
+    if (rec[k] !== undefined) extra[k] = rec[k];
+  }
+  return {
+    uuid: h.uuid!,
+    inbound: h.inbound ?? null,
+    tags: [...(h.tags ?? [])],
+    remark: h.remark ?? null,
+    port: h.port ?? null,
+    isDisabled: h.isDisabled,
+    extra,
+  };
+}
+
+/** Тело восстановления host'а из снапшота: все изменяемые поля, не только binding/tags. */
+function hostRestoreBody(h: HostSnapshot): { uuid: string } & Record<string, unknown> {
+  return {
+    uuid: h.uuid,
+    inbound: h.inbound,
+    tags: h.tags,
+    remark: h.remark,
+    port: h.port,
+    ...(h.isDisabled !== undefined ? { isDisabled: h.isDisabled } : {}),
+    ...h.extra,
+  };
+}
 
 export const NOTIFICATION_REMARKS = [
   "🔐 Доступ к lazeika.xyz и Telegram",
@@ -178,8 +197,8 @@ export type LazeikaServiceDependencies = {
   casWrite?: (expectedRaw: string, nextState: LazeikaResourceState) => Promise<{ ok: boolean; raw: string }>;
   /** Сырое чтение состояния — для heartbeat/lease-проверок владельца лока. */
   readStateRaw?: () => Promise<string>;
-  /** Сообщения notification-host + имя notification-профиля из настроек. */
-  loadNotificationSettings?: () => Promise<{ messages: string[]; profileName: string }>;
+  /** Сообщения notification-host из настроек (панель — источник истины для remark). */
+  loadNotificationSettings?: () => Promise<{ messages: string[] }>;
   /** Атомарная фиксация входных настроек (нода/squad/скорость) в одной транзакции с READY. */
   persistSetupInputs?: (input: { nodeUuid: string; squadUuid: string | null; speedMbit: number }, tx?: unknown) => Promise<void>;
   /** Транзакционная обёртка финального READY+persist (инъекция для тестов). */
@@ -245,7 +264,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     loadNotificationSettings = async () => {
       const { getLazeikaConfig } = await import("./lazeika-only.config.js");
       const cfg = await getLazeikaConfig();
-      return { messages: cfg.notificationMessages, profileName: cfg.notificationProfileName };
+      return { messages: cfg.notificationMessages };
     },
     // Настройки фиксируются самим setup'ом: UI мог не сохранить форму перед «Настроить»
     // (иначе resource_state=READY при пустом lazeika_only_node_uuid, §4 ревью).
@@ -342,15 +361,14 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     let autoSquadCreatedUuid: string | null = null;
     // Снапшоты УЖЕ СУЩЕСТВУЮЩИХ объектов, которые setup изменяет (§5 ревью):
     // rollback обязан вернуть их к состоянию до запуска, а не только удалить созданное.
-    let profileSnapshot: { uuid: string; name?: string; config?: unknown } | null = null;
-    const hostSnapshots: Array<{ uuid: string; inbound: unknown; tags: string[] }> = [];
+    const hostSnapshots: HostSnapshot[] = [];
     let squadSnapshot: { uuid: string; inbounds: string[] } | null = null;
+    /** Конфиг managed-профиля ДО мутаций этого запуска — rollback восстанавливает свой срез. */
+    let profileConfigSnapshot: XrayConfig | null = null;
     let tcFilesExisted: boolean | null = null;
     const prevSsh = { ...state.ssh };
 
-    const profileMode = input.profileMode ?? "IN_PLACE";
-    const { messages: notificationMessages, profileName: notificationProfileName } =
-      await loadNotificationSettings();
+    const { messages: notificationMessages } = await loadNotificationSettings();
 
     // Смена ноды запрещена при ЛЮБЫХ следах managed-инфраструктуры (READY/ERROR/APPLYING):
     // иначе snapshot/hosts старой ноды применятся к новой (§1 финального ревью).
@@ -361,6 +379,15 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     if (state.nodeUuid && input.nodeUuid !== state.nodeUuid && hasManagedTraces) {
       throw new SetupError(
         "Смена ноды при наличии managed-инфраструктуры не поддерживается: вызовите POST /admin/lazeika-only/reset-state и настройте заново на другой ноде",
+        "VALIDATION",
+      );
+    }
+
+    // Финальный публичный режим — ТОЛЬКО IN_PLACE. Наследие CLONE с managed-ресурсами
+    // не конвертируем молча: понятная ошибка + безопасный путь через reset-state (§2 финала).
+    if (state.profileMode === "CLONE" && hasManagedTraces) {
+      throw new SetupError(
+        "Обнаружено сохранённое состояние режима CLONE с managed-ресурсами. Автоматическая конвертация в IN_PLACE не поддерживается: вызовите POST /admin/lazeika-only/reset-state и настройте заново",
         "VALIDATION",
       );
     }
@@ -481,27 +508,32 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       const cloneSource = (baseProfile.config.inbounds ?? []).find((ib) => ib.tag !== tag);
       if (!cloneSource) throw new SetupError("В активном профиле нет inbound для клонирования", "PROFILE");
 
-      // ── Профиль: IN_PLACE расширяем активный профиль; CLONE — независимая копия ──
+      // ── Профиль: только IN_PLACE — расширяем активный профиль ноды ──
       let managedProfile = state.profileUuid ? profiles.find((p) => p.uuid === state.profileUuid) : undefined;
-      if (!managedProfile && profileMode === "IN_PLACE") {
+      if (!managedProfile) {
         managedProfile = baseProfile;
       }
-      const markerName = profileMode === "IN_PLACE"
-        ? (managedProfile?.name ?? `Lazeika-Only — ${node.name ?? node.uuid.slice(0, 8)}`)
-        : `Lazeika-Only — ${node.name ?? node.uuid.slice(0, 8)}`;
+      const markerName = managedProfile?.name ?? `Lazeika-Only — ${node.name ?? node.uuid.slice(0, 8)}`;
       const sourceConfig = managedProfile?.config ?? baseProfile.config;
+      // Снапшот ДО любых мутаций запуска (в т.ч. до ранних validation-ошибок):
+      // rollback восстанавливает свой срез конфига именно к этому состоянию.
+      profileConfigSnapshot = JSON.parse(JSON.stringify(sourceConfig)) as XrayConfig;
       const { config: newConfig } = applyLazeikaToConfig(sourceConfig as XrayConfig, cloneSource, tag, port);
-      state.profileMode = profileMode;
-      const updatingExisting = Boolean(managedProfile?.uuid);
-      if (updatingExisting) {
-        profileSnapshot = { uuid: managedProfile!.uuid!, name: managedProfile!.name, config: managedProfile!.config };
+      state.profileMode = "IN_PLACE";
+      // Порт managed-inbound обязан быть уникален в конфиге ДО любой мутации:
+      // иначе tc-лимит по порту затронет чужой inbound (§5 финала).
+      const portCollision = (newConfig.inbounds ?? []).filter((ib) => ib.tag !== tag && Number(ib.port) === port);
+      if (portCollision.length > 0) {
+        throw new SetupError(
+          `Порт ${port} managed-inbound уже используется другим inbound (${portCollision.map((ib) => String(ib.tag ?? "?")).join(", ")}). Освободите порт или выполните reset-state`,
+          "VALIDATION",
+        );
       }
       await heartbeat();
-      if (managedProfile?.uuid && (profileMode === "IN_PLACE" || state.profileUuid === managedProfile.uuid)) {
+      if (managedProfile?.uuid) {
         await requireOk(
           await remna.updateConfigProfile({
             uuid: managedProfile.uuid,
-            ...(profileMode === "CLONE" ? { name: markerName } : {}),
             config: newConfig,
           }),
           "PROFILE",
@@ -526,7 +558,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       if (!managedInboundUuid) throw new SetupError("Не найден UUID managed inbound в профиле", "PROFILE");
 
       state.profileUuid = managedProfileUuid;
-      state.baseProfileUuid = profileMode === "IN_PLACE" ? null : (baseProfile.uuid ?? null);
+      state.baseProfileUuid = null; // IN_PLACE: отдельного базового профиля нет
       state.managedInboundTag = tag;
       state.managedInboundPort = port;
       state.managedInboundUuid = managedInboundUuid;
@@ -540,25 +572,33 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       };
       await fencedSave();
       // ── Notification inbound В УПРАВЛЯЕМОМ профиле (Remnawave: одна активная
-      // конфигурация на ноду). Свой порт + BLOCK catch-all по его тегу; hosts указывают
-      // на .invalid — подключение невозможно. Отдельное имя профиля уведомлений
-      // хранится в настройках и используется как редактируемый marker (§2 ТЗ). ──
-      const notifTag = `${tag}_NOTIF`;
-      const notifPort = pickManagedPort(newConfig, [input.ssh.port, port]);
+      // конфигурация на ноду; host без inbound в подписку не попадает). Свой порт +
+      // BLOCK catch-all по его тегу; hosts указывают на .invalid — подключение невозможно.
+      // Идемпотентность порта (§4 финала): существующий inbound сохраняет СВОЙ порт,
+      // новый порт выбирается один раз при создании и больше не меняется. ──
+      const notifTag = state.notifInboundTag ?? `${tag}_NOTIF`;
+      const existingNotifInbound = (newConfig.inbounds ?? []).find((ib) => ib.tag === notifTag);
+      const existingNotifPort = Number(existingNotifInbound?.port);
+      const notifPort = Number.isInteger(existingNotifPort) && existingNotifPort > 0
+        ? existingNotifPort
+        : pickManagedPort(newConfig, [input.ssh.port, port]);
+      // Нечисловой/служебный/совпадающий порт — понятная ошибка ДО разрушительных изменений.
+      validatePort(notifPort, [input.ssh.port, port]);
       {
         const cfgNotif: XrayConfig = JSON.parse(JSON.stringify(newConfig));
         cfgNotif.inbounds ??= [];
         if (!cfgNotif.inbounds.some((ib) => ib.tag === notifTag)) {
           cfgNotif.inbounds.push(buildManagedInbound(cloneSource as never, notifTag, notifPort));
-          cfgNotif.routing ??= { rules: [] };
-          cfgNotif.routing.rules = [
-            ...(cfgNotif.routing.rules ?? []).filter(
-              (r) => !(Array.isArray(r.inboundTag) && (r.inboundTag as string[]).includes(notifTag)),
-            ),
-            { inboundTag: [notifTag], network: "tcp,udp", outboundTag: "BLOCK" },
-          ];
         }
-      await heartbeat();
+        // BLOCK-правило notif-тега приводим к эталону при каждом прогоне (идемпотентно).
+        cfgNotif.routing ??= { rules: [] };
+        cfgNotif.routing.rules = [
+          ...(cfgNotif.routing.rules ?? []).filter(
+            (r) => !(Array.isArray(r.inboundTag) && (r.inboundTag as string[]).includes(notifTag)),
+          ),
+          { inboundTag: [notifTag], network: "tcp,udp", outboundTag: "BLOCK" },
+        ];
+        await heartbeat();
         await requireOk(
           await remna.updateConfigProfile({ uuid: managedProfileUuid, config: cfgNotif }),
           "PROFILE",
@@ -574,9 +614,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         if (!state.notifInboundUuid) throw new SetupError("Не найден UUID notification inbound", "PROFILE");
       }
 
-      const targetActiveProfileUuid = profileMode === "IN_PLACE"
-        ? (nodeActiveProfileUuid(node) ?? managedProfileUuid)
-        : managedProfileUuid;
+      const targetActiveProfileUuid = nodeActiveProfileUuid(node) ?? managedProfileUuid;
       await heartbeat();
       await requireOk(
         await remna.updateNode({
@@ -653,10 +691,9 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       // ── Hosts: 1 РАБОЧИЙ (managed inbound) + 3 FAKE notification (.invalid) ──
       await heartbeat();
       const hosts = await fetchHosts();
-      // Технический шаблон берём из рабочего host'а ИСХОДНОГО профиля (в CLONE это база).
-      const templateProfileUuid = profileMode === "CLONE" ? (baseProfile.uuid ?? null) : managedProfileUuid;
+      // Технический шаблон — рабочий host того же (managed) профиля.
       const baseTemplate = hosts.find(
-        (h) => h.inbound?.configProfileUuid === templateProfileUuid && h.address && !isNotificationHost(h) && !isLazeikaHost(h),
+        (h) => h.inbound?.configProfileUuid === managedProfileUuid && h.address && !isNotificationHost(h) && !isLazeikaHost(h),
       ) ?? null;
       const workingBinding = { configProfileUuid: managedProfileUuid, configProfileInboundUuid: managedInboundUuid };
       const notifBinding = { configProfileUuid: managedProfileUuid, configProfileInboundUuid: state.notifInboundUuid! };
@@ -664,16 +701,15 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       const workingExisting =
         hosts.find((h) => h.uuid && h.uuid === state.workingHostUuid)
         ?? hosts.find((h) => isLazeikaHost(h) && !isNotificationHost(h));
+      await heartbeat();
       if (workingExisting?.uuid) {
-        hostSnapshots.push({
-          uuid: workingExisting.uuid,
-          inbound: workingExisting.inbound ?? null,
-          tags: [...(workingExisting.tags ?? [])],
-        });
+        hostSnapshots.push(snapshotHost(workingExisting));
+        // Рабочий host обязан быть ВКЛЮЧЁН (админ мог отключить вручную).
         await requireOk(
           await remna.updateHost({
             uuid: workingExisting.uuid,
             inbound: workingBinding,
+            isDisabled: false,
             tags: Array.from(new Set([...(workingExisting.tags ?? []), LAZEIKA_HOST_TAG])),
           }),
           "HOSTS",
@@ -696,6 +732,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
           const v = tplAny?.[k];
           if (v !== undefined && v !== null && v !== "") body[k] = v;
         }
+        await heartbeat();
         const raw = await requireOk(await remna.createHost(body), "HOSTS");
         const uuid = ((unwrap(raw) ?? raw) as HostShape)?.uuid ?? null;
         if (!uuid) throw new SetupError("Remnawave не вернул UUID рабочего host", "HOSTS");
@@ -703,34 +740,38 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         state.workingHostUuid = uuid;
       }
 
-      // Fake notification-hosts: ровно 3, .invalid, ВИДИМЫЕ в подписке (isDisabled=false),
-      // привязаны к notif-inbound'у (техническое требование Remnawave), трафик блокируется
-      // BLOCK-правилом по его тегу + неразрешимый DNS.
+      // Fake notification-hosts: ровно 3 СВОИХ (по сохранённым UUID), .invalid, ВИДИМЫЕ
+      // в подписке (isDisabled=false), привязаны к notif-inbound'у (техническое требование
+      // Remnawave), трафик блокируется BLOCK-правилом по его тегу + неразрешимый DNS.
+      // Чужие host'ы с тем же тегом не захватываем и не изменяем (§3 финала).
+      const ownedNotifUuids: string[] = [];
       for (let i = 0; i < 3; i++) {
-        const existing = hosts.filter(isNotificationHost)[i];
+        const wantedRemark = notificationMessages[i];
+        const storedUuid = state.notificationHostUuids[i];
+        const existing = storedUuid ? hosts.find((h) => h.uuid === storedUuid) : undefined;
         if (existing?.uuid) {
-          // Reconcile: обновляем binding/tags; remark — пользовательский, не трогаем.
-          hostSnapshots.push({
-            uuid: existing.uuid,
-            inbound: existing.inbound ?? null,
-            tags: [...(existing.tags ?? [])],
-          });
+          hostSnapshots.push(snapshotHost(existing));
+          await heartbeat();
           await requireOk(
             await remna.updateHost({
               uuid: existing.uuid,
               inbound: notifBinding,
-              // Fake-host обязан оставаться ВИДИМЫМ в подписке.
+              // Fake-host обязан оставаться ВИДИМЫМ в подписке и с числовым портом.
               isDisabled: false,
+              port: notifPort,
+              // Панель — источник истины для remark (в т.ч. null/undefined в Remnawave).
+              remark: wantedRemark,
               tags: Array.from(new Set([...(existing.tags ?? []), LAZEIKA_HOST_TAG, LAZEIKA_NOTIFICATION_HOST_TAG])),
             }),
             "HOSTS",
           );
-          state.notificationHostUuids = Array.from(new Set([...state.notificationHostUuids, existing.uuid]));
+          ownedNotifUuids.push(existing.uuid);
           continue;
         }
+        await heartbeat();
         const raw = await requireOk(
           await remna.createHost({
-            remark: notificationMessages[i],
+            remark: wantedRemark,
             address: `notification-${i + 1}.lazeika.invalid`,
             // Контракт Remnawave требует число; используем порт notification-inbound'а.
             port: notifPort,
@@ -743,8 +784,10 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         const uuid = ((unwrap(raw) ?? raw) as HostShape)?.uuid ?? null;
         if (!uuid) throw new SetupError("Remnawave не вернул UUID notification host", "HOSTS");
         created.push({ kind: "host", uuid });
-        state.notificationHostUuids = [...state.notificationHostUuids.filter((u) => u !== uuid), uuid];
+        ownedNotifUuids.push(uuid);
       }
+      // Полная перезапись списка (не append): ровно три принадлежащих UUID.
+      state.notificationHostUuids = ownedNotifUuids;
 
       // ── SSH / tc (§7.5): heartbeat после сетевого детекта и перед install ──
       const detectScript = [
@@ -866,14 +909,18 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       // Компенсирующий rollback (§7.6): только ресурсы, созданные текущим запуском.
       try {
         // Не трогаем чужие ресурсы, если lease уже перехвачен другим воркером.
+        // Lease проверяется перед КАЖДОЙ внешней мутацией rollback (§6 финала):
+        // потеря lease ⇒ немедленная остановка компенсаций (heartbeat бросает).
         await heartbeat();
         if (nodeChanged && state.previousNodeConfig) {
+          await heartbeat();
           await remna.updateNode({
             uuid: input.nodeUuid,
             ...nodeConfigProfilePatch(state.previousNodeConfig.activeConfigProfileUuid, state.previousNodeConfig.activeInbounds),
           }).catch(() => {});
         }
         for (const r of [...created].reverse()) {
+          await heartbeat();
           if (r.kind === "host") await remna.deleteHost(r.uuid).catch(() => {});
           else if (r.kind === "profile") await remna.deleteConfigProfile(r.uuid).catch(() => {});
           else {
@@ -888,31 +935,33 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
           }
         }
         // Изменённые существующие объекты возвращаем к снапшоту (до удаления созданного).
-        if (state.profileMode === "IN_PLACE" && state.profileUuid) {
-          // Хирургия: убираем ТОЛЬКО наши inbound/rules из текущего конфига,
-          // чужие изменения не перезаписываем устаревшим снапшотом (§6 ТЗ-финал).
+        if (state.profileUuid) {
+          // Хирургия IN_PLACE: чужие inbound/rules из ТЕКУЩЕГО конфига сохраняем,
+          // свой срез (managed+notification inbound'ы и их правила) откатываем к
+          // снапшоту, снятому до мутаций этого запуска (§6 ТЗ-финал).
           const freshProfiles = await fetchProfiles().catch(() => [] as ProfileShape[]);
           const prof = freshProfiles.find((pl) => pl.uuid === state.profileUuid);
           if (prof?.config) {
             const cfg: XrayConfig = JSON.parse(JSON.stringify(prof.config));
             const ownTags = [state.managedInboundTag, state.notifInboundTag].filter((t): t is string => Boolean(t));
-            cfg.inbounds = (cfg.inbounds ?? []).filter((ib) => !ownTags.includes(String(ib.tag)));
+            const isOwnInbound = (ib: { tag?: unknown }) => ownTags.includes(String(ib.tag));
+            const isOwnRule = (r: Record<string, unknown>) =>
+              Array.isArray(r.inboundTag) && (r.inboundTag as string[]).some((t) => ownTags.includes(t));
+            const snapInbounds = (profileConfigSnapshot?.inbounds ?? []).filter(isOwnInbound);
+            const snapRules = ((profileConfigSnapshot?.routing?.rules ?? []) as Array<Record<string, unknown>>).filter(isOwnRule);
+            cfg.inbounds = [...(cfg.inbounds ?? []).filter((ib) => !isOwnInbound(ib)), ...snapInbounds];
             cfg.routing = cfg.routing ?? {};
-            cfg.routing.rules = (cfg.routing.rules ?? []).filter(
-              (r) => !(Array.isArray(r.inboundTag) && (r.inboundTag as string[]).some((t) => ownTags.includes(t))),
-            );
+            cfg.routing.rules = [...snapRules, ...((cfg.routing.rules ?? []) as Array<Record<string, unknown>>).filter((r) => !isOwnRule(r))];
+            await heartbeat();
             await remna.updateConfigProfile({ uuid: state.profileUuid!, config: cfg }).catch(() => {});
           }
-        } else if (profileSnapshot) {
-          await remna.updateConfigProfile({
-            uuid: profileSnapshot.uuid,
-            ...(profileSnapshot.name !== undefined ? { name: profileSnapshot.name } : {}),
-            ...(profileSnapshot.config !== undefined ? { config: profileSnapshot.config } : {}),
-          }).catch(() => {});
         }
+        await heartbeat();
         for (const h of hostSnapshots) {
-          await remna.updateHost({ uuid: h.uuid, inbound: h.inbound, tags: h.tags }).catch(() => {});
+          await heartbeat();
+          await remna.updateHost(hostRestoreBody(h)).catch(() => {});
         }
+        await heartbeat();
         if (squadSnapshot) {
           await remna.updateInternalSquad({ uuid: squadSnapshot.uuid, inbounds: squadSnapshot.inbounds }).catch(() => {});
         }
@@ -940,8 +989,10 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
               "systemctl daemon-reload",
               TC_SCRIPT_PATH,
             ].join("\n");
+            await heartbeat();
             await ssh(sshCreds ?? { host: nodeAddress ?? "", user: input.ssh.user, port: input.ssh.port, password: input.ssh.password }, restoreScript).catch(() => {});
           } else {
+            await heartbeat();
             const cleanupLines = [
               `systemctl disable --now ${TC_UNIT_NAME} 2>/dev/null || true`,
               `rm -f /etc/systemd/system/${TC_UNIT_NAME} ${TC_SCRIPT_PATH}`,
@@ -1006,6 +1057,21 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     const profile = profiles.find((p) => p.uuid === state.profileUuid);
     add("profile", !!profile);
     add("inbound", !!profile?.inbounds?.some((ib) => ib.uuid === state.managedInboundUuid));
+    // Порт managed-inbound обязан быть уникален в активном конфиге: общий порт с
+    // чужим inbound означал бы, что tc-лимит задевает чужой трафик (§5 финала).
+    const managedPortUsers = ((profile?.config?.inbounds ?? []) as Array<{ tag?: string; port?: number | string }>)
+      .filter((ib) => Number(ib.port) === state.managedInboundPort);
+    add(
+      "managed_port_unique",
+      managedPortUsers.length === 1 && managedPortUsers[0]?.tag === state.managedInboundTag,
+      managedPortUsers.length === 1 && managedPortUsers[0]?.tag === state.managedInboundTag
+        ? undefined
+        : `порт ${state.managedInboundPort ?? "?"} используется inbound'ами: ${managedPortUsers.map((ib) => ib.tag ?? "?").join(", ") || "нет"}`,
+    );
+    const notifInboundPort = Number(
+      (profile?.inbounds ?? []).find((ib) => ib.uuid === state.notifInboundUuid)?.port
+      ?? (profile?.config?.inbounds ?? []).find((ib) => ib.tag === state.notifInboundTag)?.port,
+    );
     // Routing: содержательная сверка (§8 ревью) — telegram/lazeika.xyz → DIRECT,
     // catch-all нашего тега → BLOCK-тег профиля.
     type RuleShape = { inboundTag?: unknown; domain?: unknown; network?: unknown; outboundTag?: unknown };
@@ -1049,12 +1115,15 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       // Допустимый набор ровно из двух наших inbound'ов: managed + notification.
       const expectedSet = [state.managedInboundUuid, state.notifInboundUuid].filter((u): u is string => Boolean(u)).sort();
       const actualSet = [...new Set(ids)].sort();
-      const sameSet = expectedSet.length === actualSet.length
+      const noDuplicates = ids.length === new Set(ids).size;
+      const sameSet = noDuplicates && expectedSet.length === actualSet.length
         && expectedSet.every((u, i) => actualSet[i] === u);
       add(
         "squad_inbounds_only_managed",
         sameSet,
-        sameSet ? undefined : `фактические inbound'ы: ${ids.join(",") || "нет"}`,
+        !sameSet
+          ? `${!noDuplicates ? `дубли inbound; ` : ""}фактические inbound'ы: ${ids.join(",") || "нет"}`
+          : undefined,
       );
     } catch (e) { add("squad", false, e instanceof Error ? e.message : String(e)); }
     if (state.squadUuid) {
@@ -1071,6 +1140,8 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       const hosts = await fetchHosts();
       const workingHost = hosts.find((h) => h.uuid && h.uuid === state.workingHostUuid);
       add("working_host", !!workingHost);
+      // Рабочий host обязан быть включён и с корректным адресом/портом.
+      add("working_host_enabled", !!workingHost && workingHost.isDisabled !== true);
       // Binding рабочего host должен указывать на managed профиль/inbound.
       add(
         "working_host_binding",
@@ -1078,16 +1149,31 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         && workingHost?.inbound?.configProfileInboundUuid === state.managedInboundUuid,
       );
       const notifications = hosts.filter(isNotificationHost);
-      const notifOk = notifications.filter((h) =>
+      // Ровно три ПРИНАДЛЕЖАЩИХ конфигурации (по сохранённым UUID), не «все по тегу».
+      const ownedNotifs = state.notificationHostUuids.length === 3
+        ? notifications.filter((h) => state.notificationHostUuids.includes(h.uuid ?? ""))
+        : notifications;
+      const notifOk = ownedNotifs.filter((h) =>
         String(h.address ?? "").endsWith(".invalid")
         && h.isDisabled !== true // видимые в подписке
+        && typeof h.port === "number"
         && h.inbound?.configProfileUuid === state.profileUuid
         && h.inbound?.configProfileInboundUuid === state.notifInboundUuid
         && h.tags?.includes(LAZEIKA_NOTIFICATION_HOST_TAG));
       add(
         "notification_hosts",
-        notifications.length >= NOTIFICATION_REMARKS.length && notifOk.length >= NOTIFICATION_REMARKS.length,
-        `${notifications.length}/${notifOk.length} корректных (.invalid+visible+notif-binding+tags)`,
+        ownedNotifs.length === NOTIFICATION_REMARKS.length && notifOk.length === NOTIFICATION_REMARKS.length,
+        `${ownedNotifs.length}/${notifOk.length} корректных (ровно 3 своих: .invalid+visible+port+binding+tags)`,
+      );
+      // Порт каждого fake-host обязан совпадать с портом notification-inbound'а (§4 финала).
+      add(
+        "notification_host_port",
+        Number.isInteger(notifInboundPort) && notifInboundPort > 0
+          && ownedNotifs.length === NOTIFICATION_REMARKS.length
+          && ownedNotifs.every((h) => h.port === notifInboundPort),
+        Number.isInteger(notifInboundPort) && notifInboundPort > 0
+          ? `порты host'ов: ${ownedNotifs.map((h) => h.port ?? "?").join(",")}; порт inbound: ${notifInboundPort}`
+          : "порт notification-inbound нечисловой или отсутствует",
       );
     } catch (e) { add("working_host", false, e instanceof Error ? e.message : String(e)); }
 

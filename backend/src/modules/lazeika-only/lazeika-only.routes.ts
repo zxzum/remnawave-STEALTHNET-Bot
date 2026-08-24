@@ -22,11 +22,12 @@ const sshSchema = z.object({
   port: z.number().int().min(1).max(65535),
   password: z.string().min(1).max(200),
 });
-const setupSchema = z.object({
+/** Экспортировано для route-level тестов валидации входных параметров. */
+export const lazeikaSetupSchema = z.object({
   nodeUuid: z.string().uuid(),
   squadUuid: z.string().uuid().nullable().optional(),
   speedMbit: z.number().int().min(1).max(1000).optional(),
-  profileMode: z.enum(["IN_PLACE", "CLONE"]).default("IN_PLACE"),
+  // Режим профиля НЕ принимается: финальный публичный режим — только IN_PLACE (§2 финала).
   ssh: sshSchema,
 });
 const verifySchema = z.object({ ssh: sshSchema });
@@ -91,7 +92,7 @@ lazeikaOnlyRouter.get("/status", async (_req: Request, res: Response) => {
 });
 
 lazeikaOnlyRouter.post("/setup", async (req: Request, res: Response) => {
-  const parsed = setupSchema.safeParse(req.body);
+  const parsed = lazeikaSetupSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: "Invalid input", errors: parsed.error.flatten() });
   }
@@ -131,7 +132,7 @@ lazeikaOnlyRouter.post("/reconcile", async (req: Request, res: Response) => {
   if (!config.lazeikaOnlyNodeUuid) {
     return res.status(400).json({ ok: false, error: "Нода не выбрана в настройках" });
   }
-  const parsed = setupSchema.safeParse({
+  const parsed = lazeikaSetupSchema.safeParse({
     nodeUuid: config.lazeikaOnlyNodeUuid,
     squadUuid: null,
     speedMbit: config.lazeikaOnlySpeedMbit,

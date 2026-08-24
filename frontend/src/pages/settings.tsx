@@ -578,7 +578,6 @@ export function SettingsPage() {
         lazeikaOnlyNotificationMessage1: (data as AdminSettings).lazeikaOnlyNotificationMessage1 ?? "",
         lazeikaOnlyNotificationMessage2: (data as AdminSettings).lazeikaOnlyNotificationMessage2 ?? "",
         lazeikaOnlyNotificationMessage3: (data as AdminSettings).lazeikaOnlyNotificationMessage3 ?? "",
-        lazeikaOnlyNotificationProfileName: (data as AdminSettings).lazeikaOnlyNotificationProfileName ?? "",
       });
     }).finally(() => setLoading(false));
     api.getAutoRenewStats(token).then(setAutoRenewStats).catch(() => {});
@@ -697,7 +696,6 @@ export function SettingsPage() {
           nodeUuid: settings.lazeikaOnlyNodeUuid,
           squadUuid: settings.lazeikaOnlySquadUuid || null,
           speedMbit: settings.lazeikaOnlySpeedMbit ?? 5,
-          profileMode: (settings.lazeikaOnlyProfileMode as "IN_PLACE" | "CLONE") ?? "IN_PLACE",
           ssh,
         });
         if (!res.ok) throw new Error(res.error ?? "Не удалось настроить инфраструктуру");
@@ -1063,7 +1061,6 @@ export function SettingsPage() {
         lazeikaOnlyNotificationMessage1: settings.lazeikaOnlyNotificationMessage1?.trim() || null,
         lazeikaOnlyNotificationMessage2: settings.lazeikaOnlyNotificationMessage2?.trim() || null,
         lazeikaOnlyNotificationMessage3: settings.lazeikaOnlyNotificationMessage3?.trim() || null,
-        lazeikaOnlyNotificationProfileName: settings.lazeikaOnlyNotificationProfileName?.trim() || null,
         customBuildEnabled: settings.customBuildEnabled ?? false,
         customBuildPricePerDay: settings.customBuildPricePerDay ?? 0,
         customBuildPricePerDevice: settings.customBuildPricePerDevice ?? 0,
@@ -5791,29 +5788,14 @@ export function SettingsPage() {
                       </div>
                     );
                   })}
-                  <div className="space-y-1">
-                    <Label htmlFor="lazeika-notif-profile-name">Название профиля уведомлений</Label>
-                    <Input
-                      id="lazeika-notif-profile-name"
-                      value={settings.lazeikaOnlyNotificationProfileName ?? ""}
-                      maxLength={120}
-                      onChange={(e) => setSettings((s) => s ? { ...s, lazeikaOnlyNotificationProfileName: e.target.value } : s)}
-                    />
-                    <p className="text-xs text-muted-foreground">{(settings.lazeikaOnlyNotificationProfileName ?? "").length}/120</p>
-                  </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <Label htmlFor="lazeika-profile-mode">Режим профиля</Label>
-                    <select
-                      id="lazeika-profile-mode"
-                      value={settings.lazeikaOnlyProfileMode ?? "IN_PLACE"}
-                      onChange={(e) => setSettings((st) => st ? { ...st, lazeikaOnlyProfileMode: e.target.value as "IN_PLACE" | "CLONE" } : st)}
-                      className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
-                    >
-                      <option value="IN_PLACE">IN_PLACE — расширить активный профиль (рекомендуется)</option>
-                      <option value="CLONE">CLONE — отдельная копия профиля</option>
-                    </select>
+                    <Input id="lazeika-profile-mode" value="IN_PLACE" readOnly disabled />
+                    <p className="text-xs text-muted-foreground">
+                      Активный профиль ноды расширяется managed+notification inbound&apos;ами; нода не переключается на копию.
+                    </p>
                   </div>
                   <div className="flex items-end">
                     {lazeikaStatus && !lazeikaStatus.settingsInSync && (

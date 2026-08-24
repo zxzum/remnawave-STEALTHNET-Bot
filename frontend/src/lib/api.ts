@@ -584,7 +584,6 @@ export const api = {
       nodeUuid: string;
       squadUuid?: string | null;
       speedMbit?: number;
-      profileMode?: "IN_PLACE" | "CLONE";
       ssh: { user: string; port: number; password: string };
     },
   ): Promise<{ ok: boolean; status?: string; error?: string }> {
@@ -3753,7 +3752,6 @@ export type UpdateSettingsPayload = {
   lazeikaOnlyNotificationMessage1?: string | null;
   lazeikaOnlyNotificationMessage2?: string | null;
   lazeikaOnlyNotificationMessage3?: string | null;
-  lazeikaOnlyNotificationProfileName?: string | null;
 }
 
 // ─── Lazeika-Only: режим продления (admin API) ───────────────────────────────
@@ -4073,13 +4071,11 @@ export interface RemnaUserUsageResponse {
 
 export interface AdminSettings {
   allowUserThemeChange?: boolean;
-  lazeikaOnlyProfileMode?: "IN_PLACE" | "CLONE";
   lazeikaOnlySettingsInSync?: boolean;
 
   lazeikaOnlyNotificationMessage1?: string | null;
   lazeikaOnlyNotificationMessage2?: string | null;
   lazeikaOnlyNotificationMessage3?: string | null;
-  lazeikaOnlyNotificationProfileName?: string | null;
   expiredGraceEnabled?: boolean;
   expiredGraceDays?: number;
   expiredGraceSquadUuid?: string | null;

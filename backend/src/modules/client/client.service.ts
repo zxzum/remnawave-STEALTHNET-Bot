@@ -184,6 +184,8 @@ const SYSTEM_CONFIG_KEYS = [
   // Lazeika-Only: режим продления после истечения подписки (legacy-алиасы expired_grace_*)
   "lazeika_only_enabled", "lazeika_only_days", "lazeika_only_speed_mbit",
   "lazeika_only_node_uuid", "lazeika_only_squad_uuid", "lazeika_only_profile_uuid",
+  "lazeika_only_notification_message_1", "lazeika_only_notification_message_2",
+  "lazeika_only_notification_message_3",
   "lazeika_only_message_template", "expired_grace_enabled", "expired_grace_days", "expired_grace_squad_uuid",
   // Продажа опций: доп. трафик, доп. устройства, доп. серверы (сквады)
   "sell_options_enabled", "sell_options_traffic_enabled", "sell_options_traffic_products",
@@ -980,7 +982,6 @@ async function loadSystemConfigFromDb() {
       (map.lazeika_only_notification_message_2 ?? "").trim() || "⏰ Ваша подписка закончилась!",
       (map.lazeika_only_notification_message_3 ?? "").trim() || "✅ Доступ сохранён в режиме продления!",
     ],
-    lazeikaOnlyNotificationProfileName: (map.lazeika_only_notification_profile_name ?? "").trim() || "Lazeika-Only — уведомления",
     botAutoDeleteUnknownMessages: map.bot_auto_delete_unknown_messages === "true" || map.bot_auto_delete_unknown_messages === "1",
     botInfoBlock: (map.bot_info_block ?? "").trim() || null,
   };

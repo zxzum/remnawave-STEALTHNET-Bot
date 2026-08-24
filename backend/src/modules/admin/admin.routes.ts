@@ -4036,7 +4036,6 @@ const updateSettingsSchema = z.object({
   lazeikaOnlyNotificationMessage1: z.string().min(1).max(200).optional(),
   lazeikaOnlyNotificationMessage2: z.string().min(1).max(200).optional(),
   lazeikaOnlyNotificationMessage3: z.string().min(1).max(200).optional(),
-  lazeikaOnlyNotificationProfileName: z.string().min(1).max(120).optional(),
   lazeikaOnlyMessageTemplate: z.string().min(1).max(1000).refine(
     (value) => validateMessageTemplate(value),
     { message: "Шаблон поддерживает только placeholder {count}" },
@@ -5096,7 +5095,6 @@ adminRouter.patch("/settings", async (req, res) => {
     ["lazeikaOnlyNotificationMessage1", "lazeika_only_notification_message_1", null],
     ["lazeikaOnlyNotificationMessage2", "lazeika_only_notification_message_2", null],
     ["lazeikaOnlyNotificationMessage3", "lazeika_only_notification_message_3", null],
-    ["lazeikaOnlyNotificationProfileName", "lazeika_only_notification_profile_name", null],
   ];
   for (const [key, dbKey, legacyDbKey] of lazeikaKeys) {
     const v = updates[key];
