@@ -253,6 +253,13 @@ function fencedDeps(store: ReturnType<typeof createFencedStore>) {
         "✅ Доступ сохранён в режиме продления!",
       ],
     }),
+    // Запись системных ключей в тестах — в память, не в реальный prisma.
+    persistSystemKeys: async (entries: Array<[string, string]>) => {
+      (store as { writtenKeys?: Array<[string, string]> }).writtenKeys = [
+        ...((store as { writtenKeys?: Array<[string, string]> }).writtenKeys ?? []),
+        ...entries,
+      ];
+    },
   };
 }
 
@@ -1277,4 +1284,101 @@ test("rollback fully restores a profile without DIRECT/routing leftovers", async
   await assert.rejects(() => service.setup(SETUP_INPUT), /tc-фильтры/);
   const cfg = env.state.profiles[0].config as Record<string, unknown>;
   assert.deepEqual(cfg, originalConfig, "ни DIRECT, ни routing-ключа, ни managed/notification inbound после rollback не осталось");
+});
+
+test("resetState clears state and derived settings keys in one atomic operation", async () => {
+  const store = createFencedStore();
+  store.setRaw(JSON.stringify(resourceStateSchema.parse({
+    status: "READY",
+    nodeUuid: NODE_UUID,
+    profileUuid: BASE_PROFILE_UUID,
+    squadUuid: MANUAL_SQUAD_UUID,
+  })));
+  const service = buildService(createFakeRemna(), createSshFake(), store);
+  await service.resetState();
+  assert.equal(store.state.status, "UNCONFIGURED");
+  assert.equal(store.state.nodeUuid, null);
+  const keys = ((store as unknown as { writtenKeys?: Array<[string, string]> }).writtenKeys ?? []).map(([k]) => k).sort();
+  assert.deepEqual(keys, [
+    "expired_grace_squad_uuid",
+    "lazeika_only_node_uuid",
+    "lazeika_only_profile_uuid",
+    "lazeika_only_squad_uuid",
+  ]);
+});
+
+test("resetState race: derived keys are NOT cleared when CAS loses to a concurrent setup", async () => {
+  const store = createFencedStore();
+  // Параллельный setup успел захватить APPLYING после нашего чтения.
+  const staleRaw = JSON.stringify(resourceStateSchema.parse({ status: "READY", nodeUuid: NODE_UUID }));
+  store.setRaw(JSON.stringify(resourceStateSchema.parse({ status: "APPLYING", lockToken: "winner", lockedAt: new Date().toISOString() })));
+  const service = createLazeikaService({
+    remna: createFakeRemna().remna,
+    ssh: createSshFake().ssh,
+    ...fencedDeps(store),
+    readStateRaw: async () => staleRaw,
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    persistSetupInputs: async () => {},
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
+  });
+  await assert.rejects(() => service.resetState(), /LOCK_LOST/);
+  const keys = (store as unknown as { writtenKeys?: Array<[string, string]> }).writtenKeys ?? [];
+  assert.equal(keys.length, 0, "производные ключи НЕ очищены при проигранной гонке");
+  assert.equal(store.state.lockToken, "winner", "APPLYING победителя не затёрт");
+});
+
+test("disable writes enabled flags only after successful CAS in the same operation", async () => {
+  const store = createFencedStore();
+  const service = buildService(createFakeRemna(), createSshFake(), store);
+  await service.disable();
+  const keys = (store as unknown as { writtenKeys?: Array<[string, string]> }).writtenKeys ?? [];
+  assert.deepEqual(keys, [["lazeika_only_enabled", "false"], ["expired_grace_enabled", "false"]]);
+});
+
+test("disable during active APPLYING does not touch settings flags", async () => {
+  const store = createFencedStore();
+  store.setRaw(JSON.stringify({
+    ...resourceStateSchema.parse({}),
+    status: "APPLYING",
+    lockToken: "busy-worker",
+    lockedAt: new Date().toISOString(),
+  }));
+  const service = buildService(createFakeRemna(), createSshFake(), store);
+  await assert.rejects(() => service.disable(), /выполняется/);
+  const keys = (store as unknown as { writtenKeys?: Array<[string, string]> }).writtenKeys ?? [];
+  assert.equal(keys.length, 0, "флаги enabled не изменены при отказе");
+});
+
+test("managed and notification rules are placed before a foreign global catch-all", async () => {
+  const env = createFakeRemna();
+  // Чужой глобальный catch-all уже есть в профиле.
+  env.state.profiles[0].config = {
+    inbounds: [baseInbound],
+    outbounds: [{ protocol: "freedom", tag: "DIRECT" }, { protocol: "blackhole", tag: "BLOCK" }],
+    routing: { rules: [{ network: "tcp,udp", outboundTag: "BLOCK" }] },
+  };
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  const service = buildService(env, sshf, store);
+  await service.setup(SETUP_INPUT);
+  const cfg = profileConfig(env.state, store.state.profileUuid!);
+  const rules = cfg.routing.rules as Array<{ inboundTag?: string[]; network?: string; outboundTag?: string }>;
+  const foreignIdx = rules.findIndex((r) => !r.inboundTag && r.network === "tcp,udp");
+  assert.ok(foreignIdx > 0, "foreign catch-all присутствует");
+  const managedIdxs = rules
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => r.inboundTag?.includes(store.state.managedInboundTag ?? ""))
+    .map(({ i }) => i);
+  const notifIdx = rules.findIndex((r) => r.inboundTag?.includes(store.state.notifInboundTag ?? ""));
+  assert.equal(managedIdxs.length, 3);
+  assert.ok(managedIdxs.every((i) => i < foreignIdx), "managed rules раньше foreign catch-all");
+  assert.ok(notifIdx >= 0 && notifIdx < foreignIdx, "notification BLOCK rule раньше foreign catch-all");
+  assert.equal(rules[notifIdx]?.outboundTag, "BLOCK", "notification-трафик гарантированно в block");
+
+  // Админ переставил catch-all первым — verify обязан это поймать.
+  const reordered = [rules[foreignIdx]!, ...rules.filter((_, i) => i !== foreignIdx)];
+  (env.state.profiles[0].config as { routing: { rules: unknown[] } }).routing.rules = reordered;
+  const verifyRes = await buildService(env, sshf, store).verify(SETUP_SSH);
+  const orderCheck = verifyRes.checks.find((c) => c.name === "notif_routing_order");
+  assert.equal(orderCheck?.ok, false, "verify ловит notif rule после глобального catch-all");
 });

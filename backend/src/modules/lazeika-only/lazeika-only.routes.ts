@@ -162,21 +162,11 @@ lazeikaOnlyRouter.post("/reconcile", async (req: Request, res: Response) => {
 });
 
 lazeikaOnlyRouter.post("/disable", async (_req: Request, res: Response) => {
-  // Порядок (§9 ревью): сначала проверка lock + CAS state, и только потом запись
-  // enabled=false. Иначе при активном setup endpoint вернул бы 409, но настройка
-  // уже была бы изменена (частично применённое состояние).
+  // Порядок (§10 ревью): сервис атомарно (одна транзакция) проверяет lock, пишет CAS state
+  // и флаги enabled=false (новый + legacy-алиас). При активном setup — 409 без частичных
+  // изменений. Cache инвалидируем только после успешной операции.
   try {
     const result = await service().disable();
-    // Выключаем флаг через те же ключи, что читает cron (новый + legacy-алиас),
-    // и сразу инвалидируем system-config cache — иначе до 30 секунд cron может
-    // продолжать выдавать новые grace-доступы (§5 ревью).
-    for (const key of ["lazeika_only_enabled", "expired_grace_enabled"]) {
-      await prisma.systemSetting.upsert({
-        where: { key },
-        create: { key, value: "false" },
-        update: { value: "false" },
-      });
-    }
     invalidateSystemConfigCache();
     return res.json({ ok: true, ...result });
   } catch (error) {
@@ -204,14 +194,7 @@ lazeikaOnlyRouter.post("/reset-state", async (_req: Request, res: Response) => {
     const applying = message.includes("выполняется") || message.includes("LOCK_LOST");
     return res.status(applying ? 409 : 502).json({ ok: false, error: message });
   }
-  // Только после успешного CAS state — очистка производных ключей настроек.
-  for (const key of ["lazeika_only_profile_uuid", "lazeika_only_squad_uuid", "lazeika_only_node_uuid", "expired_grace_squad_uuid"]) {
-    await prisma.systemSetting.upsert({
-      where: { key },
-      create: { key, value: "" },
-      update: { value: "" },
-    });
-  }
+  // Производные ключи очищены в той же транзакции, что и CAS state (service.resetState).
   invalidateSystemConfigCache();
   return res.json({ ok: true });
 });

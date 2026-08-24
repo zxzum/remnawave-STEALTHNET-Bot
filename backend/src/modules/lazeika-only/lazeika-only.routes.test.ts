@@ -63,13 +63,16 @@ test("reconcile schema strips nodeUuid/squadUuid/speedMbit from body (SSH only)"
   assert.equal(lazeikaVerifySchema.safeParse({}).success, false, "без ssh — ошибка");
 });
 
-test("disable route checks lock (service.disable) BEFORE writing enabled=false", async () => {
+test("disable route delegates lock check + flags write to the atomic service op", async () => {
   // Порядок критичен: при активном setup endpoint обязан вернуть 409, не изменив настройки.
+  // Запись флагов выполняет сервис внутри той же транзакции, что и CAS state (§10 ревью).
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("./lazeika-only.routes.ts", import.meta.url), "utf8");
   const disableRoute = src.match(/post\("\/disable"[\s\S]*?\n\}\);/)?.[0] ?? "";
   assert.ok(disableRoute, "route /disable найден");
-  const casFirst = disableRoute.indexOf("service().disable()");
-  const flagsWrite = disableRoute.indexOf("lazeika_only_enabled");
-  assert.ok(casFirst >= 0 && flagsWrite > casFirst, "CAS state выполняется до записи enabled=false");
+  assert.ok(disableRoute.includes("service().disable()"), "route делегирует сервису");
+  assert.ok(!disableRoute.includes("lazeika_only_enabled"), "route НЕ пишет флаги до/вне сервисной транзакции");
+  const resetRoute = src.match(/post\("\/reset-state"[\s\S]*?\n\}\);/)?.[0] ?? "";
+  assert.ok(resetRoute, "route /reset-state найден");
+  assert.ok(!resetRoute.includes("lazeika_only_profile_uuid"), "route НЕ очищает ключи вне сервисной транзакции");
 });

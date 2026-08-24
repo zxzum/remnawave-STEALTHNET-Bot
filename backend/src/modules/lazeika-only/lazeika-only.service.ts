@@ -203,6 +203,11 @@ export type LazeikaServiceDependencies = {
   persistSetupInputs?: (input: { nodeUuid: string; squadUuid: string | null; speedMbit: number }, tx?: unknown) => Promise<void>;
   /** Транзакционная обёртка финального READY+persist (инъекция для тестов). */
   runAtomic?: (fn: (tx: LazeikaStateTx | undefined) => Promise<void>) => Promise<void>;
+  /**
+   * Запись системных ключей настроек (enabled-флаги, очистка производных UUID при reset).
+   * Вызывается ВНУТРИ runAtomic — в той же транзакции, что и CAS resource_state (§10 ревью).
+   */
+  persistSystemKeys?: (entries: Array<[string, string]>, tx?: unknown) => Promise<void>;
 };
 
 export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
@@ -290,7 +295,39 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         invalidateSystemConfigCache();
       }
     },
+    // Запись системных ключей в той же транзакции, что и CAS resource_state (§10 ревью).
+    persistSystemKeys = async (entries: Array<[string, string]>, tx?: { systemSetting: { upsert(args: unknown): Promise<unknown> } }) => {
+      const mod = await import("../../db.js");
+      const client = tx ?? mod.prisma;
+      for (const [key, value] of entries) {
+        await client.systemSetting.upsert({
+          where: { key },
+          create: { key, value },
+          update: { value },
+        } as Parameters<typeof mod.prisma.systemSetting.upsert>[0]);
+      }
+    },
   } = dependencies;
+
+  /** CAS resource_state внутри транзакции (если tx поддерживает updateMany), иначе через dep. */
+  type CasTxClient = { systemSetting: { updateMany(args: { where: { key: string; value: string }; data: { value: string } }): Promise<{ count: number }> } };
+  const casStateInTx = async (tx: LazeikaStateTx | undefined, expectedRaw: string, nextState: LazeikaResourceState): Promise<void> => {
+    const client = tx as CasTxClient | undefined;
+    if (client && typeof client.systemSetting.updateMany === "function") {
+      const res = await client.systemSetting.updateMany({
+        where: { key: LAZEIKA_STATE_KEY, value: expectedRaw },
+        data: { value: serializeResourceState(nextState) },
+      });
+      if (res.count === 0) {
+        throw new SetupError("LOCK_LOST: состояние изменено параллельной операцией, повторите", "LOCK");
+      }
+      return;
+    }
+    const res = await casWrite(expectedRaw, nextState);
+    if (!res.ok) {
+      throw new SetupError("LOCK_LOST: состояние изменено параллельной операцией, повторите", "LOCK");
+    }
+  };
 
   async function fetchNodes(): Promise<RemnaNodeShape[]> {
     const list = unwrap(await requireOk(await remna.getNodes(), "VALIDATION"));
@@ -619,11 +656,13 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
           .find((t) => t.toLowerCase() === "block" || t.toLowerCase() === "blackhole");
         if (!blockTag) throw new SetupError("В профиле нет outbound BLOCK/blackhole для notification-правила", "PROFILE");
         cfgNotif.routing ??= { rules: [] };
+        // Порядок критичен (§10 ревью): notification BLOCK-правило ставим ПЕРЕД чужими
+        // правилами — глобальный catch-all не должен перехватить notification-трафик раньше.
         cfgNotif.routing.rules = [
+          { inboundTag: [notifTag], network: "tcp,udp", outboundTag: blockTag },
           ...(cfgNotif.routing.rules ?? []).filter(
             (r) => !(Array.isArray(r.inboundTag) && (r.inboundTag as string[]).includes(notifTag)),
           ),
-          { inboundTag: [notifTag], network: "tcp,udp", outboundTag: blockTag },
         ];
         await heartbeat();
         await requireOk(
@@ -1144,6 +1183,26 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         && r.outboundTag === blockTag,
     );
     add("notif_routing_block", notifBlockOk, notifBlockOk ? undefined : `нет ${blockTag ?? "BLOCK"}-правила для notification inbound`);
+    // Порядок (§10 ревью): notif BLOCK-правило обязано стоять РАНЬШЕ любого чужого
+    // глобального catch-all (network tcp,udp без domain), иначе трафик перехвачен.
+    const allRules = (profile?.config?.routing?.rules ?? []) as Array<Record<string, unknown>>;
+    const ownTagsV = [state.managedInboundTag ?? "", state.notifInboundTag ?? ""];
+    const notifRuleIdx = allRules.findIndex(
+      (r) => Array.isArray(r.inboundTag) && (r.inboundTag as string[]).includes(state.notifInboundTag ?? ""),
+    );
+    const foreignCatchAllIdx = allRules.findIndex((r) => {
+      const tags = Array.isArray(r.inboundTag) ? (r.inboundTag as string[]) : [];
+      if (tags.some((t) => ownTagsV.includes(t))) return false;
+      const net = String(r.network ?? "").replace(/\s+/g, "");
+      return !r.domain && !r.ip && (net === "tcp,udp" || net === "");
+    });
+    add(
+      "notif_routing_order",
+      notifRuleIdx >= 0 && (foreignCatchAllIdx === -1 || notifRuleIdx < foreignCatchAllIdx),
+      notifRuleIdx >= 0 && (foreignCatchAllIdx === -1 || notifRuleIdx < foreignCatchAllIdx)
+        ? undefined
+        : `notif rule idx=${notifRuleIdx}, foreign catch-all idx=${foreignCatchAllIdx} — переставьте через reconcile`,
+    );
     const noStale = managedRules.length === 3;
     add(
       "routing_rules",
@@ -1356,17 +1415,19 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
 
   /** Выключение режима: новые grace-доступы прекращаются, инфраструктура не удаляется. */
   async function disable(): Promise<{ status: string }> {
-    // CAS-запись от прочитанного raw: не затираем APPLYING-лок работающего setup (§8 ревью).
+    // Одна логическая операция (§10 ревью): проверка lock → CAS state → запись
+    // enabled=false (новый + legacy) — всё в одной транзакции. Другой setup не может
+    // стартовать между CAS и записью settings; при гонке — LOCK_LOST без частичных изменений.
     const raw = await readStateRaw();
     const state = parseResourceState(raw);
     if (state.status === "APPLYING" && state.lockToken) {
       throw new SetupError("Настройка Lazeika-Only выполняется — отключение режима временно недоступно", "LOCK");
     }
     state.lastVerifiedAt = new Date().toISOString();
-    const res = await casWrite(raw, state);
-    if (!res.ok) {
-      throw new SetupError("LOCK_LOST: состояние изменено параллельной операцией, повторите", "LOCK");
-    }
+    await runAtomic(async (tx) => {
+      await casStateInTx(tx, raw, state);
+      await persistSystemKeys([["lazeika_only_enabled", "false"], ["expired_grace_enabled", "false"]], tx as never);
+    });
     return { status: state.status };
   }
 
@@ -1382,10 +1443,16 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       throw new SetupError("Настройка Lazeika-Only выполняется — reset-state временно недоступен", "LOCK");
     }
     const fresh = resourceStateSchema.parse({ ssh: { interface: null, rateMbit: state.ssh.rateMbit } });
-    const res = await casWrite(raw, fresh);
-    if (!res.ok) {
-      throw new SetupError("LOCK_LOST: состояние изменено параллельной операцией, повторите", "LOCK");
-    }
+    // CAS и очистка производных ключей — в ОДНОЙ транзакции (§10 ревью).
+    await runAtomic(async (tx) => {
+      await casStateInTx(tx, raw, fresh);
+      await persistSystemKeys([
+        ["lazeika_only_profile_uuid", ""],
+        ["lazeika_only_squad_uuid", ""],
+        ["lazeika_only_node_uuid", ""],
+        ["expired_grace_squad_uuid", ""],
+      ], tx as never);
+    });
   }
 
   return { setup, verify, disable, resetState, parseDetectOutput };
