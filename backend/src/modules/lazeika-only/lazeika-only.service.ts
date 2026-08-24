@@ -612,12 +612,18 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
           cfgNotif.inbounds.push(buildManagedInbound(cloneSource as never, notifTag, notifPort));
         }
         // BLOCK-правило notif-тега приводим к эталону при каждом прогоне (идемпотентно).
+        // Фактический blockTag профиля (BLOCK ИЛИ blackhole) — тот же, что использует
+        // managed routing; жёсткий literal недопустим (§9 ревью).
+        const blockTag = (newConfig.outbounds ?? [])
+          .map((o) => String(o.tag ?? ""))
+          .find((t) => t.toLowerCase() === "block" || t.toLowerCase() === "blackhole");
+        if (!blockTag) throw new SetupError("В профиле нет outbound BLOCK/blackhole для notification-правила", "PROFILE");
         cfgNotif.routing ??= { rules: [] };
         cfgNotif.routing.rules = [
           ...(cfgNotif.routing.rules ?? []).filter(
             (r) => !(Array.isArray(r.inboundTag) && (r.inboundTag as string[]).includes(notifTag)),
           ),
-          { inboundTag: [notifTag], network: "tcp,udp", outboundTag: "BLOCK" },
+          { inboundTag: [notifTag], network: "tcp,udp", outboundTag: blockTag },
         ];
         await heartbeat();
         await requireOk(
@@ -986,6 +992,17 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
             cfg.inbounds = [...(cfg.inbounds ?? []).filter((ib) => !isOwnInbound(ib)), ...snapInbounds];
             cfg.routing = cfg.routing ?? {};
             cfg.routing.rules = [...snapRules, ...((cfg.routing.rules ?? []) as Array<Record<string, unknown>>).filter((r) => !isOwnRule(r))];
+            // Полное восстановление managed-полей профиля (§9 ревью): DIRECT, добавленный
+            // applyLazeikaToConfig, убираем, если его не было в снапшоте; routing-ключ,
+            // созданный нами на пустом профиле, удаляем, если правил не осталось.
+            // Чужие добавления (новые outbounds/rules после снапшота) сохраняются.
+            const snapHadDirect = (profileConfigSnapshot?.outbounds ?? []).some((o) => o.tag === "DIRECT");
+            if (!snapHadDirect) {
+              cfg.outbounds = (cfg.outbounds ?? []).filter((o) => o.tag !== "DIRECT");
+            }
+            if (profileConfigSnapshot && profileConfigSnapshot.routing === undefined && (cfg.routing.rules ?? []).length === 0) {
+              delete cfg.routing;
+            }
             await heartbeat();
             await remna.updateConfigProfile({ uuid: state.profileUuid!, config: cfg }).catch(() => {});
           }
@@ -1120,13 +1137,13 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       Array.isArray(r.domain) && (r.domain as string[]).includes("domain:lazeika.xyz") && r.outboundTag === "DIRECT");
     const hasBlockCatchAll = Boolean(blockTag) && managedRules.some((r) =>
       r.outboundTag === blockTag && r.network === "tcp,udp");
-    const notifBlockOk = ((profile?.config?.routing?.rules ?? []) as Array<Record<string, unknown>>).some(
+    const notifBlockOk = Boolean(blockTag) && ((profile?.config?.routing?.rules ?? []) as Array<Record<string, unknown>>).some(
       (r) => Array.isArray(r.inboundTag)
         && (r.inboundTag as string[]).includes(state.notifInboundTag ?? "")
         && r.network === "tcp,udp"
-        && r.outboundTag === "BLOCK",
+        && r.outboundTag === blockTag,
     );
-    add("notif_routing_block", notifBlockOk, notifBlockOk ? undefined : "нет BLOCK-правила для notification inbound");
+    add("notif_routing_block", notifBlockOk, notifBlockOk ? undefined : `нет ${blockTag ?? "BLOCK"}-правила для notification inbound`);
     const noStale = managedRules.length === 3;
     add(
       "routing_rules",
@@ -1353,7 +1370,25 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     return { status: state.status };
   }
 
-  return { setup, verify, disable, parseDetectOutput };
+  /**
+   * Атомарный сброс resource_state: CAS от прочитанного raw. Если setup успел
+   * захватить lock между чтением и записью — LOCK_LOST, APPLYING не затирается (§9 ревью).
+   * Инфраструктуру в Remnawave не трогает.
+   */
+  async function resetState(): Promise<void> {
+    const raw = await readStateRaw();
+    const state = parseResourceState(raw);
+    if (state.status === "APPLYING" && state.lockToken) {
+      throw new SetupError("Настройка Lazeika-Only выполняется — reset-state временно недоступен", "LOCK");
+    }
+    const fresh = resourceStateSchema.parse({ ssh: { interface: null, rateMbit: state.ssh.rateMbit } });
+    const res = await casWrite(raw, fresh);
+    if (!res.ok) {
+      throw new SetupError("LOCK_LOST: состояние изменено параллельной операцией, повторите", "LOCK");
+    }
+  }
+
+  return { setup, verify, disable, resetState, parseDetectOutput };
 }
 
 export type LazeikaService = ReturnType<typeof createLazeikaService>;

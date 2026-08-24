@@ -162,18 +162,21 @@ lazeikaOnlyRouter.post("/reconcile", async (req: Request, res: Response) => {
 });
 
 lazeikaOnlyRouter.post("/disable", async (_req: Request, res: Response) => {
-  // Выключаем флаг через те же ключи, что читает cron (новый + legacy-алиас),
-  // и сразу инвалидируем system-config cache — иначе до 30 секунд cron может
-  // продолжать выдавать новые grace-доступы (§5 ревью).
-  for (const key of ["lazeika_only_enabled", "expired_grace_enabled"]) {
-    await prisma.systemSetting.upsert({
-      where: { key },
-      create: { key, value: "false" },
-      update: { value: "false" },
-    });
-  }
+  // Порядок (§9 ревью): сначала проверка lock + CAS state, и только потом запись
+  // enabled=false. Иначе при активном setup endpoint вернул бы 409, но настройка
+  // уже была бы изменена (частично применённое состояние).
   try {
     const result = await service().disable();
+    // Выключаем флаг через те же ключи, что читает cron (новый + legacy-алиас),
+    // и сразу инвалидируем system-config cache — иначе до 30 секунд cron может
+    // продолжать выдавать новые grace-доступы (§5 ревью).
+    for (const key of ["lazeika_only_enabled", "expired_grace_enabled"]) {
+      await prisma.systemSetting.upsert({
+        where: { key },
+        create: { key, value: "false" },
+        update: { value: "false" },
+      });
+    }
     invalidateSystemConfigCache();
     return res.json({ ok: true, ...result });
   } catch (error) {
@@ -190,40 +193,18 @@ lazeikaOnlyRouter.post("/disable", async (_req: Request, res: Response) => {
  * под живым grace). Инфраструктуру в Remna не трогает.
  */
 lazeikaOnlyRouter.post("/reset-state", async (_req: Request, res: Response) => {
-  const [config, lazeika] = await Promise.all([getSystemConfig(), getLazeikaConfig()]);
+  const lazeika = await getLazeikaConfig();
   if (lazeika.enabled) {
     return res.status(409).json({ message: "Сначала выключите режим Lazeika-Only" });
   }
-  // Активный APPLYING-лок работающего setup не затираем (§8 ревью).
-  const current = await loadResourceState();
-  if (current.status === "APPLYING" && current.lockToken) {
-    return res.status(409).json({ message: "Настройка выполняется — дождитесь её завершения перед reset-state" });
+  try {
+    await service().resetState();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const applying = message.includes("выполняется") || message.includes("LOCK_LOST");
+    return res.status(applying ? 409 : 502).json({ ok: false, error: message });
   }
-  const value = JSON.stringify({
-    version: 1,
-    status: "UNCONFIGURED",
-    nodeUuid: null,
-    profileUuid: null,
-    baseProfileUuid: null,
-    managedInboundUuid: null,
-    managedInboundTag: null,
-    managedInboundPort: null,
-    squadUuid: null,
-    squadSource: "AUTO",
-    workingHostUuid: null,
-    notificationHostUuids: [],
-    previousNodeConfig: null,
-    createdResourceUuids: [],
-    ssh: { interface: null, rateMbit: lazeika.speedMbit },
-    lastError: null,
-    lastVerifiedAt: null,
-    updatedAt: new Date().toISOString(),
-  });
-  await prisma.systemSetting.upsert({
-    where: { key: "lazeika_only_resource_state" },
-    create: { key: "lazeika_only_resource_state", value },
-    update: { value },
-  });
+  // Только после успешного CAS state — очистка производных ключей настроек.
   for (const key of ["lazeika_only_profile_uuid", "lazeika_only_squad_uuid", "lazeika_only_node_uuid", "expired_grace_squad_uuid"]) {
     await prisma.systemSetting.upsert({
       where: { key },

@@ -1211,3 +1211,70 @@ test("verify flags a managed tc filter without police action (strict policeIndex
   assert.equal(badTc?.ok, false, "фильтр без police action обязан быть ошибкой");
   assert.match(badTc?.detail ?? "", /police/i);
 });
+
+test("resetState refuses to clobber an active APPLYING lock (CAS)", async () => {
+  const store = createFencedStore();
+  store.setRaw(JSON.stringify({
+    ...resourceStateSchema.parse({}),
+    status: "APPLYING",
+    lockToken: "busy-worker",
+    lockedAt: new Date().toISOString(),
+  }));
+  const service = buildService(createFakeRemna(), createSshFake(), store);
+  await assert.rejects(() => service.resetState(), /выполняется/);
+  assert.equal(store.state.status, "APPLYING");
+  assert.equal(store.state.lockToken, "busy-worker");
+});
+
+test("resetState returns LOCK_LOST when setup grabs the lock between read and CAS write", async () => {
+  const store = createFencedStore();
+  const staleRaw = store.rawValue || JSON.stringify(resourceStateSchema.parse({}));
+  const service = createLazeikaService({
+    remna: createFakeRemna().remna,
+    ssh: createSshFake().ssh,
+    ...fencedDeps(store),
+    // Протухший raw: параллельный setup успел захватить lock после нашего чтения.
+    readStateRaw: async () => staleRaw,
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    persistSetupInputs: async () => {},
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
+  });
+  await assert.rejects(() => service.resetState(), /LOCK_LOST/);
+});
+
+test("blackhole outbound tag is used for both managed and notification catch-all rules", async () => {
+  const env = createFakeRemna();
+  // Профиль с outbound «blackhole» (без BLOCK и без DIRECT).
+  env.state.profiles[0].config = {
+    inbounds: [baseInbound],
+    outbounds: [{ protocol: "blackhole", tag: "blackhole" }],
+  };
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  const service = buildService(env, sshf, store);
+  await service.setup(SETUP_INPUT);
+  const cfg = profileConfig(env.state, store.state.profileUuid!);
+  const rules = cfg.routing.rules as Array<{ inboundTag?: string[]; outboundTag?: string; network?: string; domain?: unknown }>;
+  const managedCatchAll = rules.find((r) => r.inboundTag?.includes(store.state.managedInboundTag ?? "") && r.network === "tcp,udp" && !r.domain);
+  const notifCatchAll = rules.find((r) => r.inboundTag?.includes(store.state.notifInboundTag ?? ""));
+  assert.equal(managedCatchAll?.outboundTag, "blackhole", "managed catch-all → фактический blackhole");
+  assert.equal(notifCatchAll?.outboundTag, "blackhole", "notification catch-all → фактический blackhole, не literal BLOCK");
+  // DIRECT добавлен для allowlist-правил.
+  const outbounds = (env.state.profiles[0].config as { outbounds: Array<{ tag?: string }> }).outbounds;
+  assert.ok(outbounds.some((o) => o.tag === "DIRECT"));
+});
+
+test("rollback fully restores a profile without DIRECT/routing leftovers", async () => {
+  const env = createFakeRemna();
+  const originalConfig = {
+    inbounds: [baseInbound],
+    outbounds: [{ protocol: "blackhole", tag: "blackhole" }],
+  };
+  env.state.profiles[0].config = JSON.parse(JSON.stringify(originalConfig));
+  const sshf = createSshFake({ failInstall: true });
+  const store = createFencedStore();
+  const service = buildService(env, sshf, store);
+  await assert.rejects(() => service.setup(SETUP_INPUT), /tc-фильтры/);
+  const cfg = env.state.profiles[0].config as Record<string, unknown>;
+  assert.deepEqual(cfg, originalConfig, "ни DIRECT, ни routing-ключа, ни managed/notification inbound после rollback не осталось");
+});

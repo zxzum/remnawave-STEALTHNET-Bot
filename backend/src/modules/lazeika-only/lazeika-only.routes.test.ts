@@ -62,3 +62,14 @@ test("reconcile schema strips nodeUuid/squadUuid/speedMbit from body (SSH only)"
   }
   assert.equal(lazeikaVerifySchema.safeParse({}).success, false, "без ssh — ошибка");
 });
+
+test("disable route checks lock (service.disable) BEFORE writing enabled=false", async () => {
+  // Порядок критичен: при активном setup endpoint обязан вернуть 409, не изменив настройки.
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("./lazeika-only.routes.ts", import.meta.url), "utf8");
+  const disableRoute = src.match(/post\("\/disable"[\s\S]*?\n\}\);/)?.[0] ?? "";
+  assert.ok(disableRoute, "route /disable найден");
+  const casFirst = disableRoute.indexOf("service().disable()");
+  const flagsWrite = disableRoute.indexOf("lazeika_only_enabled");
+  assert.ok(casFirst >= 0 && flagsWrite > casFirst, "CAS state выполняется до записи enabled=false");
+});
