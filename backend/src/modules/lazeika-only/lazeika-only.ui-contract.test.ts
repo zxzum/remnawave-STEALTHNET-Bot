@@ -39,6 +39,13 @@ test("settings bind notification defaults returned as an array", () => {
   );
 });
 
+test("cached status without nodes keeps the settings page renderable", () => {
+  assert.ok(
+    settingsSrc.includes("setLazeikaNodes(Array.isArray(status.nodes) ? status.nodes : [])"),
+    "устаревший status без nodes не записывает undefined в список нод",
+  );
+});
+
 test("confirm posts to backend, shows loading and surfaces errors to the user", () => {
   assert.ok(settingsSrc.includes("api.lazeikaOnlySetup(token,"), "POST /setup вызывается");
   assert.ok(settingsSrc.includes("api.lazeikaOnlyVerify(token, ssh)"), "POST /verify вызывается");

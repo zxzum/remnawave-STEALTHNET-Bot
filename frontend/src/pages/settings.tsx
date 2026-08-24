@@ -660,7 +660,7 @@ export function SettingsPage() {
     // Ноды приходят тем же endpoint, что и статус: менеджеру не нужна отдельная секция remna-nodes.
     api.getLazeikaOnlyStatus(token).then((status) => {
       setLazeikaStatus(status);
-      setLazeikaNodes(status.nodes);
+      setLazeikaNodes(Array.isArray(status.nodes) ? status.nodes : []);
     }).catch(() => {
       setLazeikaNodes([]);
       setLazeikaStatus(null);
