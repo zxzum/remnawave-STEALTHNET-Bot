@@ -55,6 +55,7 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
   const { disconnectDevice } = useApp();
   const limit = sub.trafficLimitGB ?? 0;
   const expiredTrial = isExpiredTrial(sub);
+  const lazeikaOnly = sub.lazeikaOnly?.active === true;
 
   return (
     <motion.section
@@ -70,9 +71,9 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
             Подписка · <span className="font-semibold text-fog-300">{sub.name}</span>
           </p>
         </div>
-        <span className={cn("flex items-center gap-2 text-sm font-bold", expiredTrial ? "text-fog-500" : "text-mint-400")}>
-          <span className={cn("status-dot", expiredTrial && "bg-fog-500 shadow-none")} />
-          {expiredTrial ? "Завершена" : "Активна"}
+        <span className={cn("flex items-center gap-2 text-sm font-bold", expiredTrial ? "text-fog-500" : lazeikaOnly ? "text-amber-300" : "text-mint-400")}>
+          <span className={cn("status-dot", expiredTrial && "bg-fog-500 shadow-none", lazeikaOnly && "bg-amber-300")} />
+          {expiredTrial ? "Завершена" : lazeikaOnly ? "Особый доступ" : "Активна"}
         </span>
       </div>
 
@@ -105,7 +106,7 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
         </span>
       </div>
 
-      <div className="mt-6">
+      {!lazeikaOnly && <div className="mt-6">
         <div className="mb-2 flex items-baseline justify-between text-sm">
           <span className="font-medium text-fog-300">Трафик за месяц</span>
           <span className="font-bold">
@@ -127,7 +128,7 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
             <TrafficBar used={sub.whitelistUsedGB} limit={sub.whitelistGB} />
           </div>
         )}
-      </div>
+      </div>}
 
       <div className="my-6 h-px bg-white/8" />
 

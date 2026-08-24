@@ -267,7 +267,10 @@ export async function upsertSubscriptionByRemnaUuid(
         ...(data.currentPricePerDay !== undefined ? { currentPricePerDay: data.currentPricePerDay } : {}),
         ...(data.autoRenewEnabled !== undefined ? { autoRenewEnabled: data.autoRenewEnabled } : {}),
         ...(data.expireAt !== undefined ? { expireAt: data.expireAt } : {}),
-        ...(data.graceUntil !== undefined ? { graceUntil: data.graceUntil } : {}),
+        ...(data.graceUntil !== undefined ? {
+          graceUntil: data.graceUntil,
+          ...(data.graceUntil === null ? { lazeikaOnlyNotificationSentFor: null } : {}),
+        } : {}),
       },
     });
     return { id: byUuid.id, subscriptionIndex: byUuid.subscriptionIndex, created: false };

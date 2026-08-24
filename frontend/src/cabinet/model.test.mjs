@@ -189,6 +189,25 @@ test("maps a wrapped Remnawave subscription", () => {
   assert.equal(subscription.extraDevicesMonthlyPrice, 190);
 });
 
+test("maps Lazeika-Only without losing the special-access signal", () => {
+  const subscription = mapSubscription({
+    type: "root",
+    id: "s-grace",
+    subscriptionIndex: 0,
+    tariffDisplayName: "Стандарт",
+    tariffId: "t1",
+    trafficQuota: { usedBytes: String(2 * 1024 ** 3), limitBytes: String(50 * 1024 ** 3) },
+    lazeikaOnly: { active: true, daysLeft: 5, message: "⚠️ Подписка закончилась" },
+    subscription: { response: {
+      status: "ACTIVE",
+      expireAt: "2026-08-30T00:00:00.000Z",
+      trafficLimitBytes: 0,
+      userTraffic: { usedTrafficBytes: 99 * 1024 ** 3 },
+    } },
+  }, new Date("2026-08-25T00:00:00.000Z"));
+  assert.deepEqual(subscription.lazeikaOnly, { active: true, daysLeft: 5, message: "⚠️ Подписка закончилась" });
+});
+
 test("maps standalone trial conversion policy for tariff selection", () => {
   const subscription = mapSubscription({
     type: "root",

@@ -308,19 +308,17 @@ test("setup from clean state creates exactly one profile, squad, working host an
   );
   const lazeikaHosts = env.state.hosts.filter((h) => (h.tags as string[])?.includes("LAZEIKA_ONLY"));
   assert.equal(lazeikaHosts.length, 4);
-  // Fake-hosts ВИДИМЫ в подписке (isDisabled=false), адреса нерабочие.
+  // Все четыре host'а ВИДИМЫ в подписке и ведут на один рабочий inbound.
   assert.equal(lazeikaHosts.filter((h) => !h.isDisabled).length, 4);
-  const notifications = (lazeikaHosts as Array<{ tags?: string[]; remark?: string; address?: string; inbound?: Record<string, string>; isDisabled?: boolean }>).filter((h) => h.tags?.includes("LAZEIKA_ONLY_NOTIFICATION"));
+  const notifications = (lazeikaHosts as Array<{ tags?: string[]; remark?: string; address?: string; port?: number; inbound?: Record<string, string>; isDisabled?: boolean }>).filter((h) => h.tags?.includes("LAZEIKA_ONLY_NOTIFICATION"));
   assert.equal(notifications.length, 3);
-  assert.deepEqual(notifications.map((h) => h.remark).sort(), [
-    "🔐 Доступ к lazeika.xyz и Telegram",
-    "⏰ Ваша подписка закончилась!",
-    "✅ Доступ сохранён в режиме продления!",
-  ].sort());
-  assert.ok(notifications.every((h) => String(h.address).endsWith(".invalid")));
-  assert.ok(notifications.every((h) => (h.inbound as Record<string, string>)?.configProfileInboundUuid === store.state.notifInboundUuid));
+  assert.ok(notifications.every((h) => h.remark === "🇪🇺 Telegram + lazeika.xyz"));
+  assert.ok(notifications.every((h) => h.address === "vpn.example.com"));
+  assert.ok(notifications.every((h) => h.inbound?.configProfileInboundUuid === store.state.managedInboundUuid));
+  assert.ok(notifications.every((h) => h.port === store.state.managedInboundPort));
   // рабочий host наследует технические параметры базового и указывает на managed inbound
   const working = lazeikaHosts.find((h) => !h.isDisabled)!;
+  assert.equal(working.remark, "🇪🇺 Telegram + lazeika.xyz");
   assert.equal(working.address, "vpn.example.com");
   assert.equal(working.sni, "vpn.example.com");
   assert.equal((working.inbound as Record<string, string>).configProfileUuid, store.state.profileUuid);
@@ -781,7 +779,7 @@ test("remoteInstall has top-level set -euo and verifies systemd enabled", async 
   assert.match(install!, /systemctl is-enabled --quiet lazeika-only-tc\.service \|\| \{ echo UNIT_NOT_ENABLED; exit 1; \}/);
 });
 
-test("reconcile keeps fake notification hosts visible and rebinds them to notif inbound", async () => {
+test("reconcile keeps additional hosts visible and rebinds them to managed inbound", async () => {
   const env = createFakeRemna();
   const sshf = createSshFake();
   const store = createFencedStore();
@@ -800,7 +798,7 @@ test("reconcile keeps fake notification hosts visible and rebinds them to notif 
   await service.setup(SETUP_INPUT);
   assert.equal(notif.isDisabled, false, "fake-host остаётся видимым в подписке");
   const rebound = notif.inbound as Record<string, string> | null;
-  assert.equal(rebound?.configProfileInboundUuid, store.state.notifInboundUuid, "binding восстановлен к notif inbound");
+  assert.equal(rebound?.configProfileInboundUuid, store.state.managedInboundUuid, "binding восстановлен к managed inbound");
 });
 
 test("IN_PLACE drift: admin switched node active profile -> setup rejects without mutations", async () => {
@@ -895,7 +893,7 @@ function profileConfig(env: ReturnType<typeof createFakeRemna>["state"], uuid: s
   };
 }
 
-test("second setup keeps notification port stable; all three host ports match it", async () => {
+test("second setup keeps all additional host ports on managed inbound", async () => {
   const env = createFakeRemna();
   const sshf = createSshFake();
   const store = createFencedStore();
@@ -907,13 +905,13 @@ test("second setup keeps notification port stable; all three host ports match it
   );
   assert.equal(new Set(notifPortFirst).size, 1, "все три fake-host имеют один порт");
   const cfgFirst = profileConfig(env.state, store.state.profileUuid!);
-  const inboundPortFirst = cfgFirst.inbounds.find((ib) => ib.tag === store.state.notifInboundTag)?.port;
-  assert.equal(notifPortFirst[0], inboundPortFirst, "порт host'ов == порт notification-inbound");
+  const inboundPortFirst = cfgFirst.inbounds.find((ib) => ib.tag === store.state.managedInboundTag)?.port;
+  assert.equal(notifPortFirst[0], inboundPortFirst, "порт host'ов == порт managed-inbound");
 
   await service.setup(SETUP_INPUT);
   const cfgSecond = profileConfig(env.state, store.state.profileUuid!);
-  const inboundPortSecond = cfgSecond.inbounds.find((ib) => ib.tag === store.state.notifInboundTag)?.port;
-  assert.equal(inboundPortSecond, inboundPortFirst, "повторный setup НЕ сменил порт notification-inbound");
+  const inboundPortSecond = cfgSecond.inbounds.find((ib) => ib.tag === store.state.managedInboundTag)?.port;
+  assert.equal(inboundPortSecond, inboundPortFirst, "повторный setup НЕ сменил порт managed-inbound");
   const notifPortSecond = store.state.notificationHostUuids.map(
     (u) => (env.state.hosts.find((h) => h.uuid === u) as { port?: number })?.port,
   );
@@ -947,7 +945,7 @@ test("foreign notification-tagged host is never captured or modified", async () 
   assert.ok(!store.state.notificationHostUuids.includes(foreign.uuid), "чужой UUID не захвачен");
 });
 
-test("null remark of owned notification host is overwritten from settings on reconcile", async () => {
+test("null remark of owned additional host is overwritten with the shared label", async () => {
   const env = createFakeRemna();
   const sshf = createSshFake();
   const store = createFencedStore();
@@ -957,7 +955,7 @@ test("null remark of owned notification host is overwritten from settings on rec
   const second = env.state.hosts.find((h) => h.uuid === store.state.notificationHostUuids[1]) as Record<string, unknown>;
   second.remark = null;
   await service.setup(SETUP_INPUT);
-  assert.equal(second.remark, "⏰ Ваша подписка закончилась!", "null remark приведён к текущему сообщению");
+  assert.equal(second.remark, "🇪🇺 Telegram + lazeika.xyz", "null remark приведён к общей рабочей метке");
 });
 
 test("CLONE state is supported and remains selected", async () => {
@@ -1105,7 +1103,7 @@ test("existing notification inbound with a non-numeric port is repaired, hosts n
   const hostPorts = store.state.notificationHostUuids.map(
     (u) => (env.state.hosts.find((h) => h.uuid === u) as { port?: number })?.port,
   );
-  assert.ok(hostPorts.every((p) => p === repaired!.port), "host ports == фактический порт inbound");
+  assert.ok(hostPorts.every((p) => p === store.state.managedInboundPort), "host ports == фактический порт managed inbound");
 });
 
 test("working host of node A is not re-bound after reset-state and setup on node B", async () => {

@@ -2538,7 +2538,7 @@ async function applySingleRemnaPatchInner(
       data: {
         ...(data.expireAt ? { expireAt: new Date(data.expireAt) } : {}),
         // Явное восстановление срока снимает Lazeika-Only grace.
-        ...(data.expireAt ? { graceUntil: null } : {}),
+        ...(data.expireAt ? { graceUntil: null, lazeikaOnlyNotificationSentFor: null } : {}),
       },
     });
   }

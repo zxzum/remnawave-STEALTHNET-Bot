@@ -71,6 +71,9 @@ function mockDeletion(row: Record<string, unknown>) {
   };
   db.$transaction = async (args: unknown) => {
     transactions.push(args);
+    if (typeof args === "function") {
+      return args({ subscription: { ...subscription, findFirst: async () => null }, client });
+    }
     return [];
   };
   return {
@@ -111,6 +114,7 @@ function mockExpiredSubscriptions(rows: Array<Record<string, unknown>>) {
       remnawaveUuid: row.remnawaveUuid,
       expireAt: row.expireAt ?? null,
       graceUntil: row.graceUntil ?? null,
+      lazeikaOnlyNotificationSentFor: row.lazeikaOnlyNotificationSentFor ?? null,
       deletionRequestedAt: null,
       extraDevices: row.extraDevices ?? 0,
       tariffId: null,
@@ -144,6 +148,7 @@ type ProcessExpired = (
   now: Date,
   lazeikaGateLoader?: (config: ExpiredConfig) => Promise<{ enabled: boolean; days: number; squadUuid: string | null; ready: boolean }>,
   lock?: <T>(clientId: string, fn: () => Promise<T>) => Promise<T>,
+  notify?: (telegramId: string, subscriptionId: string, daysLeft: number) => Promise<boolean>,
 ) => Promise<{ checked: number; grace: number; disabled: number; failed: number }>;
 
 const noLock = async <T>(_clientId: string, fn: () => Promise<T>): Promise<T> => fn();
@@ -390,6 +395,45 @@ test("expired access activates grace for exactly one owning Remnawave UUID", asy
   }
 });
 
+test("grace sends a separate Telegram notice once and marks the delivery", async () => {
+  const now = new Date("2026-07-18T12:00:00.000Z");
+  const expireAt = new Date("2026-07-16T12:00:00.000Z");
+  const graceUntil = new Date("2026-07-23T12:00:00.000Z");
+  const mock = mockExpiredSubscriptions([{
+    id: "sub-grace-notice",
+    remnawaveUuid: "remna-grace-notice",
+    expireAt,
+    graceUntil: null,
+    lazeikaOnlyNotificationSentFor: null,
+    extraDevices: 0,
+    ownerId: "owner-grace-notice",
+    owner: { telegramId: "8848283400" },
+    tariff,
+  }]);
+  const notices: Array<{ telegramId: string; subscriptionId: string; daysLeft: number }> = [];
+  try {
+    await (service.processExpiredSingleSubscriptionAccess as ProcessExpired)(
+      10,
+      async () => ({ status: 200, data: {} }),
+      async () => ({ expiredGraceEnabled: true, expiredGraceDays: 7, expiredGraceSquadUuid: "grace-squad" }),
+      now,
+      undefined,
+      noLock,
+      async (telegramId, subscriptionId, daysLeft) => {
+        notices.push({ telegramId, subscriptionId, daysLeft });
+        return true;
+      },
+    );
+    assert.deepEqual(notices, [{ telegramId: "8848283400", subscriptionId: "sub-grace-notice", daysLeft: 5 }]);
+    assert.deepEqual(mock.updates[2], {
+      where: { id: "sub-grace-notice" },
+      data: { lazeikaOnlyNotificationSentFor: graceUntil },
+    });
+  } finally {
+    mock.restore();
+  }
+});
+
 test("elapsed grace disables one user without extending the original expiry", async () => {
   const now = new Date("2026-07-18T12:00:00.000Z");
   const expireAt = new Date("2026-07-08T12:00:00.000Z");
@@ -418,7 +462,10 @@ test("elapsed grace disables one user without extending the original expiry", as
     // §4.2: рабочий тарифный squad не оставляем.
     assert.deepEqual(calls[0]?.activeInternalSquads, []);
     assert.equal(mock.updates.length, 2);
-    assert.deepEqual(mock.updates[1], { where: { id: "sub-elapsed" }, data: { graceUntil: null } });
+    assert.deepEqual(mock.updates[1], {
+      where: { id: "sub-elapsed" },
+      data: { graceUntil: null, lazeikaOnlyNotificationSentFor: null },
+    });
   } finally {
     mock.restore();
   }
@@ -571,7 +618,10 @@ test("disabling the feature closes an already active grace on the next tick", as
     assert.equal(calls[0]?.status, "DISABLED");
     assert.deepEqual(calls[0]?.activeInternalSquads, []);
     assert.equal(mock.updates.length, 2);
-    assert.deepEqual(mock.updates[1], { where: { id: "sub-disable-grace" }, data: { graceUntil: null } });
+    assert.deepEqual(mock.updates[1], {
+      where: { id: "sub-disable-grace" },
+      data: { graceUntil: null, lazeikaOnlyNotificationSentFor: null },
+    });
   } finally {
     mock.restore();
   }
@@ -658,6 +708,8 @@ test("maintenance runs single-user expiry before deletion retries", async () => 
     expiry: { checked: 1, grace: 1, disabled: 0, failed: 0 },
     deletions: { deleted: 1, failed: 0 },
     extraOptions: { checked: 1, applied: 1, queued: 0, failed: 0 },
+    expiryNotifications: 0,
+    onboardingNotifications: 0,
   });
 });
 
@@ -671,7 +723,7 @@ test("maintenance source has no component-service lifecycle dependency", async (
     /processExpiredSubscriptionAccess|subscription-components\.service|synchronizeSubscriptionComponents|reconcileSubscriptionComponents/,
   );
   assert.doesNotMatch(lifecycle, /subscription-components\.service|remnawaveComponent|synchronizeSubscriptionComponents/);
-  assert.match(lifecycle, /prisma\.subscription\.delete/);
+  assert.match(lifecycle, /tx\.subscription\.delete/);
   assert.match(source, /deleteSingleSubscription/);
   assert.match(source, /processExpiredSingleSubscriptionAccess/);
   assert.match(lifecycle, /hwidDeviceLimit:\s*Math\.max\(1,\s*subscription\.tariff\.includedDevices\s*\+\s*subscription\.extraDevices\)/);

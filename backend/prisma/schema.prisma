@@ -1039,6 +1039,7 @@ model Subscription {
   syncRequiredAt           DateTime?                      @map("sync_required_at")
   lastReconciledAt         DateTime?                      @map("last_reconciled_at")
   graceUntil               DateTime?                      @map("grace_until")
+  lazeikaOnlyNotificationSentFor DateTime?                @map("lazeika_only_notification_sent_for")
   deletionRequestedAt      DateTime?                      @map("deletion_requested_at")
   deletionOperation        SubscriptionDeletionOperation? @map("deletion_operation")
   /// subscriptionIndex=0 — «главная» (бывш. root). 1..N — дополнительные.

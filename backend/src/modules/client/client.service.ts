@@ -978,9 +978,9 @@ async function loadSystemConfigFromDb() {
     lazeikaOnlySquadUuid: (map.lazeika_only_squad_uuid ?? map.expired_grace_squad_uuid ?? "").trim() || null,
     lazeikaOnlyMessageTemplate: (map.lazeika_only_message_template ?? "").trim() || DEFAULT_LAZEIKA_MESSAGE_TEMPLATE,
     lazeikaOnlyNotificationMessages: [
-      (map.lazeika_only_notification_message_1 ?? "").trim() || "🔐 Доступ к lazeika.xyz и Telegram",
-      (map.lazeika_only_notification_message_2 ?? "").trim() || "⏰ Ваша подписка закончилась!",
-      (map.lazeika_only_notification_message_3 ?? "").trim() || "✅ Доступ сохранён в режиме продления!",
+      (map.lazeika_only_notification_message_1 ?? "").trim() || "🇪🇺 Telegram + lazeika.xyz",
+      (map.lazeika_only_notification_message_2 ?? "").trim() || "🇪🇺 Telegram + lazeika.xyz",
+      (map.lazeika_only_notification_message_3 ?? "").trim() || "🇪🇺 Telegram + lazeika.xyz",
     ],
     botAutoDeleteUnknownMessages: map.bot_auto_delete_unknown_messages === "true" || map.bot_auto_delete_unknown_messages === "1",
     botInfoBlock: (map.bot_info_block ?? "").trim() || null,
@@ -991,11 +991,13 @@ export type CategoryEmojis = Record<string, string>;
 
 /** Шаблон сообщения Lazeika-Only по умолчанию (спецификация §5.3). Единственный placeholder — {count}. */
 export const DEFAULT_LAZEIKA_MESSAGE_TEMPLATE = [
-  "🔐 Доступ к lazeika.xyz и Telegram",
+  "⚠️ Подписка закончилась",
   "",
-  "⏰ Ваша подписка закончилась!",
-  "✅ Доступ сохранён ещё на {count} дней!",
-  "💳 Продлите подписку, чтобы пользоваться всеми сервисами!",
+  "🔐 Включён особый доступ ещё на {count} дней:",
+  "• Telegram",
+  "• lazeika.xyz",
+  "",
+  "💳 Продлите подписку, чтобы вернуть полный VPN-доступ.",
 ].join("\n");
 
 function firstNonEmptyFlag(...values: Array<string | undefined>): boolean {

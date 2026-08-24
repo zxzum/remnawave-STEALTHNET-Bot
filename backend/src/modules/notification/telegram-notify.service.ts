@@ -1088,6 +1088,37 @@ export async function notifySubscriptionExpiry(
   return delivered;
 }
 
+/** Одноразовое уведомление о переходе в Lazeika-Only grace. */
+export async function notifyLazeikaOnly(
+  telegramId: string,
+  subscriptionId: string,
+  daysLeft: number,
+): Promise<boolean> {
+  const renderedText = [
+    "⚠️ <b>Подписка закончилась</b>",
+    "",
+    `🔐 Включён особый доступ ещё на <b>${Math.max(1, Math.trunc(daysLeft))} дней</b>:`,
+    "• Telegram",
+    "• lazeika.xyz",
+    "",
+    "💳 Продлите подписку, чтобы вернуть полный VPN-доступ.",
+  ].join("\n");
+  const delivered = await sendTelegramToUserChecked(
+    telegramId,
+    renderedText,
+    undefined,
+    subscriptionExpiryMarkup("💳 Продлить подписку", `pay_tariff_ext:${subscriptionId}`),
+  );
+  console[delivered ? "info" : "warn"]("[lazeika-only] Telegram grace notification", {
+    delivered,
+    recipient: telegramId,
+    subscriptionId,
+    daysLeft,
+    sentAt: new Date().toISOString(),
+  });
+  return delivered;
+}
+
 /**
  * уведомление админам: покупка конвертировала существующую подписку
  * (режим «одна подписка из категории» — смена тарифа с pro-rata конвертацией остатка).

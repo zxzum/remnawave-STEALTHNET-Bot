@@ -66,6 +66,19 @@ test("истёкшая подписка и ограниченный общий �
   assert.doesNotMatch(text, /Белый интернет/);
 });
 
+test("Lazeika-Only скрывает трафик и показывает особый доступ", () => {
+  const text = buildMainMenuSummary({
+    subscription: {
+      ...active,
+      lazeikaOnly: { active: true, daysLeft: 5, message: "⚠️ Подписка закончилась" },
+    },
+    tariff: { id: "standard", name: "Стандартный", price: 299, currency: "RUB", durationDays: 30 },
+  });
+  assert.match(text, /🔐 Особый доступ: Telegram и lazeika\.xyz/);
+  assert.match(text, /⏰ Осталось: 5 дней/);
+  assert.doesNotMatch(text, /Белый интернет|Общий трафик|Включено:/);
+});
+
 test("primary выбирается раньше secondary", () => {
   assert.equal(selectPrimarySubscription([{ ...active, type: "secondary", id: "s1", subscriptionIndex: 1 }, active])?.id, "client-1");
 });

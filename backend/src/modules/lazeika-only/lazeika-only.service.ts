@@ -171,10 +171,11 @@ function hostRestoreBody(h: HostSnapshot): { uuid: string } & Record<string, unk
 }
 
 export const NOTIFICATION_REMARKS = [
-  "🔐 Доступ к lazeika.xyz и Telegram",
-  "⏰ Ваша подписка закончилась!",
-  "✅ Доступ сохранён ещё на {count} дней. Продлите подписку!",
+  "🇪🇺 Telegram + lazeika.xyz",
+  "🇪🇺 Telegram + lazeika.xyz",
+  "🇪🇺 Telegram + lazeika.xyz",
 ];
+export const LAZEIKA_HOST_REMARK = "🇪🇺 Telegram + lazeika.xyz";
 
 type CreatedResource = { kind: "profile" | "squad" | "host"; uuid: string };
 
@@ -409,8 +410,6 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     let notifTagForRun: string | null = null;
     let tcFilesExisted: boolean | null = null;
     const prevSsh = { ...state.ssh };
-
-    const { messages: notificationMessages } = await loadNotificationSettings();
 
     // Смена ноды запрещена при ЛЮБЫХ следах managed-инфраструктуры (READY/ERROR/APPLYING):
     // иначе snapshot/hosts старой ноды применятся к новой (§1 финального ревью).
@@ -742,7 +741,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         );
       }
 
-      // ── Hosts: 1 РАБОЧИЙ (managed inbound) + 3 FAKE notification (.invalid) ──
+      // ── Hosts: 4 одинаковых рабочих host'а на managed inbound ──
       await heartbeat();
       const hosts = await fetchHosts();
       // Технический шаблон — рабочий host того же (managed) профиля.
@@ -750,7 +749,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         (h) => h.inbound?.configProfileUuid === managedProfileUuid && h.address && !isNotificationHost(h) && !isLazeikaHost(h),
       ) ?? null;
       const workingBinding = { configProfileUuid: managedProfileUuid, configProfileInboundUuid: managedInboundUuid };
-      const notifBinding = { configProfileUuid: managedProfileUuid, configProfileInboundUuid: state.notifInboundUuid! };
+      let workingHost: HostShape | null = null;
 
       const workingExisting =
         hosts.find((h) => h.uuid && h.uuid === state.workingHostUuid)
@@ -773,14 +772,16 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
             inbound: workingBinding,
             isDisabled: false,
             port,
+            remark: LAZEIKA_HOST_REMARK,
             tags: Array.from(new Set([...(workingExisting.tags ?? []), LAZEIKA_HOST_TAG])),
           }),
           "HOSTS",
         );
         state.workingHostUuid = workingExisting.uuid;
+        workingHost = { ...workingExisting, inbound: workingBinding, isDisabled: false, port, remark: LAZEIKA_HOST_REMARK };
       } else {
         const body: Record<string, unknown> = {
-          remark: notificationMessages[0],
+          remark: LAZEIKA_HOST_REMARK,
           address: baseTemplate?.address ?? node.address,
           port,
           inbound: workingBinding,
@@ -801,15 +802,27 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         if (!uuid) throw new SetupError("Remnawave не вернул UUID рабочего host", "HOSTS");
         created.push({ kind: "host", uuid });
         state.workingHostUuid = uuid;
+        workingHost = { ...body, uuid } as HostShape;
       }
 
-      // Fake notification-hosts: ровно 3 СВОИХ (по сохранённым UUID), .invalid, ВИДИМЫЕ
-      // в подписке (isDisabled=false), привязаны к notif-inbound'у (техническое требование
-      // Remnawave), трафик блокируется BLOCK-правилом по его тегу + неразрешимый DNS.
+      if (!workingHost?.address) throw new SetupError("У рабочего host отсутствует address", "HOSTS");
+      const workingConnection = workingHost as Record<string, unknown>;
+      const sharedHostFields: Record<string, unknown> = {
+        address: workingHost.address,
+        port,
+        inbound: workingBinding,
+        isDisabled: false,
+        remark: LAZEIKA_HOST_REMARK,
+      };
+      for (const key of HOST_SNAPSHOT_EXTRA_KEYS) {
+        const value = workingConnection[key];
+        if (value !== undefined && value !== null && value !== "") sharedHostFields[key] = value;
+      }
+
+      // Три дополнительных host'а — такие же рабочие копии, а не fake/.invalid.
       // Чужие host'ы с тем же тегом не захватываем и не изменяем (§3 финала).
       const ownedNotifUuids: string[] = [];
       for (let i = 0; i < 3; i++) {
-        const wantedRemark = notificationMessages[i];
         const storedUuid = state.notificationHostUuids[i];
         const existing = storedUuid ? hosts.find((h) => h.uuid === storedUuid) : undefined;
         if (existing?.uuid) {
@@ -818,12 +831,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
           await requireOk(
             await remna.updateHost({
               uuid: existing.uuid,
-              inbound: notifBinding,
-              // Fake-host обязан оставаться ВИДИМЫМ в подписке и с числовым портом.
-              isDisabled: false,
-              port: notifPort,
-              // Панель — источник истины для remark (в т.ч. null/undefined в Remnawave).
-              remark: wantedRemark,
+              ...sharedHostFields,
               tags: Array.from(new Set([...(existing.tags ?? []), LAZEIKA_HOST_TAG, LAZEIKA_NOTIFICATION_HOST_TAG])),
             }),
             "HOSTS",
@@ -834,12 +842,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         await heartbeat();
         const raw = await requireOk(
           await remna.createHost({
-            remark: wantedRemark,
-            address: `notification-${i + 1}.lazeika.invalid`,
-            // Контракт Remnawave требует число; используем порт notification-inbound'а.
-            port: notifPort,
-            isDisabled: false,
-            inbound: notifBinding,
+            ...sharedHostFields,
             tags: [LAZEIKA_HOST_TAG, LAZEIKA_NOTIFICATION_HOST_TAG],
           }),
           "HOSTS",
@@ -1142,10 +1145,6 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         ? undefined
         : `порт ${state.managedInboundPort ?? "?"} используется inbound'ами: ${managedPortUsers.map((ib) => ib.tag ?? "?").join(", ") || "нет"}`,
     );
-    const notifInboundPort = Number(
-      (profile?.inbounds ?? []).find((ib) => ib.uuid === state.notifInboundUuid)?.port
-      ?? (profile?.config?.inbounds ?? []).find((ib) => ib.tag === state.notifInboundTag)?.port,
-    );
     // Routing: содержательная сверка (§8 ревью) — telegram/lazeika.xyz → DIRECT,
     // catch-all нашего тега → BLOCK-тег профиля.
     type RuleShape = { inboundTag?: unknown; domain?: unknown; network?: unknown; outboundTag?: unknown };
@@ -1266,27 +1265,29 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         add("notification_host_port", false, "state повреждён (см. notification_hosts)");
       } else {
       const ownedNotifs = notifications.filter((h) => ownedUuids.includes(h.uuid ?? ""));
+      const managedInboundPort = state.managedInboundPort ?? 0;
       const notifOk = ownedNotifs.filter((h) =>
-        String(h.address ?? "").endsWith(".invalid")
-        && h.isDisabled !== true // видимые в подписке
+        h.address === workingHost?.address
+        && h.remark === LAZEIKA_HOST_REMARK
+        && h.isDisabled !== true
         && typeof h.port === "number"
         && h.inbound?.configProfileUuid === state.profileUuid
-        && h.inbound?.configProfileInboundUuid === state.notifInboundUuid
+        && h.inbound?.configProfileInboundUuid === state.managedInboundUuid
         && h.tags?.includes(LAZEIKA_NOTIFICATION_HOST_TAG));
       add(
         "notification_hosts",
         ownedNotifs.length === NOTIFICATION_REMARKS.length && notifOk.length === NOTIFICATION_REMARKS.length,
-        `${ownedNotifs.length}/${notifOk.length} корректных (ровно 3 своих: .invalid+visible+port+binding+tags)`,
+        `${ownedNotifs.length}/${notifOk.length} корректных (ровно 3 своих: рабочий address+visible+port+binding+tags)`,
       );
-      // Порт каждого fake-host обязан совпадать с портом notification-inbound'а (§4 финала).
+      // Все дополнительные host'ы обязаны слушать тот же managed inbound/порт.
       add(
         "notification_host_port",
-        Number.isInteger(notifInboundPort) && notifInboundPort > 0
+        Number.isInteger(managedInboundPort) && managedInboundPort > 0
           && ownedNotifs.length === NOTIFICATION_REMARKS.length
-          && ownedNotifs.every((h) => h.port === notifInboundPort),
-        Number.isInteger(notifInboundPort) && notifInboundPort > 0
-          ? `порты host'ов: ${ownedNotifs.map((h) => h.port ?? "?").join(",")}; порт inbound: ${notifInboundPort}`
-          : "порт notification-inbound нечисловой или отсутствует",
+          && ownedNotifs.every((h) => h.port === managedInboundPort),
+        Number.isInteger(managedInboundPort) && managedInboundPort > 0
+          ? `порты host'ов: ${ownedNotifs.map((h) => h.port ?? "?").join(",")}; managed-порт: ${managedInboundPort}`
+          : "порт managed-inbound нечисловой или отсутствует",
       );
       }
     } catch (e) { add("working_host", false, e instanceof Error ? e.message : String(e)); }

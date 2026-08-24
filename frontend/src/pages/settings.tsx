@@ -571,9 +571,9 @@ export function SettingsPage() {
         lazeikaOnlyNodeUuid: (data as AdminSettings).lazeikaOnlyNodeUuid ?? null,
         lazeikaOnlySquadUuid: (data as AdminSettings).lazeikaOnlySquadUuid ?? null,
         lazeikaOnlyMessageTemplate: (data as AdminSettings).lazeikaOnlyMessageTemplate ?? "",
-        lazeikaOnlyNotificationMessage1: (data as AdminSettings).lazeikaOnlyNotificationMessage1 ?? lazeikaOnlyNotificationMessages?.[0] ?? "🔐 Доступ к lazeika.xyz и Telegram",
-        lazeikaOnlyNotificationMessage2: (data as AdminSettings).lazeikaOnlyNotificationMessage2 ?? lazeikaOnlyNotificationMessages?.[1] ?? "⏰ Ваша подписка закончилась!",
-        lazeikaOnlyNotificationMessage3: (data as AdminSettings).lazeikaOnlyNotificationMessage3 ?? lazeikaOnlyNotificationMessages?.[2] ?? "✅ Доступ сохранён в режиме продления!",
+        lazeikaOnlyNotificationMessage1: (data as AdminSettings).lazeikaOnlyNotificationMessage1 ?? lazeikaOnlyNotificationMessages?.[0] ?? "🇪🇺 Telegram + lazeika.xyz",
+        lazeikaOnlyNotificationMessage2: (data as AdminSettings).lazeikaOnlyNotificationMessage2 ?? lazeikaOnlyNotificationMessages?.[1] ?? "🇪🇺 Telegram + lazeika.xyz",
+        lazeikaOnlyNotificationMessage3: (data as AdminSettings).lazeikaOnlyNotificationMessage3 ?? lazeikaOnlyNotificationMessages?.[2] ?? "🇪🇺 Telegram + lazeika.xyz",
       });
     }).finally(() => setLoading(false));
     api.getAutoRenewStats(token).then(setAutoRenewStats).catch(() => {});
@@ -5712,7 +5712,7 @@ export function SettingsPage() {
                     const val = (settings[key] as string | null) ?? "";
                     return (
                       <div key={n} className="space-y-1">
-                        <Label htmlFor={`lazeika-msg-${n}`}>Сообщение fake-host №{n}</Label>
+                        <Label htmlFor={`lazeika-msg-${n}`}>Метка host №{n}</Label>
                         <Input
                           id={`lazeika-msg-${n}`}
                           value={val}

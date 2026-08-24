@@ -1092,6 +1092,7 @@ export async function extendSecondarySubscription(
       extraDevicesMonthlyPrice: effectiveExtrasMonthly,
       // §4.4.8: успешная оплата снимает Lazeika-Only grace.
       graceUntil: null,
+      lazeikaOnlyNotificationSentFor: null,
       ...(tariff.id && tariff.id !== sec.tariffId ? { tariffId: tariff.id } : {}),
       ...(effectiveConvert && newPriceForDb != null && newPriceForDb > 0 ? {
         customPrice: newPriceForDb,

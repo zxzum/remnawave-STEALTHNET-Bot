@@ -6,6 +6,7 @@ export type MainMenuSubscription = {
   tariffDisplayName: string;
   subscription: unknown;
   trafficQuota?: { usedBytes: string; limitBytes: string } | null;
+  lazeikaOnly?: { active: boolean; daysLeft: number; message: string } | null;
 };
 
 export type MainMenuTariff = {
@@ -63,7 +64,8 @@ export function buildMainMenuSummary(input: {
   const validExpiry = expireAt && !Number.isNaN(expireAt.getTime()) ? expireAt : null;
   const rawStatus = String(user?.status ?? user?.userStatus ?? "ACTIVE").toUpperCase();
   const expired = rawStatus === "EXPIRED" || (validExpiry != null && validExpiry <= (input.now ?? new Date()));
-  const status = expired ? "🔴 Истекла"
+  const grace = subscription.lazeikaOnly?.active === true;
+  const status = grace ? "🔐 Особый доступ" : expired ? "🔴 Истекла"
     : rawStatus === "LIMITED" ? "🟡 Ограничена"
     : rawStatus === "DISABLED" ? "🔴 Отключена"
     : "🟢 Активна";
@@ -77,19 +79,24 @@ export function buildMainMenuSummary(input: {
     }).format(validExpiry)}`);
   }
 
-  const quotaUsed = finite(subscription.trafficQuota?.usedBytes);
-  const quotaLimit = finite(subscription.trafficQuota?.limitBytes);
-  if (quotaLimit != null && quotaLimit > 0) {
-    lines.push(`☁️ Белый интернет: ${formatGb(quotaUsed ?? 0)} из ${formatGb(quotaLimit)}`);
-  }
+  if (grace) {
+    lines.push("🔐 Особый доступ: Telegram и lazeika.xyz");
+    lines.push(`⏰ Осталось: ${subscription.lazeikaOnly!.daysLeft} дней`);
+  } else {
+    const quotaUsed = finite(subscription.trafficQuota?.usedBytes);
+    const quotaLimit = finite(subscription.trafficQuota?.limitBytes);
+    if (quotaLimit != null && quotaLimit > 0) {
+      lines.push(`☁️ Белый интернет: ${formatGb(quotaUsed ?? 0)} из ${formatGb(quotaLimit)}`);
+    }
 
-  const traffic = record(user?.userTraffic);
-  const used = finite(traffic?.usedTrafficBytes ?? user?.trafficUsedBytes ?? user?.usedTrafficBytes ?? user?.traffic_used_bytes);
-  const limit = finite(user?.trafficLimitBytes ?? user?.traffic_limit_bytes);
-  if (used != null) {
-    lines.push(limit != null && limit > 0
-      ? `📊 Общий трафик: ${formatGb(used)} из ${formatGb(limit)}`
-      : `📊 Общий трафик: ${formatGb(used)} · безлимит`);
+    const traffic = record(user?.userTraffic);
+    const used = finite(traffic?.usedTrafficBytes ?? user?.trafficUsedBytes ?? user?.usedTrafficBytes ?? user?.traffic_used_bytes);
+    const limit = finite(user?.trafficLimitBytes ?? user?.traffic_limit_bytes);
+    if (used != null) {
+      lines.push(limit != null && limit > 0
+        ? `📊 Общий трафик: ${formatGb(used)} из ${formatGb(limit)}`
+        : `📊 Общий трафик: ${formatGb(used)} · безлимит`);
+    }
   }
 
   lines.push("");
@@ -98,7 +105,10 @@ export function buildMainMenuSummary(input: {
     ? ` · ${formatPrice(tariff.price, tariff.currency)}${tariff.durationDays === 30 ? "/мес." : ` / ${tariff.durationDays} дн.`}`
     : "";
   lines.push(`📦 Ваш тариф: ${tariffName}${tariffPrice}`);
-  if (quotaLimit != null && quotaLimit > 0) lines.push(`🌐 Включено: ${formatGb(quotaLimit)} белого интернета`);
+  if (!grace) {
+    const quotaLimit = finite(subscription.trafficQuota?.limitBytes);
+    if (quotaLimit != null && quotaLimit > 0) lines.push(`🌐 Включено: ${formatGb(quotaLimit)} белого интернета`);
+  }
   lines.push("", "Выберите действие 👇");
   return lines.join("\n");
 }

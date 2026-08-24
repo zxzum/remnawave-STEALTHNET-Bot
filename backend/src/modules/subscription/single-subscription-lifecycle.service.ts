@@ -6,7 +6,7 @@ import {
   remnaRevokeUserSubscription,
   remnaUpdateUser,
 } from "../remna/remna.client.js";
-import { notifySubscriptionRevoked } from "../notification/telegram-notify.service.js";
+import { notifyLazeikaOnly, notifySubscriptionRevoked } from "../notification/telegram-notify.service.js";
 import { getSystemConfig } from "../client/client.service.js";
 import { remnaTrafficSettings } from "../squad-traffic/traffic-remna-policy.js";
 
@@ -128,6 +128,8 @@ export async function processExpiredSingleSubscriptionAccess(
     legacyGateFromConfig(config),
   /** Инъекция для тестов; прод — advisory-лок по клиенту (общий с оплатой). */
   lock: <T>(clientId: string, fn: () => Promise<T>) => Promise<T> = withSubscriptionClientLock,
+  /** Отдельное уведомление о включении Lazeika-Only; не смешиваем с host-текстами. */
+  notify: (telegramId: string, subscriptionId: string, daysLeft: number) => Promise<boolean> = notifyLazeikaOnly,
 ) {
   const config = await configLoader();
   const lazeika = await lazeikaGateLoader(config);
@@ -141,6 +143,8 @@ export async function processExpiredSingleSubscriptionAccess(
       remnawaveUuid: true,
       expireAt: true,
       graceUntil: true,
+      lazeikaOnlyNotificationSentFor: true,
+      owner: { select: { telegramId: true } },
       extraDevices: true,
       tariffId: true,
       tariff: {
@@ -183,6 +187,12 @@ export async function processExpiredSingleSubscriptionAccess(
       desiredGraceUntil = allowFreshEntry ? computed : null;
     }
     const enteringGrace = desiredGraceUntil != null;
+    const notificationPending = Boolean(
+      enteringGrace
+      && desiredGraceUntil
+      && subscription.owner
+      && subscription.lazeikaOnlyNotificationSentFor?.getTime() !== desiredGraceUntil.getTime(),
+    );
 
     // Remna update ПЕРВЫЙ: graceUntil не записывается до успешного ответа (§4.1.6).
     const result = await runSingleSubscriptionOperation(subscription.id, (uuid) => request({
@@ -213,11 +223,28 @@ export async function processExpiredSingleSubscriptionAccess(
     }));
     if (result.requiredFailure) return "FAILED";
     // Успех: фиксируем/очищаем graceUntil локально.
-    if (subscription.graceUntil?.getTime() !== desiredGraceUntil?.getTime()) {
+    if (subscription.graceUntil?.getTime() !== desiredGraceUntil?.getTime() || (!enteringGrace && subscription.lazeikaOnlyNotificationSentFor)) {
       await prisma.subscription.update({
         where: { id: subscription.id },
-        data: { graceUntil: desiredGraceUntil },
+        data: {
+          graceUntil: desiredGraceUntil,
+          ...(!enteringGrace ? { lazeikaOnlyNotificationSentFor: null } : {}),
+        },
       });
+    }
+    if (notificationPending && desiredGraceUntil) {
+      const telegramId = subscription.owner?.telegramId?.trim() ?? "";
+      const daysLeft = Math.max(1, Math.ceil((desiredGraceUntil.getTime() - now.getTime()) / 86_400_000));
+      const delivered = telegramId
+        ? await notify(telegramId, subscription.id, daysLeft)
+        : true;
+      // Ошибку доставки не помечаем: следующий пятиминутный тик повторит отправку.
+      if (delivered) {
+        await prisma.subscription.update({
+          where: { id: subscription.id },
+          data: { lazeikaOnlyNotificationSentFor: desiredGraceUntil },
+        });
+      }
     }
     return enteringGrace ? "GRACE" : "DISABLED";
   };
@@ -232,12 +259,21 @@ export async function processExpiredSingleSubscriptionAccess(
       // выборкой и PATCH — тогда этот тик её не трогает (§4.4 race).
       const fresh = await prisma.subscription.findUnique({
         where: { id: subscription.id },
-        select: { remnawaveUuid: true, expireAt: true, graceUntil: true, deletionRequestedAt: true, extraDevices: true, tariffId: true },
+        select: {
+          remnawaveUuid: true,
+          expireAt: true,
+          graceUntil: true,
+          lazeikaOnlyNotificationSentFor: true,
+          deletionRequestedAt: true,
+          extraDevices: true,
+          tariffId: true,
+        },
       });
       const unchanged = fresh
         && !fresh.deletionRequestedAt
         && fresh.expireAt?.getTime() === subscription.expireAt?.getTime()
         && (fresh.graceUntil?.getTime() ?? null) === (subscription.graceUntil?.getTime() ?? null)
+        && (fresh.lazeikaOnlyNotificationSentFor?.getTime() ?? null) === (subscription.lazeikaOnlyNotificationSentFor?.getTime() ?? null)
         && fresh.extraDevices === subscription.extraDevices
         && (fresh.tariffId ?? null) === (subscription.tariffId ?? null);
       if (!unchanged) return "CHANGED" as const;

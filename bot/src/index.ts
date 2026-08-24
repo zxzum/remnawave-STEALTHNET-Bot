@@ -1375,6 +1375,7 @@ function parseSubInfo(item: {
   tariffDisplayName?: string | null;
   /** эмодзи-префикс из админки (Tariff.menuEmoji) — приоритетнее name-matching. */
   tariffMenuEmoji?: string | null;
+  lazeikaOnly?: api.SubscriptionListItem["lazeikaOnly"];
 }): {
   idx: number;
   typeEmoji: string;
@@ -1390,6 +1391,7 @@ function parseSubInfo(item: {
   trafficSuffix: string;
   /** true если подписка EXPIRED/DISABLED или expireAt в прошлом. */
   isExpired: boolean;
+  lazeikaOnly?: api.SubscriptionListItem["lazeikaOnly"];
 } {
   const subData = item.subscription as Record<string, unknown> | null;
   const inner = subData ? ((subData.response ?? subData.data ?? subData) as Record<string, unknown>) : null;
@@ -1456,7 +1458,9 @@ function parseSubInfo(item: {
     ?? inner?.trafficUsedBytes ?? inner?.usedTrafficBytes ?? inner?.traffic_used_bytes;
   const limitNum = typeof tlimit === "string" ? parseFloat(tlimit) : Number(tlimit);
   const usedNum = typeof tused === "string" ? parseFloat(tused) : Number(tused);
-  if (Number.isFinite(usedNum) && Number.isFinite(limitNum) && limitNum > 0) {
+  if (item.lazeikaOnly?.active) {
+    trafficSuffix = "";
+  } else if (Number.isFinite(usedNum) && Number.isFinite(limitNum) && limitNum > 0) {
     const u = bytesToGb(Number.isFinite(usedNum) ? usedNum : 0);
     const l = bytesToGb(limitNum);
     trafficSuffix = ` | ${u}/${l} ГБ`;
@@ -1464,7 +1468,7 @@ function parseSubInfo(item: {
     trafficSuffix = ` | ${bytesToGb(usedNum)} ГБ / ∞`;
   }
 
-  return { idx, typeEmoji, statusEmojiBig, statusEmojiSmall, daysStr, dateStr, trafficSuffix, isExpired };
+  return { idx, typeEmoji, statusEmojiBig, statusEmojiSmall, daysStr, dateStr, trafficSuffix, isExpired, lazeikaOnly: item.lazeikaOnly };
 }
 
 /**
@@ -1479,6 +1483,7 @@ function formatSubLine(item: {
   /** T16 (12.05.2026) — название тарифа и кастомный эмодзи для главного меню. */
   tariffDisplayName?: string | null;
   tariffMenuEmoji?: string | null;
+  lazeikaOnly?: api.SubscriptionListItem["lazeikaOnly"];
 }, template?: string): string {
   const { idx, typeEmoji, statusEmojiBig, daysStr, dateStr, trafficSuffix } = parseSubInfo(item);
   const tpl = (template && template.trim()) || "{{SUB_STATUS}} {{SUB_TYPE}} Подписка #{{SUB_NUM}} — **{{SUB_DAYS}}** до {{SUB_DATE}}{{SUB_TRAFFIC}}";
@@ -1493,13 +1498,19 @@ function formatSubLine(item: {
 
 type CompactMenuSubscription = Pick<
   api.SubscriptionListItem,
-  "type" | "id" | "subscriptionIndex" | "subscription" | "tariffDisplayName" | "trafficQuota"
+  "type" | "id" | "subscriptionIndex" | "subscription" | "tariffDisplayName" | "trafficQuota" | "lazeikaOnly"
 >;
 
 function subscriptionTrafficLines(
   item: CompactMenuSubscription,
   stats = richSubStats(item.subscription),
 ): string[] {
+  if (item.lazeikaOnly?.active) {
+    return [
+      "🔐 Особый доступ: Telegram и lazeika.xyz",
+      `⏰ Осталось: ${item.lazeikaOnly.daysLeft} дней`,
+    ];
+  }
   const traffic = stats.trafficUsedGb == null
     ? "—"
     : `${gbCompact(stats.trafficUsedGb)} ГБ / ${stats.trafficLimitGb ? `${gbCompact(stats.trafficLimitGb)} ГБ` : "∞"}`;
@@ -1841,6 +1852,7 @@ function buildMainMenuRichMarkdown(opts: {
       subscription: unknown;
       tariffDisplayName: string;
       tariffMenuEmoji?: string | null;
+      lazeikaOnly?: api.SubscriptionListItem["lazeikaOnly"];
     }>;
   } | null;
   infoBlock?: string | null;
@@ -1867,16 +1879,18 @@ function buildMainMenuRichMarkdown(opts: {
     });
     for (const it of sorted) {
       const s = richSubStats(it.subscription);
-      const badge =
-        s.status === "ACTIVE" ? "🟢"
+      const grace = it.lazeikaOnly?.active === true;
+      const badge = grace ? "🔐"
+        : s.status === "ACTIVE" ? "🟢"
         : s.status === "EXPIRED" ? "🔴"
         : s.status === "LIMITED" ? "🟠"
         : s.status === "DISABLED" ? "⚪"
         : "🟡";
       const emoji = it.tariffMenuEmoji ? `${it.tariffMenuEmoji} ` : "";
       const left = s.daysLeft != null ? `${s.daysLeft} ${pluralDays(s.daysLeft)}` : "—";
-      const traffic =
-        s.trafficUsedGb != null && s.trafficLimitGb != null
+      const traffic = grace
+        ? "Особый доступ"
+        : s.trafficUsedGb != null && s.trafficLimitGb != null
           ? `${gbCompact(s.trafficUsedGb)} GB / ${gbCompact(s.trafficLimitGb)} GB`
           : s.trafficUsedGb != null
           ? `${gbCompact(s.trafficUsedGb)} GB / ∞`
@@ -7356,7 +7370,7 @@ composer.on("callback_query:data", async (ctx) => {
         }
 
         // Общий трафик и белые списки выводятся отдельными строками без progress bar.
-        const trafficLines = subscriptionTrafficLines(item).map((line) => `📊 ${line}`);
+        const trafficLines = subscriptionTrafficLines(item).map((line) => line.startsWith("🔐") || line.startsWith("⏰") ? line : `📊 ${line}`);
 
         // Ссылка для подключения
         const subUrl = getSubscriptionUrl(item.subscription);
