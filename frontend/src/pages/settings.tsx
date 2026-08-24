@@ -431,11 +431,9 @@ export function SettingsPage() {
   const [lazeikaStatus, setLazeikaStatus] = useState<LazeikaOnlyStatus | null>(null);
   const [lazeikaBusy, setLazeikaBusy] = useState<string | null>(null);
   // SSH-модалка: креды живут только в памяти формы (§4 ТЗ).
-  const [lazeikaSshOpen, setLazeikaSshOpen] = useState(false);
-  const [lazeikaSshUser, setLazeikaSshUser] = useState("root");
+  const [lazeikaSshUser, setLazeikaSshUser] = useState("luna_worker");
   const [lazeikaSshPort, setLazeikaSshPort] = useState(22);
   const [lazeikaSshPassword, setLazeikaSshPassword] = useState("");
-  const [lazeikaPendingAction, setLazeikaPendingAction] = useState<"setup" | "verify" | "reconcile" | null>(null);
   const [activeTab, setActiveTab] = useState("general");
   const [botSubTab, setBotSubTab] = useState<"menu" | "texts" | "emoji" | "behavior" | "links">("menu");
   const [installedLangCodes, setInstalledLangCodes] = useState<string[]>(FALLBACK_LANGS);
@@ -487,6 +485,7 @@ export function SettingsPage() {
   useEffect(() => {
     api.getSettings(token).then((data) => {
       const allowed = installedLangCodes;
+      const lazeikaOnlyNotificationMessages = (data as AdminSettings).lazeikaOnlyNotificationMessages ?? [];
       setSettings({
         ...data,
         activeLanguages: (data.activeLanguages || []).filter((l: string) => allowed.includes(l)),
@@ -575,9 +574,9 @@ export function SettingsPage() {
         lazeikaOnlyNodeUuid: (data as AdminSettings).lazeikaOnlyNodeUuid ?? null,
         lazeikaOnlySquadUuid: (data as AdminSettings).lazeikaOnlySquadUuid ?? null,
         lazeikaOnlyMessageTemplate: (data as AdminSettings).lazeikaOnlyMessageTemplate ?? "",
-        lazeikaOnlyNotificationMessage1: (data as AdminSettings).lazeikaOnlyNotificationMessage1 ?? "",
-        lazeikaOnlyNotificationMessage2: (data as AdminSettings).lazeikaOnlyNotificationMessage2 ?? "",
-        lazeikaOnlyNotificationMessage3: (data as AdminSettings).lazeikaOnlyNotificationMessage3 ?? "",
+        lazeikaOnlyNotificationMessage1: (data as AdminSettings).lazeikaOnlyNotificationMessage1 ?? lazeikaOnlyNotificationMessages?.[0] ?? "🔐 Доступ к lazeika.xyz и Telegram",
+        lazeikaOnlyNotificationMessage2: (data as AdminSettings).lazeikaOnlyNotificationMessage2 ?? lazeikaOnlyNotificationMessages?.[1] ?? "⏰ Ваша подписка закончилась!",
+        lazeikaOnlyNotificationMessage3: (data as AdminSettings).lazeikaOnlyNotificationMessage3 ?? lazeikaOnlyNotificationMessages?.[2] ?? "✅ Доступ сохранён в режиме продления!",
       });
     }).finally(() => setLoading(false));
     api.getAutoRenewStats(token).then(setAutoRenewStats).catch(() => {});
@@ -658,21 +657,18 @@ export function SettingsPage() {
       const items = res?.response?.internalSquads ?? (Array.isArray(res) ? res : []);
       setSquads(Array.isArray(items) ? items : []);
     }).catch(() => setSquads([]));
-    // Lazeika-Only: список нод + статус инфраструктуры.
-    api.getRemnaNodes(token).then((res) => {
-      setLazeikaNodes((res.response ?? []).map((n) => ({ uuid: n.uuid, name: n.name, isDisabled: n.isDisabled })));
-    }).catch(() => setLazeikaNodes([]));
-    api.getLazeikaOnlyStatus(token).then(setLazeikaStatus).catch(() => setLazeikaStatus(null));
+    // Ноды приходят тем же endpoint, что и статус: менеджеру не нужна отдельная секция remna-nodes.
+    api.getLazeikaOnlyStatus(token).then((status) => {
+      setLazeikaStatus(status);
+      setLazeikaNodes(status.nodes);
+    }).catch(() => {
+      setLazeikaNodes([]);
+      setLazeikaStatus(null);
+    });
   }, [token]);
 
   function runLazeikaAction(kind: "setup" | "verify" | "reconcile" | "disable") {
-    if (kind === "disable") {
-      void confirmLazeikaAction("disable");
-      return;
-    }
-    setLazeikaPendingAction(kind);
-    setLazeikaSshPassword("");
-    setLazeikaSshOpen(true);
+    void confirmLazeikaAction(kind);
   }
 
   async function confirmLazeikaAction(kind: "setup" | "verify" | "reconcile" | "disable") {
@@ -682,7 +678,6 @@ export function SettingsPage() {
       return;
     }
     const ssh = { user: lazeikaSshUser.trim(), port: lazeikaSshPort, password: lazeikaSshPassword };
-    setLazeikaSshOpen(false);
     // Пароль очищается сразу после отправки.
     setLazeikaSshPassword("");
     setLazeikaBusy(kind);
@@ -1058,9 +1053,9 @@ export function SettingsPage() {
         lazeikaOnlyNodeUuid: settings.lazeikaOnlyNodeUuid || null,
         lazeikaOnlySquadUuid: settings.lazeikaOnlySquadUuid?.trim() || null,
         lazeikaOnlyMessageTemplate: settings.lazeikaOnlyMessageTemplate?.trim() || null,
-        lazeikaOnlyNotificationMessage1: settings.lazeikaOnlyNotificationMessage1?.trim() || null,
-        lazeikaOnlyNotificationMessage2: settings.lazeikaOnlyNotificationMessage2?.trim() || null,
-        lazeikaOnlyNotificationMessage3: settings.lazeikaOnlyNotificationMessage3?.trim() || null,
+        lazeikaOnlyNotificationMessage1: settings.lazeikaOnlyNotificationMessage1?.trim() || "🔐 Доступ к lazeika.xyz и Telegram",
+        lazeikaOnlyNotificationMessage2: settings.lazeikaOnlyNotificationMessage2?.trim() || "⏰ Ваша подписка закончилась!",
+        lazeikaOnlyNotificationMessage3: settings.lazeikaOnlyNotificationMessage3?.trim() || "✅ Доступ сохранён в режиме продления!",
         customBuildEnabled: settings.customBuildEnabled ?? false,
         customBuildPricePerDay: settings.customBuildPricePerDay ?? 0,
         customBuildPricePerDevice: settings.customBuildPricePerDevice ?? 0,
@@ -1813,56 +1808,6 @@ export function SettingsPage() {
 
                 {message && <p className="text-sm text-muted-foreground">{message}</p>}
 
-      {/* SSH credentials modal (Lazeika-Only) */}
-      {lazeikaSshOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => { setLazeikaSshPassword(""); setLazeikaSshOpen(false); }}>
-          <div className="w-full max-w-md rounded-xl bg-background p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-1 text-lg font-semibold">SSH-доступ к ноде</h3>
-            <p className="mb-4 text-xs text-muted-foreground">
-              Пароль используется только для этой операции, не сохраняется и не логируется.
-            </p>
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label htmlFor="lazeika-ssh-user">SSH user</Label>
-                  <Input id="lazeika-ssh-user" value={lazeikaSshUser} onChange={(e) => setLazeikaSshUser(e.target.value)} />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="lazeika-ssh-port">SSH port</Label>
-                  <Input
-                    id="lazeika-ssh-port"
-                    type="number"
-                    min={1}
-                    max={65535}
-                    value={lazeikaSshPort}
-                    onChange={(e) => setLazeikaSshPort(Number(e.target.value) || 22)}
-                  />
-                </div>
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="lazeika-ssh-password">SSH password</Label>
-                <Input
-                  id="lazeika-ssh-password"
-                  type="password"
-                  value={lazeikaSshPassword}
-                  autoComplete="off"
-                  onChange={(e) => setLazeikaSshPassword(e.target.value)}
-                />
-              </div>
-            </div>
-            <div className="mt-5 flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => { setLazeikaSshPassword(""); setLazeikaSshOpen(false); }}>Отмена</Button>
-              <Button
-                size="sm"
-                disabled={!lazeikaSshPassword || lazeikaBusy !== null}
-                onClick={() => { void confirmLazeikaAction(lazeikaPendingAction ?? "setup"); }}
-              >
-                Выполнить
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
                 <Button type="submit" disabled={saving}>
                   {saving ? t("admin.settings.saving") : t("admin.settings.save")}
                 </Button>
@@ -5771,6 +5716,41 @@ export function SettingsPage() {
                     </p>
                   </div>
                 </div>
+                <div className="rounded-lg border bg-background/40 p-3 space-y-3">
+                  <div>
+                    <Label className="text-sm font-medium">SSH-доступ к выбранной ноде</Label>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Нужен для установки и проверки tc-лимитера. Пароль используется только для действия и сразу очищается.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="lazeika-ssh-user">SSH user</Label>
+                      <Input id="lazeika-ssh-user" value={lazeikaSshUser} onChange={(e) => setLazeikaSshUser(e.target.value)} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="lazeika-ssh-port">SSH port</Label>
+                      <Input
+                        id="lazeika-ssh-port"
+                        type="number"
+                        min={1}
+                        max={65535}
+                        value={lazeikaSshPort}
+                        onChange={(e) => setLazeikaSshPort(Number(e.target.value) || 22)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="lazeika-ssh-password">SSH password</Label>
+                      <Input
+                        id="lazeika-ssh-password"
+                        type="password"
+                        value={lazeikaSshPassword}
+                        autoComplete="off"
+                        onChange={(e) => setLazeikaSshPassword(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
                 <div className="grid grid-cols-1 gap-4">
                   {[1, 2, 3].map((n) => {
                     const key = `lazeikaOnlyNotificationMessage${n}` as keyof AdminSettings;
@@ -5791,10 +5771,10 @@ export function SettingsPage() {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <Label htmlFor="lazeika-profile-mode">Режим профиля</Label>
-                    <Input id="lazeika-profile-mode" value="IN_PLACE" readOnly disabled />
+                    <Label>Режим профиля</Label>
+                    <div className="rounded-md border border-input bg-muted/40 px-3 py-2 text-sm font-medium">IN_PLACE · фиксированный</div>
                     <p className="text-xs text-muted-foreground">
-                      Активный профиль ноды расширяется managed+notification inbound&apos;ами; нода не переключается на копию.
+                      Активный профиль ноды расширяется managed+notification inbound&apos;ами. Переключение на копию не поддерживается, чтобы не потерять текущую конфигурацию ноды.
                     </p>
                   </div>
                   <div className="flex items-end">

@@ -3788,6 +3788,7 @@ export interface LazeikaOnlyStatus {
   };
   state: LazeikaOnlyResourceState;
   settingsInSync?: boolean;
+  nodes: Array<{ uuid: string; name?: string; isDisabled?: boolean }>;
   workingHost: { uuid?: string; remark?: string; address?: string; isDisabled?: boolean } | null;
   notificationHosts: Array<{ uuid?: string; remark?: string; address?: string; isDisabled?: boolean }>;
 }
@@ -4073,6 +4074,7 @@ export interface AdminSettings {
   allowUserThemeChange?: boolean;
   lazeikaOnlySettingsInSync?: boolean;
 
+  lazeikaOnlyNotificationMessages?: string[];
   lazeikaOnlyNotificationMessage1?: string | null;
   lazeikaOnlyNotificationMessage2?: string | null;
   lazeikaOnlyNotificationMessage3?: string | null;

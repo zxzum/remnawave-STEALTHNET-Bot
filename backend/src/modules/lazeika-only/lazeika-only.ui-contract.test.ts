@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 
 /**
  * UI acceptance (§8 ревью): доказываем по исходнику settings.tsx, что кнопки
- * Lazeika-Only не являются silent no-op: modal открывается, POST вызывается,
+ * Lazeika-Only не являются silent no-op: SSH-поля видны, POST вызывается,
  * loading/ошибки видны, пароль очищается. В репозитории нет frontend-test-runner —
  * используем тот же source-contract подход, что и остальные contract-тесты.
  */
@@ -13,17 +13,30 @@ const settingsSrc = readFileSync(
   "utf8",
 );
 
-test("setup/verify/reconcile buttons open the SSH modal (no silent no-op)", () => {
+test("setup/verify/reconcile use visible SSH fields instead of a hidden modal", () => {
   for (const kind of ["setup", "verify", "reconcile"]) {
     assert.ok(
       settingsSrc.includes(`onClick={() => runLazeikaAction("${kind}")}`),
       `кнопка «${kind}» вызывает runLazeikaAction`,
     );
   }
-  // runLazeikaAction открывает modal и сбрасывает пароль перед показом.
+  // Кнопки сразу запускают действие с видимыми полями формы.
   const fn = settingsSrc.match(/function runLazeikaAction[\s\S]*?\n  \}/)?.[0] ?? "";
-  assert.ok(fn.includes("setLazeikaSshOpen(true)"), "runLazeikaAction открывает SSH modal");
-  assert.ok(fn.includes("setLazeikaSshPassword(\"\")"), "пароль сбрасывается перед вводом");
+  assert.ok(fn.includes("void confirmLazeikaAction(kind)"), "runLazeikaAction запускает действие из формы");
+  assert.ok(!fn.includes("setLazeikaSshOpen"), "SSH modal больше не скрывает обязательные поля");
+  assert.ok(settingsSrc.includes('id="lazeika-ssh-user"'), "SSH user виден в карточке");
+  assert.ok(settingsSrc.includes('id="lazeika-ssh-password"'), "SSH password виден в карточке");
+});
+
+test("settings bind notification defaults returned as an array", () => {
+  assert.ok(
+    settingsSrc.includes("lazeikaOnlyNotificationMessages?.[0]"),
+    "первое дефолтное сообщение из API попадает в input",
+  );
+  assert.ok(
+    settingsSrc.includes("lazeikaOnlyNotificationMessages?.[2]"),
+    "третье дефолтное сообщение из API попадает в input",
+  );
 });
 
 test("confirm posts to backend, shows loading and surfaces errors to the user", () => {
@@ -42,10 +55,8 @@ test("confirm posts to backend, shows loading and surfaces errors to the user", 
   assert.ok(settingsSrc.includes("const ssh = { user: lazeikaSshUser.trim(), port: lazeikaSshPort, password: lazeikaSshPassword }"), "ssh user/port/password уходят в POST");
 });
 
-test("password is cleared after submit, on Cancel and on backdrop click", () => {
+test("password is cleared immediately after the inline form submits", () => {
   const confirm = settingsSrc.match(/async function confirmLazeikaAction[\s\S]*?\n  \}/)?.[0] ?? "";
   assert.ok(confirm.includes("setLazeikaSshPassword(\"\")"), "пароль очищается сразу после отправки");
-  // Cancel-кнопка и backdrop: оба пути закрытия чистят пароль.
-  const clears = settingsSrc.match(/setLazeikaSshPassword\(""\); setLazeikaSshOpen\(false\)/g) ?? [];
-  assert.ok(clears.length >= 2, "Cancel и backdrop очищают пароль");
+  assert.ok(!confirm.includes("setLazeikaSshOpen"), "пароль не зависит от скрытой модалки");
 });

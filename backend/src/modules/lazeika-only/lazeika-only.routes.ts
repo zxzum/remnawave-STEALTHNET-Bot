@@ -67,6 +67,7 @@ function service() {
 lazeikaOnlyRouter.get("/status", async (_req: Request, res: Response) => {
   const [config, state] = await Promise.all([getLazeikaConfig(), loadResourceState()]);
   let hosts: Array<{ uuid?: string; remark?: string; address?: string; isDisabled?: boolean; tags?: string[] }> = [];
+  let nodes: Array<{ uuid: string; name?: string; isDisabled?: boolean }> = [];
   try {
     const raw = (await remnaGetHosts()).data as { response?: { hosts?: typeof hosts } | typeof hosts } | undefined;
     const list = raw?.response;
@@ -74,6 +75,17 @@ lazeikaOnlyRouter.get("/status", async (_req: Request, res: Response) => {
     hosts = hosts.filter((h) => h.tags?.includes("LAZEIKA_ONLY"));
   } catch {
     // Remna недоступен — статус всё равно отдаём.
+  }
+  try {
+    const raw = (await remnaGetNodes()).data as { response?: unknown } | undefined;
+    const list = Array.isArray(raw?.response) ? raw.response : [];
+    nodes = list
+      .filter((node): node is { uuid: string; name?: string; isDisabled?: boolean } =>
+        typeof node === "object" && node !== null && typeof (node as { uuid?: unknown }).uuid === "string",
+      )
+      .map((node) => ({ uuid: node.uuid, name: node.name, isDisabled: node.isDisabled }));
+  } catch {
+    // Ноды необязательны для чтения статуса; UI покажет пустой список без падения карточки.
   }
   return res.json({
     config: {
@@ -87,6 +99,7 @@ lazeikaOnlyRouter.get("/status", async (_req: Request, res: Response) => {
     state,
     /** false → настройки (нода/squad) разошлись с resource_state, нужен reconcile. */
     settingsInSync: config.settingsInSync,
+    nodes,
     // Показываем только ПРИНАДЛЕЖАЩИЕ конфигурации host'ы по сохранённым UUID,
     // не «все с тегом» — чужие host'ы с тем же тегом не наши (§8 ревью).
     workingHost: hosts.find((h) => h.uuid !== undefined && h.uuid === state.workingHostUuid) ?? null,
