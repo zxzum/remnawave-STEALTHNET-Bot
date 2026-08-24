@@ -65,6 +65,7 @@ function service() {
 }
 
 lazeikaOnlyRouter.get("/status", async (_req: Request, res: Response) => {
+  res.set("Cache-Control", "no-store");
   const [config, state] = await Promise.all([getLazeikaConfig(), loadResourceState()]);
   let hosts: Array<{ uuid?: string; remark?: string; address?: string; isDisabled?: boolean; tags?: string[] }> = [];
   let nodes: Array<{ uuid: string; name?: string; isDisabled?: boolean }> = [];

@@ -76,3 +76,10 @@ test("disable route delegates lock check + flags write to the atomic service op"
   assert.ok(resetRoute, "route /reset-state найден");
   assert.ok(!resetRoute.includes("lazeika_only_profile_uuid"), "route НЕ очищает ключи вне сервисной транзакции");
 });
+
+test("status is never cached because it contains the live node list", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("./lazeika-only.routes.ts", import.meta.url), "utf8");
+  const statusRoute = src.match(/get\("\/status"[\s\S]*?\n\}\);/)?.[0] ?? "";
+  assert.ok(statusRoute.includes('Cache-Control", "no-store"'), "живой список нод не берётся из старого HTTP-кэша");
+});
