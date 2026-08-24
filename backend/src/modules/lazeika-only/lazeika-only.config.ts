@@ -45,6 +45,12 @@ export const resourceStateSchema = z.object({
   lastError: z.string().nullable().default(null),
   lastVerifiedAt: z.string().datetime().nullable().default(null),
   updatedAt: z.string().datetime().nullable().default(null),
+  /** Режим работы с профилем ноды. */
+  profileMode: z.enum(["IN_PLACE", "CLONE"]).default("IN_PLACE"),
+  /** Отдельный профиль notification-hosts (редактируемое имя). */
+  notifProfileUuid: z.string().uuid().nullable().default(null),
+  notifInboundUuid: z.string().uuid().nullable().default(null),
+  notifInboundTag: z.string().nullable().default(null),
   /** Служебные поля CAS-блока setup (очищаются при терминальном статусе). */
   lockToken: z.string().nullable().default(null),
   lockedAt: z.string().datetime().nullable().default(null),
@@ -110,6 +116,8 @@ export type LazeikaConfig = {
   nodeUuid: string | null;
   squadUuid: string | null;
   messageTemplate: string;
+  notificationMessages: string[];
+  notificationProfileName: string;
   /** Инфраструктура полностью настроена И совпадает с активными настройками. */
   ready: boolean;
   /** Настройки (нода/squad) разошлись с resource_state → нужен reconcile. */
@@ -123,6 +131,8 @@ type SystemConfigLike = {
   lazeikaOnlyNodeUuid?: string | null;
   lazeikaOnlySquadUuid?: string | null;
   lazeikaOnlyMessageTemplate?: string | null;
+  lazeikaOnlyNotificationMessages?: string[];
+  lazeikaOnlyNotificationProfileName?: string | null;
 };
 
 /** Полная конфигурация режима: настройки + готовность инфраструктуры. */
@@ -156,6 +166,10 @@ export async function getLazeikaConfig(
     nodeUuid: cfg.lazeikaOnlyNodeUuid ?? null,
     squadUuid: effectiveSquadUuid,
     messageTemplate: cfg.lazeikaOnlyMessageTemplate || DEFAULT_LAZEIKA_MESSAGE_TEMPLATE,
+    notificationMessages: cfg.lazeikaOnlyNotificationMessages?.length === 3
+      ? cfg.lazeikaOnlyNotificationMessages
+      : ["🔐 Доступ к lazeika.xyz и Telegram", "⏰ Ваша подписка закончилась!", "✅ Доступ сохранён в режиме продления!"],
+    notificationProfileName: cfg.lazeikaOnlyNotificationProfileName || "Lazeika-Only — уведомления",
     ready,
     settingsInSync,
   };

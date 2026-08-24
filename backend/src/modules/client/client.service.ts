@@ -975,6 +975,12 @@ async function loadSystemConfigFromDb() {
     lazeikaOnlyNodeUuid: (map.lazeika_only_node_uuid ?? "").trim() || null,
     lazeikaOnlySquadUuid: (map.lazeika_only_squad_uuid ?? map.expired_grace_squad_uuid ?? "").trim() || null,
     lazeikaOnlyMessageTemplate: (map.lazeika_only_message_template ?? "").trim() || DEFAULT_LAZEIKA_MESSAGE_TEMPLATE,
+    lazeikaOnlyNotificationMessages: [
+      (map.lazeika_only_notification_message_1 ?? "").trim() || "🔐 Доступ к lazeika.xyz и Telegram",
+      (map.lazeika_only_notification_message_2 ?? "").trim() || "⏰ Ваша подписка закончилась!",
+      (map.lazeika_only_notification_message_3 ?? "").trim() || "✅ Доступ сохранён в режиме продления!",
+    ],
+    lazeikaOnlyNotificationProfileName: (map.lazeika_only_notification_profile_name ?? "").trim() || "Lazeika-Only — уведомления",
     botAutoDeleteUnknownMessages: map.bot_auto_delete_unknown_messages === "true" || map.bot_auto_delete_unknown_messages === "1",
     botInfoBlock: (map.bot_info_block ?? "").trim() || null,
   };

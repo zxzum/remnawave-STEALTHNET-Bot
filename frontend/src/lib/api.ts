@@ -576,15 +576,27 @@ export const api = {
   },
   async lazeikaOnlySetup(
     token: string,
-    body: { nodeUuid: string; squadUuid?: string | null; speedMbit?: number },
+    body: {
+      nodeUuid: string;
+      squadUuid?: string | null;
+      speedMbit?: number;
+      profileMode?: "IN_PLACE" | "CLONE";
+      ssh: { user: string; port: number; password: string };
+    },
   ): Promise<{ ok: boolean; status?: string; error?: string }> {
     return request("/admin/lazeika-only/setup", { method: "POST", body: JSON.stringify(body), token });
   },
-  async lazeikaOnlyVerify(token: string): Promise<{ ok: boolean; checks: Array<{ name: string; ok: boolean; detail?: string }> }> {
-    return request("/admin/lazeika-only/verify", { method: "POST", token });
+  async lazeikaOnlyVerify(
+    token: string,
+    ssh: { user: string; port: number; password: string },
+  ): Promise<{ ok: boolean; checks: Array<{ name: string; ok: boolean; detail?: string }> }> {
+    return request("/admin/lazeika-only/verify", { method: "POST", body: JSON.stringify({ ssh }), token });
   },
-  async lazeikaOnlyReconcile(token: string): Promise<{ ok: boolean; status?: string; error?: string }> {
-    return request("/admin/lazeika-only/reconcile", { method: "POST", token });
+  async lazeikaOnlyReconcile(
+    token: string,
+    ssh: { user: string; port: number; password: string },
+  ): Promise<{ ok: boolean; status?: string; error?: string }> {
+    return request("/admin/lazeika-only/reconcile", { method: "POST", body: JSON.stringify({ ssh }), token });
   },
   async lazeikaOnlyDisable(token: string): Promise<{ ok: boolean; status?: string }> {
     return request("/admin/lazeika-only/disable", { method: "POST", token });
@@ -3734,6 +3746,10 @@ export type UpdateSettingsPayload = {
   lazeikaOnlyNodeUuid?: string | null;
   lazeikaOnlySquadUuid?: string | null;
   lazeikaOnlyMessageTemplate?: string | null;
+  lazeikaOnlyNotificationMessage1?: string | null;
+  lazeikaOnlyNotificationMessage2?: string | null;
+  lazeikaOnlyNotificationMessage3?: string | null;
+  lazeikaOnlyNotificationProfileName?: string | null;
 }
 
 // ─── Lazeika-Only: режим продления (admin API) ───────────────────────────────
@@ -4052,6 +4068,10 @@ export interface RemnaUserUsageResponse {
 
 export interface AdminSettings {
   allowUserThemeChange?: boolean;
+  lazeikaOnlyNotificationMessage1?: string | null;
+  lazeikaOnlyNotificationMessage2?: string | null;
+  lazeikaOnlyNotificationMessage3?: string | null;
+  lazeikaOnlyNotificationProfileName?: string | null;
   expiredGraceEnabled?: boolean;
   expiredGraceDays?: number;
   expiredGraceSquadUuid?: string | null;

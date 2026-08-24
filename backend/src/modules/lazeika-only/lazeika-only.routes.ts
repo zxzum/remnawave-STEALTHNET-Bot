@@ -16,11 +16,19 @@ export const lazeikaOnlyRouter = Router();
 lazeikaOnlyRouter.use(requireAuth);
 lazeikaOnlyRouter.use(requireAdminSection);
 
+// SSH-креды операции: пароль живёт только в памяти запроса (§4 ТЗ).
+const sshSchema = z.object({
+  user: z.string().min(1).max(64).default("root"),
+  port: z.number().int().min(1).max(65535),
+  password: z.string().min(1).max(200),
+});
 const setupSchema = z.object({
   nodeUuid: z.string().uuid(),
   squadUuid: z.string().uuid().nullable().optional(),
   speedMbit: z.number().int().min(1).max(1000).optional(),
+  ssh: sshSchema,
 });
+const verifySchema = z.object({ ssh: sshSchema });
 
 function service() {
   return createLazeikaService({
@@ -49,7 +57,7 @@ function service() {
       updateHost: remnaUpdateHost,
       deleteHost: remnaDeleteHost,
     },
-    ssh: runSsh,
+    ssh: runSsh, sshKnownHostsFile: () => process.env.LAZEIKA_ONLY_SSH_KNOWN_HOSTS ?? "",
   });
 }
 
@@ -91,6 +99,7 @@ lazeikaOnlyRouter.post("/setup", async (req: Request, res: Response) => {
       nodeUuid: parsed.data.nodeUuid,
       squadUuid: parsed.data.squadUuid ?? null,
       speedMbit: parsed.data.speedMbit ?? (await getSystemConfig()).lazeikaOnlySpeedMbit ?? 5,
+      ssh: parsed.data.ssh,
     });
     return res.json({ ok: true, ...result });
   } catch (error) {
@@ -100,26 +109,48 @@ lazeikaOnlyRouter.post("/setup", async (req: Request, res: Response) => {
   }
 });
 
-lazeikaOnlyRouter.post("/verify", async (_req: Request, res: Response) => {
+lazeikaOnlyRouter.post("/verify", async (req: Request, res: Response) => {
+  const parsed = verifySchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    // Без credentials — одна содержательная проверка вместо каскада (§5 ТЗ).
+    return res.json({
+      ok: false,
+      checks: [{ name: "state", ok: false, detail: "Укажите SSH user/port/password для проверки ноды" }],
+    });
+  }
   try {
-    return res.json(await service().verify());
+    return res.json(await service().verify(parsed.data.ssh));
   } catch (error) {
     return res.status(502).json({ ok: false, error: error instanceof Error ? error.message : String(error), checks: [] });
   }
 });
 
-lazeikaOnlyRouter.post("/reconcile", async (_req: Request, res: Response) => {
+lazeikaOnlyRouter.post("/reconcile", async (req: Request, res: Response) => {
   const config = await getSystemConfig();
   if (!config.lazeikaOnlyNodeUuid) {
     return res.status(400).json({ ok: false, error: "Нода не выбрана в настройках" });
   }
+  const parsed = setupSchema.safeParse({
+    nodeUuid: config.lazeikaOnlyNodeUuid,
+    squadUuid: null,
+    speedMbit: config.lazeikaOnlySpeedMbit,
+    ...(req.body as Record<string, unknown>),
+  });
+  if (!parsed.success) {
+    return res.status(400).json({
+      ok: false,
+      error: "Требуются SSH user/port/password для операции",
+      errors: parsed.error.flatten(),
+    });
+  }
   try {
     const result = await service().setup({
-      nodeUuid: config.lazeikaOnlyNodeUuid,
+      nodeUuid: parsed.data.nodeUuid,
       // Всегда AUTO-режим: если сохранённый squad удалён, reconcile пересоздаст его,
       // а не упадёт со «squad не найден» на устаревшем UUID из настроек (§2 ревью).
       squadUuid: null,
-      speedMbit: config.lazeikaOnlySpeedMbit,
+      speedMbit: parsed.data.speedMbit ?? config.lazeikaOnlySpeedMbit ?? 5,
+      ssh: parsed.data.ssh,
     });
     return res.json({ ok: true, ...result });
   } catch (error) {

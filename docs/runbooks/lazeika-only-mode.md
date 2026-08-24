@@ -2,14 +2,17 @@
 
 Режим выдаёт истёкшим подпискам ограниченный доступ (Telegram + lazeika.xyz, 5 Mbit/s) на настраиваемый срок. Спецификация: `docs/superpowers/specs/2026-08-22-lazeika-only-design.md`.
 
-## Обязательные env (backend)
+## SSH-доступ
 
-| Переменная | Значение |
-|---|---|
-| `LAZEIKA_ONLY_SSH_PRIVATE_KEY_PATH` | Путь к приватному ключу внутри контейнера backend |
-| `LAZEIKA_ONLY_SSH_KNOWN_HOSTS` | Путь к файлу known_hosts (обязателен, strict checking) |
-| `LAZEIKA_ONLY_SSH_USER` | SSH-пользователь ноды (по умолчанию `root`) |
-| `LAZEIKA_ONLY_SSH_PORT` | SSH-порт ноды (по умолчанию `22`) |
+Пароль/порт/user вводятся администратором в UI при каждой операции «Настроить / Проверить /
+Перенастроить» (SSH-modal). Пароль:
+- живёт только в памяти запроса;
+- НЕ сохраняется в Prisma/SystemSetting/resource_state;
+- не возвращается API и не пишется в логи.
+
+Транспорт — npm-пакет `ssh2` (password auth). Строгая проверка host key по файлу
+`LAZEIKA_ONLY_SSH_KNOWN_HOSTS` (plain и hashed |1| форматы); отсутствие записи или mismatch —
+отказ с подсказкой выполнить `ssh-keyscan`. |
 
 Пример монтирования в docker-compose (сервис api):
 
@@ -35,6 +38,14 @@ secrets:
 - Скорость — **агрегированный** лимит на весь Lazeika-Only inbound ноды (по умолчанию 5 Mbit/s), не на пользователя.
 - Реализация: 8 flower-классификаторов (IPv4/IPv6 × TCP/UDP × ingress/egress) ссылаются на **общие police actions**
   (index 45101 ingress / 45102 egress) — один token bucket на направление. Лимит НЕ складывается из восьми независимых.
+- Профиль: режим **IN_PLACE** (по умолчанию) расширяет активный профиль ноды managed+notification inbound'ами,
+  не переключая ноду на clone; CLONE остаётся fallback. Rollback IN_PLACE хирургический: удаляются только наши
+  inbound/rules, чужие изменения сохраняются.
+- Notification-hosts: ровно 3 видимые записи (isDisabled=false), адреса `.invalid`, привязаны к notification-inbound'у
+  managed-профиля; весь его трафик блокируется правилом BLOCK по тегу inbound'а. Ограничение Remnawave: host без
+  inbound в подписку не попадает — поэтому техническая связь обязательна, но подключение невозможно.
+- Сообщения fake-hosts: ключи `lazeika_only_notification_message_1..3`, имя профиля уведомлений —
+  `lazeika_only_notification_profile_name`. Редактируются в карточке Lazeika-Only (лимит 200 символов).
 - tc-фильтры занимают ровно pref **11000–11007**; root qdisc и firewall не изменяются.
 - Миграция с v1 (legacy pref 11001–11008): установочный скрипт сам снимает старые префы перед установкой новых.
 - После перезагрузки ноды лимит восстанавливает `lazeika-only-tc.service` (unit содержит set -euo pipefail

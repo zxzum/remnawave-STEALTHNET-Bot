@@ -180,7 +180,7 @@ function createFakeRemna(options: {
 
 function createSshFake(options: { failInstall?: boolean; tcFilesExisted?: string } = {}) {
   const scripts: string[] = [];
-  const ssh = async (_address: string, script: string) => {
+  const ssh = async (_creds: { host: string; user: string; port: number; password: string }, script: string) => {
     scripts.push(script);
     if (script.startsWith("[ -f")) {
       // probe существования tc-файлов до установки
@@ -242,11 +242,22 @@ function fencedDeps(store: ReturnType<typeof createFencedStore>) {
     saveState: store.saveState,
     beginSetup: store.beginSetup,
     casWrite: store.casWrite,
+    loadNotificationSettings: async () => ({
+      messages: [
+        "🔐 Доступ к lazeika.xyz и Telegram",
+        "⏰ Ваша подписка закончилась!",
+        "✅ Доступ сохранён в режиме продления!",
+      ],
+      profileName: "Lazeika-Only — уведомления",
+    }),
   };
 }
 
-const SSH_ENV = { privateKeyPath: "/keys/id_ed25519", user: "root", port: 22, knownHostsFile: "/keys/known_hosts" };
-const SETUP_INPUT = { nodeUuid: NODE_UUID, squadUuid: null as string | null, speedMbit: 5 };
+const SETUP_SSH = { user: "root", port: 22, password: "test-pass" };
+const SETUP_INPUT = {
+  nodeUuid: NODE_UUID, squadUuid: null as string | null, speedMbit: 5, ssh: SETUP_SSH,
+  profileMode: "CLONE" as const,
+};
 
 test("setup from clean state creates exactly one profile, squad, working host and three notifications", async () => {
   const env = createFakeRemna();
@@ -255,7 +266,6 @@ test("setup from clean state creates exactly one profile, squad, working host an
   const service = createLazeikaService({
     remna: env.remna,
     ssh: sshf.ssh,
-    sshEnvLoader: () => SSH_ENV,
     ...fencedDeps(store),
     persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
@@ -270,7 +280,7 @@ test("setup from clean state creates exactly one profile, squad, working host an
   assert.match(env.state.profiles[1].name as string, /^Lazeika-Only — Alpha$/);
   assert.equal(env.state.squads.length, 1);
   assert.equal(env.state.squads[0].name, "Lazeika-Only");
-  assert.deepEqual(env.state.squads[0].inbounds, [{ uuid: store.state.managedInboundUuid }]);
+  assert.deepEqual(env.state.squads[0].inbounds, [{ uuid: store.state.managedInboundUuid }, { uuid: store.state.notifInboundUuid }]);
   // нода переключена на managed профиль + managed inbound добавлен к прежним
   assert.equal(env.state.nodes[0].configProfile?.activeConfigProfileUuid, store.state.profileUuid);
   assert.ok(env.state.nodes[0].configProfile?.activeInbounds?.includes(store.state.managedInboundUuid ?? ""));
@@ -278,13 +288,23 @@ test("setup from clean state creates exactly one profile, squad, working host an
   // PATCH ноды уходит во вложенном контракте configProfile (не плоские поля)
   const appliedPatch = env.state.updateNodeBodies.find((b) => b.configProfile && (b.configProfile as { activeConfigProfileUuid?: string }).activeConfigProfileUuid === store.state.profileUuid);
   assert.ok(appliedPatch, "updateNode body must use nested configProfile");
-  assert.deepEqual((appliedPatch!.configProfile as { activeInbounds: string[] }).activeInbounds.sort(), ["inbound-base-uuid", store.state.managedInboundUuid].sort());
+  assert.deepEqual(
+    (appliedPatch!.configProfile as { activeInbounds: string[] }).activeInbounds.sort(),
+    ["inbound-base-uuid", store.state.managedInboundUuid, store.state.notifInboundUuid!].sort(),
+  );
   const lazeikaHosts = env.state.hosts.filter((h) => (h.tags as string[])?.includes("LAZEIKA_ONLY"));
   assert.equal(lazeikaHosts.length, 4);
-  assert.equal(lazeikaHosts.filter((h) => h.isDisabled).length, 3);
-  const notifications = lazeikaHosts.filter((h) => h.isDisabled);
-  assert.deepEqual(notifications.map((h) => h.remark).sort(), [...NOTIFICATION_REMARKS].sort());
+  // Fake-hosts ВИДИМЫ в подписке (isDisabled=false), адреса нерабочие.
+  assert.equal(lazeikaHosts.filter((h) => !h.isDisabled).length, 4);
+  const notifications = (lazeikaHosts as Array<{ tags?: string[]; remark?: string; address?: string; inbound?: Record<string, string>; isDisabled?: boolean }>).filter((h) => h.tags?.includes("LAZEIKA_ONLY_NOTIFICATION"));
+  assert.equal(notifications.length, 3);
+  assert.deepEqual(notifications.map((h) => h.remark).sort(), [
+    "🔐 Доступ к lazeika.xyz и Telegram",
+    "⏰ Ваша подписка закончилась!",
+    "✅ Доступ сохранён в режиме продления!",
+  ].sort());
   assert.ok(notifications.every((h) => String(h.address).endsWith(".invalid")));
+  assert.ok(notifications.every((h) => (h.inbound as Record<string, string>)?.configProfileInboundUuid === store.state.notifInboundUuid));
   // рабочий host наследует технические параметры базового и указывает на managed inbound
   const working = lazeikaHosts.find((h) => !h.isDisabled)!;
   assert.equal(working.address, "vpn.example.com");
@@ -300,7 +320,7 @@ test("second setup does not duplicate resources", async () => {
   const sshf = createSshFake();
   const store = createFencedStore();
   const service = createLazeikaService({
-    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    remna: env.remna, ssh: sshf.ssh,
     ...fencedDeps(store), persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
@@ -327,7 +347,7 @@ test("manual squad containing foreign inbounds is rejected without changes", asy
   });
   const store = createFencedStore();
   const service = createLazeikaService({
-    remna: env.remna, ssh: createSshFake().ssh, sshEnvLoader: () => SSH_ENV,
+    remna: env.remna, ssh: createSshFake().ssh,
     ...fencedDeps(store), persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
@@ -346,7 +366,7 @@ test("rollback restores the node after a Remna profile failure", async () => {
   const env = createFakeRemna({ failCreateProfile: true });
   const store = createFencedStore();
   const service = createLazeikaService({
-    remna: env.remna, ssh: createSshFake().ssh, sshEnvLoader: () => SSH_ENV,
+    remna: env.remna, ssh: createSshFake().ssh,
     ...fencedDeps(store), persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
@@ -365,7 +385,7 @@ test("rollback removes only resources created by the failed run after an SSH fai
   const sshf = createSshFake({ failInstall: true });
   const store = createFencedStore();
   const service = createLazeikaService({
-    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    remna: env.remna, ssh: sshf.ssh,
     ...fencedDeps(store), persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
@@ -374,7 +394,7 @@ test("rollback removes only resources created by the failed run after an SSH fai
   const persistedSquadUuids: Array<string | null> = [];
   // переопределяем сервис с записью persistSquadUuid
   const service2 = createLazeikaService({
-    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    remna: env.remna, ssh: sshf.ssh,
     ...fencedDeps(store),
     persistProfileUuid: async () => {},
     persistSquadUuid: async (uuid) => { persistedSquadUuids.push(uuid); },
@@ -409,7 +429,7 @@ test("auto-created squad uuid is persisted to settings for mergeSquads", async (
   const store = createFencedStore();
   const persisted: Array<string | null> = [];
   const service = createLazeikaService({
-    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    remna: env.remna, ssh: sshf.ssh,
     ...fencedDeps(store),
     persistProfileUuid: async () => {},
     persistSquadUuid: async (uuid) => { persisted.push(uuid); },
@@ -426,7 +446,7 @@ test("reconcile recreates missing hosts without duplicating existing ones", asyn
   const sshf = createSshFake();
   const store = createFencedStore();
   const service = createLazeikaService({
-    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    remna: env.remna, ssh: sshf.ssh,
     ...fencedDeps(store), persistProfileUuid: async () => {},
     persistSquadUuid: async () => {},
     runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
@@ -455,7 +475,7 @@ test("parallel setup is rejected by fresh APPLYING lock of another worker", asyn
     lockedAt: new Date().toISOString(),
   }));
   const service = createLazeikaService({
-    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    remna: env.remna, ssh: sshf.ssh,
     ...fencedDeps(store),
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     persistSetupInputs: async () => {},
@@ -472,7 +492,7 @@ test("node change after READY is rejected with a clear error", async () => {
   const sshf = createSshFake();
   const store = createFencedStore();
   const service = createLazeikaService({
-    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    remna: env.remna, ssh: sshf.ssh,
     ...fencedDeps(store),
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
@@ -497,15 +517,14 @@ test("failed re-setup restores modified existing profile/hosts and reinstalls pr
   let failNow = false;
   const service = createLazeikaService({
     remna: env.remna,
-    ssh: async (addr: string, script: string) => {
-      if (script.startsWith("[ -f")) return sshf.ssh(addr, script); // probe файлов не фейлим
+    ssh: async (creds: { host: string }, script: string) => {
+      if (script.startsWith("[ -f")) return sshf.ssh(creds as never, script);
       if (failNow && script.includes("lazeika-only-tc")) {
         sshf.scripts.push(script);
         return { ok: false, exitCode: 9, stdout: "", stderr: "boom" };
       }
-      return sshf.ssh(addr, script);
+      return sshf.ssh(creds as never, script);
     },
-    sshEnvLoader: () => SSH_ENV,
     ...fencedDeps(store),
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     persistSetupInputs: async () => {},
@@ -579,7 +598,7 @@ test("manual deletion of managed profile recovers from saved base profile", asyn
   const sshf = createSshFake();
   const store = createFencedStore();
   const service = createLazeikaService({
-    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    remna: env.remna, ssh: sshf.ssh,
     ...fencedDeps(store),
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     persistSetupInputs: async () => {},
@@ -602,7 +621,7 @@ test("deleted auto-squad is recreated without duplicates", async () => {
   const sshf = createSshFake();
   const store = createFencedStore();
   const service = createLazeikaService({
-    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    remna: env.remna, ssh: sshf.ssh,
     ...fencedDeps(store),
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     persistSetupInputs: async () => {},
@@ -624,7 +643,7 @@ test("stale worker cannot overwrite READY/ERROR written by the new worker (servi
   const store = createFencedStore();
   // Воркер B успешно настраивает всё.
   const serviceB = createLazeikaService({
-    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    remna: env.remna, ssh: sshf.ssh,
     ...fencedDeps(store),
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     persistSetupInputs: async () => {},
@@ -638,11 +657,11 @@ test("stale worker cannot overwrite READY/ERROR written by the new worker (servi
   const serviceA = createLazeikaService({
     remna: { ...env.remna, createConfigProfile: async () => ({ status: 502, error: "boom" }) },
     ssh: sshf.ssh,
-    sshEnvLoader: () => SSH_ENV,
     loadState: store.loadState,
     saveState: store.saveState,
     beginSetup: async () => staleClaim,
     casWrite: store.casWrite,
+    loadNotificationSettings: async () => ({ messages: ["m1", "m2", "m3"], profileName: "notif" }),
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     persistSetupInputs: async () => {},
     runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
@@ -657,7 +676,7 @@ test("node change from ERROR state with managed traces is rejected", async () =>
   const sshf = createSshFake();
   const store = createFencedStore();
   const service = createLazeikaService({
-    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    remna: env.remna, ssh: sshf.ssh,
     ...fencedDeps(store),
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     persistSetupInputs: async () => {},
@@ -679,7 +698,7 @@ test("reconcile with stale auto-squad uuid in state recreates the squad", async 
   const sshf = createSshFake();
   const store = createFencedStore();
   const service = createLazeikaService({
-    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    remna: env.remna, ssh: sshf.ssh,
     ...fencedDeps(store),
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     persistSetupInputs: async () => {},
@@ -700,7 +719,7 @@ test("remoteInstall has top-level set -euo and verifies systemd enabled", async 
   const sshf = createSshFake();
   const store = createFencedStore();
   const service = createLazeikaService({
-    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
+    remna: env.remna, ssh: sshf.ssh,
     ...fencedDeps(store),
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     persistSetupInputs: async () => {},
@@ -713,21 +732,24 @@ test("remoteInstall has top-level set -euo and verifies systemd enabled", async 
   assert.match(install!, /systemctl is-enabled --quiet lazeika-only-tc\.service \|\| \{ echo UNIT_NOT_ENABLED; exit 1; \}/);
 });
 
-test("reconcile forces notification hosts back to disabled", async () => {
+test("reconcile keeps fake notification hosts visible and rebinds them to notif inbound", async () => {
   const env = createFakeRemna();
   const sshf = createSshFake();
   const store = createFencedStore();
   const service = createLazeikaService({
-    remna: env.remna, ssh: sshf.ssh, sshEnvLoader: () => SSH_ENV,
-    ...fencedDeps(store),
+    remna: env.remna, ssh: sshf.ssh,     ...fencedDeps(store),
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     persistSetupInputs: async () => {},
     runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
   });
   await service.setup(SETUP_INPUT);
-  // Админ вручную включил один notification-host.
-  const notif = env.state.hosts.find((h) => h.isDisabled === true)!;
-  notif.isDisabled = false;
+  // Админ «сломал» один fake-host: включил и отвязал.
+  const notif = (env.state.hosts as Array<{ uuid: string; tags?: string[]; isDisabled?: boolean; inbound?: Record<string, string> | null }>)
+    .find((h) => h.tags?.includes("LAZEIKA_ONLY_NOTIFICATION"))!;
+  notif.isDisabled = true;
+  notif.inbound = null;
   await service.setup(SETUP_INPUT);
-  assert.equal(notif.isDisabled, true, "notification-host принудительно выключен обратно");
+  assert.equal(notif.isDisabled, false, "fake-host остаётся видимым в подписке");
+  const rebound = notif.inbound as Record<string, string> | null;
+  assert.equal(rebound?.configProfileInboundUuid, store.state.notifInboundUuid, "binding восстановлен к notif inbound");
 });

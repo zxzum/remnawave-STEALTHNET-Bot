@@ -430,6 +430,12 @@ export function SettingsPage() {
   const [lazeikaNodes, setLazeikaNodes] = useState<{ uuid: string; name?: string; isDisabled?: boolean }[]>([]);
   const [lazeikaStatus, setLazeikaStatus] = useState<LazeikaOnlyStatus | null>(null);
   const [lazeikaBusy, setLazeikaBusy] = useState<string | null>(null);
+  // SSH-модалка: креды живут только в памяти формы (§4 ТЗ).
+  const [lazeikaSshOpen, setLazeikaSshOpen] = useState(false);
+  const [lazeikaSshUser, setLazeikaSshUser] = useState("root");
+  const [lazeikaSshPort, setLazeikaSshPort] = useState(22);
+  const [lazeikaSshPassword, setLazeikaSshPassword] = useState("");
+  const [lazeikaPendingAction, setLazeikaPendingAction] = useState<"setup" | "verify" | "reconcile" | null>(null);
   const [activeTab, setActiveTab] = useState("general");
   const [botSubTab, setBotSubTab] = useState<"menu" | "texts" | "emoji" | "behavior" | "links">("menu");
   const [installedLangCodes, setInstalledLangCodes] = useState<string[]>(FALLBACK_LANGS);
@@ -569,6 +575,10 @@ export function SettingsPage() {
         lazeikaOnlyNodeUuid: (data as AdminSettings).lazeikaOnlyNodeUuid ?? null,
         lazeikaOnlySquadUuid: (data as AdminSettings).lazeikaOnlySquadUuid ?? null,
         lazeikaOnlyMessageTemplate: (data as AdminSettings).lazeikaOnlyMessageTemplate ?? "",
+        lazeikaOnlyNotificationMessage1: (data as AdminSettings).lazeikaOnlyNotificationMessage1 ?? "",
+        lazeikaOnlyNotificationMessage2: (data as AdminSettings).lazeikaOnlyNotificationMessage2 ?? "",
+        lazeikaOnlyNotificationMessage3: (data as AdminSettings).lazeikaOnlyNotificationMessage3 ?? "",
+        lazeikaOnlyNotificationProfileName: (data as AdminSettings).lazeikaOnlyNotificationProfileName ?? "",
       });
     }).finally(() => setLoading(false));
     api.getAutoRenewStats(token).then(setAutoRenewStats).catch(() => {});
@@ -656,8 +666,26 @@ export function SettingsPage() {
     api.getLazeikaOnlyStatus(token).then(setLazeikaStatus).catch(() => setLazeikaStatus(null));
   }, [token]);
 
-  async function runLazeikaAction(kind: "setup" | "verify" | "reconcile" | "disable") {
+  function runLazeikaAction(kind: "setup" | "verify" | "reconcile" | "disable") {
+    if (kind === "disable") {
+      void confirmLazeikaAction("disable");
+      return;
+    }
+    setLazeikaPendingAction(kind);
+    setLazeikaSshPassword("");
+    setLazeikaSshOpen(true);
+  }
+
+  async function confirmLazeikaAction(kind: "setup" | "verify" | "reconcile" | "disable") {
     if (!settings) return;
+    if (kind !== "disable" && (!lazeikaSshUser.trim() || !lazeikaSshPort || !lazeikaSshPassword)) {
+      setMessage("Заполните SSH user, port и password");
+      return;
+    }
+    const ssh = { user: lazeikaSshUser.trim(), port: lazeikaSshPort, password: lazeikaSshPassword };
+    setLazeikaSshOpen(false);
+    // Пароль очищается сразу после отправки.
+    setLazeikaSshPassword("");
     setLazeikaBusy(kind);
     try {
       if (kind === "setup") {
@@ -669,17 +697,19 @@ export function SettingsPage() {
           nodeUuid: settings.lazeikaOnlyNodeUuid,
           squadUuid: settings.lazeikaOnlySquadUuid || null,
           speedMbit: settings.lazeikaOnlySpeedMbit ?? 5,
+          profileMode: "IN_PLACE",
+          ssh,
         });
         if (!res.ok) throw new Error(res.error ?? "Не удалось настроить инфраструктуру");
         setMessage("Инфраструктура Lazeika-Only готова");
       } else if (kind === "verify") {
-        const res = await api.lazeikaOnlyVerify(token);
+        const res = await api.lazeikaOnlyVerify(token, ssh);
         const failed = res.checks.filter((c) => !c.ok);
         setMessage(res.ok
           ? `Проверка пройдена (${res.checks.length} проверок)`
           : `Проблемы: ${failed.map((c) => c.name).join(", ")}`);
       } else if (kind === "reconcile") {
-        const res = await api.lazeikaOnlyReconcile(token);
+        const res = await api.lazeikaOnlyReconcile(token, ssh);
         if (!res.ok) throw new Error(res.error ?? "Reconcile не удался");
         setMessage("Ресурсы Lazeika-Only приведены к сохранённому состоянию");
       } else {
@@ -1030,6 +1060,10 @@ export function SettingsPage() {
         lazeikaOnlyNodeUuid: settings.lazeikaOnlyNodeUuid || null,
         lazeikaOnlySquadUuid: settings.lazeikaOnlySquadUuid?.trim() || null,
         lazeikaOnlyMessageTemplate: settings.lazeikaOnlyMessageTemplate?.trim() || null,
+        lazeikaOnlyNotificationMessage1: settings.lazeikaOnlyNotificationMessage1?.trim() || null,
+        lazeikaOnlyNotificationMessage2: settings.lazeikaOnlyNotificationMessage2?.trim() || null,
+        lazeikaOnlyNotificationMessage3: settings.lazeikaOnlyNotificationMessage3?.trim() || null,
+        lazeikaOnlyNotificationProfileName: settings.lazeikaOnlyNotificationProfileName?.trim() || null,
         customBuildEnabled: settings.customBuildEnabled ?? false,
         customBuildPricePerDay: settings.customBuildPricePerDay ?? 0,
         customBuildPricePerDevice: settings.customBuildPricePerDevice ?? 0,
@@ -1781,6 +1815,57 @@ export function SettingsPage() {
                 </div>
 
                 {message && <p className="text-sm text-muted-foreground">{message}</p>}
+
+      {/* SSH credentials modal (Lazeika-Only) */}
+      {lazeikaSshOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setLazeikaSshOpen(false)}>
+          <div className="w-full max-w-md rounded-xl bg-background p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-1 text-lg font-semibold">SSH-доступ к ноде</h3>
+            <p className="mb-4 text-xs text-muted-foreground">
+              Пароль используется только для этой операции, не сохраняется и не логируется.
+            </p>
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label htmlFor="lazeika-ssh-user">SSH user</Label>
+                  <Input id="lazeika-ssh-user" value={lazeikaSshUser} onChange={(e) => setLazeikaSshUser(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="lazeika-ssh-port">SSH port</Label>
+                  <Input
+                    id="lazeika-ssh-port"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={lazeikaSshPort}
+                    onChange={(e) => setLazeikaSshPort(Number(e.target.value) || 22)}
+                  />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="lazeika-ssh-password">SSH password</Label>
+                <Input
+                  id="lazeika-ssh-password"
+                  type="password"
+                  value={lazeikaSshPassword}
+                  autoComplete="off"
+                  onChange={(e) => setLazeikaSshPassword(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setLazeikaSshOpen(false)}>Отмена</Button>
+              <Button
+                size="sm"
+                disabled={!lazeikaSshPassword || lazeikaBusy !== null}
+                onClick={() => { void confirmLazeikaAction(lazeikaPendingAction ?? "setup"); }}
+              >
+                Выполнить
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
                 <Button type="submit" disabled={saving}>
                   {saving ? t("admin.settings.saving") : t("admin.settings.save")}
                 </Button>
@@ -5689,18 +5774,33 @@ export function SettingsPage() {
                     </p>
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="lazeika-only-template">Сообщение пользователю ({"{count}"} = осталось дней)</Label>
-                  <textarea
-                    id="lazeika-only-template"
-                    rows={4}
-                    value={settings.lazeikaOnlyMessageTemplate ?? ""}
-                    onChange={(e) => setSettings((s) => s ? { ...s, lazeikaOnlyMessageTemplate: e.target.value } : s)}
-                    className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
-                  />
-                  <p className="text-xs text-muted-foreground whitespace-pre-line">
-                    Предпросмотр: {(settings.lazeikaOnlyMessageTemplate ?? "").replace(/\{count\}/g, String(settings.lazeikaOnlyDays ?? 7))}
-                  </p>
+                <div className="grid grid-cols-1 gap-4">
+                  {[1, 2, 3].map((n) => {
+                    const key = `lazeikaOnlyNotificationMessage${n}` as keyof AdminSettings;
+                    const val = (settings[key] as string | null) ?? "";
+                    return (
+                      <div key={n} className="space-y-1">
+                        <Label htmlFor={`lazeika-msg-${n}`}>Сообщение fake-host №{n}</Label>
+                        <Input
+                          id={`lazeika-msg-${n}`}
+                          value={val}
+                          maxLength={200}
+                          onChange={(e) => setSettings((s) => (s ? { ...s, [key]: e.target.value } as AdminSettings : s))}
+                        />
+                        <p className="text-xs text-muted-foreground">{val.length}/200 символов</p>
+                      </div>
+                    );
+                  })}
+                  <div className="space-y-1">
+                    <Label htmlFor="lazeika-notif-profile-name">Название профиля уведомлений</Label>
+                    <Input
+                      id="lazeika-notif-profile-name"
+                      value={settings.lazeikaOnlyNotificationProfileName ?? ""}
+                      maxLength={120}
+                      onChange={(e) => setSettings((s) => s ? { ...s, lazeikaOnlyNotificationProfileName: e.target.value } : s)}
+                    />
+                    <p className="text-xs text-muted-foreground">{(settings.lazeikaOnlyNotificationProfileName ?? "").length}/120</p>
+                  </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <Button type="button" variant="outline" size="sm" disabled={lazeikaBusy !== null} onClick={() => runLazeikaAction("setup")}>
@@ -5717,9 +5817,6 @@ export function SettingsPage() {
                       Выключить режим
                     </Button>
                   )}
-                  <a href="/admin/remna-hosts?tag=LAZEIKA_ONLY" className="text-sm underline text-muted-foreground hover:text-foreground ml-auto">
-                    Редактировать hosts уведомления
-                  </a>
                 </div>
                 {lazeikaStatus && (
                   <div className="rounded-lg border bg-background/40 p-3 text-xs space-y-1">

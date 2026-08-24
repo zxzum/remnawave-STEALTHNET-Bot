@@ -76,6 +76,10 @@ const DEFAULTS: Array<[string, string]> = [
   ["lazeika_only_enabled", "false"],
   ["lazeika_only_days", "7"],
   ["lazeika_only_speed_mbit", "5"],
+  ["lazeika_only_notification_message_1", "🔐 Доступ к lazeika.xyz и Telegram"],
+  ["lazeika_only_notification_message_2", "⏰ Ваша подписка закончилась!"],
+  ["lazeika_only_notification_message_3", "✅ Доступ сохранён в режиме продления!"],
+  ["lazeika_only_notification_profile_name", "Lazeika-Only — уведомления"],
   [
     "lazeika_only_message_template",
     "🔐 Доступ к lazeika.xyz и Telegram\n\n⏰ Ваша подписка закончилась!\n✅ Доступ сохранён ещё на {count} дней!\n💳 Продлите подписку, чтобы пользоваться всеми сервисами!",
