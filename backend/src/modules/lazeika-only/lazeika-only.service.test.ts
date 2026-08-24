@@ -242,6 +242,7 @@ function fencedDeps(store: ReturnType<typeof createFencedStore>) {
     saveState: store.saveState,
     beginSetup: store.beginSetup,
     casWrite: store.casWrite,
+    readStateRaw: async () => store.rawValue,
     loadNotificationSettings: async () => ({
       messages: [
         "🔐 Доступ к lazeika.xyz и Telegram",
@@ -661,14 +662,16 @@ test("stale worker cannot overwrite READY/ERROR written by the new worker (servi
     saveState: store.saveState,
     beginSetup: async () => staleClaim,
     casWrite: store.casWrite,
+    readStateRaw: async () => store.rawValue,
     loadNotificationSettings: async () => ({ messages: ["m1", "m2", "m3"], profileName: "notif" }),
     persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
     persistSetupInputs: async () => {},
     runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
   });
-  await assert.rejects(() => serviceA.setup(SETUP_INPUT), /boom/);
-  // ERROR воркера A не перезаписал READY воркера B.
+  // A выбывает на первом heartbeat с LOCK_LOST, не создав НИЧЕГО и не тронув READY воркера B.
+  await assert.rejects(() => serviceA.setup(SETUP_INPUT), /LOCK_LOST: lease потерян/);
   assert.equal(store.state.status, "READY");
+  assert.equal(env.state.profiles.filter((pl) => String(pl.name ?? "").startsWith("Lazeika-Only")).length, 1);
 });
 
 test("node change from ERROR state with managed traces is rejected", async () => {
@@ -712,6 +715,23 @@ test("reconcile with stale auto-squad uuid in state recreates the squad", async 
   const squads = env.state.squads.filter((sq) => sq.name === "Lazeika-Only");
   assert.equal(squads.length, 1);
   assert.notEqual(store.state.squadUuid, oldSquadUuid);
+
+  // Пустой accessible-nodes НЕ считается успехом (§7 ревью).
+  env.state.squads = []; // чистый лист для строгого под-теста
+  const serviceStrict = createLazeikaService({
+    remna: { ...env.remna, getSquadAccessibleNodeUuids: async () => ({ data: [], error: undefined }) },
+    ssh: sshf.ssh,
+    ...fencedDeps(store),
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    persistSetupInputs: async () => {},
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
+  });
+  store.setRaw(JSON.stringify({ ...resourceStateSchema.parse({}), status: "READY", nodeUuid: NODE_UUID }));
+  delete (serviceStrict as unknown as Record<string, unknown>).noop;
+  await assert.rejects(
+    () => serviceStrict.setup({ ...SETUP_INPUT, squadUuid: null }),
+    /ровно на выбранной ноде/,
+  );
 });
 
 test("remoteInstall has top-level set -euo and verifies systemd enabled", async () => {
@@ -752,4 +772,78 @@ test("reconcile keeps fake notification hosts visible and rebinds them to notif 
   assert.equal(notif.isDisabled, false, "fake-host остаётся видимым в подписке");
   const rebound = notif.inbound as Record<string, string> | null;
   assert.equal(rebound?.configProfileInboundUuid, store.state.notifInboundUuid, "binding восстановлен к notif inbound");
+});
+
+test("IN_PLACE drift: admin switched node active profile -> setup rejects without mutations", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  const service = createLazeikaService({
+    remna: env.remna, ssh: sshf.ssh,
+    ...fencedDeps(store),
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    persistSetupInputs: async () => {},
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
+  });
+  // Первый setup в IN_PLACE: profileUuid == активный профиль ноды.
+  await service.setup({ ...SETUP_INPUT, profileMode: "IN_PLACE" });
+  assert.equal(env.state.nodes[0].configProfile?.activeConfigProfileUuid, store.state.profileUuid);
+  // Админ вручную переключил ноду на ДРУГОЙ (сторонний) профиль.
+  env.state.profiles.push({
+    uuid: "77777777-7777-4777-8777-777777777777",
+    name: "Other",
+    config: { inbounds: [baseInbound], outbounds: [{ protocol: "blackhole", tag: "BLOCK" }], routing: { rules: [] } },
+    inbounds: [{ uuid: "inbound-other-uuid", tag: baseInbound.tag, port: 443 }],
+  });
+  env.state.nodes[0].configProfile!.activeConfigProfileUuid = "77777777-7777-4777-8777-777777777777";
+  const profilesBefore = env.state.profiles.length;
+  await assert.rejects(
+    () => service.setup({ ...SETUP_INPUT, profileMode: "IN_PLACE" }),
+    /изменён вручную|reset-state/,
+  );
+  // Мутаций не было.
+  assert.equal(env.state.profiles.length, profilesBefore);
+});
+
+test("SSH preflight runs BEFORE any Remnawave mutation", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  let sshCalls = 0;
+  const service = createLazeikaService({
+    remna: {
+      ...env.remna,
+      updateConfigProfile: async (body: { uuid: string; name?: string; config?: unknown }) => {
+        assert.ok(sshCalls >= 1, "preflight должен выполниться до первой мутации профиля");
+        return env.remna.updateConfigProfile(body);
+      },
+    },
+    ssh: async (_creds, script) => { sshCalls++; return sshf.ssh({ host: "x" } as never, script); },
+    ...fencedDeps(store),
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    persistSetupInputs: async () => {},
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
+  });
+  await service.setup(SETUP_INPUT);
+  assert.ok(sshCalls >= 1);
+});
+
+test("notification fake-hosts are created with numeric notif port (not null)", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  const service = createLazeikaService({
+    remna: env.remna, ssh: sshf.ssh,
+    ...fencedDeps(store),
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    persistSetupInputs: async () => {},
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
+  });
+  await service.setup(SETUP_INPUT);
+  const notifications = (env.state.hosts as Array<{ tags?: string[]; port?: number | null }>)
+    .filter((h) => h.tags?.includes("LAZEIKA_ONLY_NOTIFICATION"));
+  assert.equal(notifications.length, 3);
+  for (const h of notifications) {
+    assert.equal(typeof h.port, "number", `port обязателен (${h.port})`);
+  }
 });

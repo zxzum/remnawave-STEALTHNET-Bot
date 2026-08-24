@@ -349,7 +349,11 @@ async function request<T>(
   }
 
   if (!res.ok) {
-    const message = (data as { message?: string })?.message ?? res.statusText;
+    // Backend-роуты могут возвращать как message, так и error (lazeika-only и др.).
+    const message =
+      (data as { message?: string })?.message ??
+      (data as { error?: string })?.error ??
+      res.statusText;
     throw new ApiError(message, res.status, data);
   }
   return data as T;
@@ -3785,6 +3789,7 @@ export interface LazeikaOnlyStatus {
     messageTemplate: string;
   };
   state: LazeikaOnlyResourceState;
+  settingsInSync?: boolean;
   workingHost: { uuid?: string; remark?: string; address?: string; isDisabled?: boolean } | null;
   notificationHosts: Array<{ uuid?: string; remark?: string; address?: string; isDisabled?: boolean }>;
 }
@@ -4068,6 +4073,9 @@ export interface RemnaUserUsageResponse {
 
 export interface AdminSettings {
   allowUserThemeChange?: boolean;
+  lazeikaOnlyProfileMode?: "IN_PLACE" | "CLONE";
+  lazeikaOnlySettingsInSync?: boolean;
+
   lazeikaOnlyNotificationMessage1?: string | null;
   lazeikaOnlyNotificationMessage2?: string | null;
   lazeikaOnlyNotificationMessage3?: string | null;

@@ -26,6 +26,7 @@ const setupSchema = z.object({
   nodeUuid: z.string().uuid(),
   squadUuid: z.string().uuid().nullable().optional(),
   speedMbit: z.number().int().min(1).max(1000).optional(),
+  profileMode: z.enum(["IN_PLACE", "CLONE"]).default("IN_PLACE"),
   ssh: sshSchema,
 });
 const verifySchema = z.object({ ssh: sshSchema });
@@ -210,7 +211,7 @@ lazeikaOnlyRouter.post("/reset-state", async (_req: Request, res: Response) => {
     create: { key: "lazeika_only_resource_state", value },
     update: { value },
   });
-  for (const key of ["lazeika_only_profile_uuid", "lazeika_only_squad_uuid", "lazeika_only_node_uuid"]) {
+  for (const key of ["lazeika_only_profile_uuid", "lazeika_only_squad_uuid", "lazeika_only_node_uuid", "expired_grace_squad_uuid"]) {
     await prisma.systemSetting.upsert({
       where: { key },
       create: { key, value: "" },

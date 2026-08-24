@@ -44,3 +44,19 @@ test("safeSshErrorMessage strips secret-like lines and truncates", () => {
   assert.ok(!msg.includes("hunter2"));
   assert.ok(msg.includes("normal line"));
 });
+
+test("known_hosts: hashed entry for [host]:non-standard-port matches", () => {
+  const host = "example.com";
+  const port = 2222;
+  const alias = `[${host}]:${port}`;
+  const salt = Buffer.from("salty1");
+  // Валидный ключ из случайных байт — чтобы base64 round-trip был стабильным.
+  const keyB64 = Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1)).toString("base64");
+  const hash = createHmac("sha1", salt).update(alias).digest().toString("base64");
+  const lines = [`|1|${salt.toString("base64")}|${hash} ssh-ed25519 ${keyB64}`];
+  const matched = matchKnownHostKeys(lines, host, port);
+  assert.equal(matched.length, 1);
+  assert.equal(matched[0]!.keyBase64, keyB64);
+  // И строгая проверка проходит с декодированным ключом.
+  checkHostKey(lines.join("\n"), host, port, Buffer.from(keyB64, "base64"));
+});

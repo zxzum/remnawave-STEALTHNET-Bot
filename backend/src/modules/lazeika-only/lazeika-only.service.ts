@@ -20,7 +20,7 @@ import {
 } from "./lazeika-only.config.js";
 import { applyLazeikaToConfig, buildManagedInbound, managedInboundTag, pickManagedPort, type XrayConfig } from "./xray-rules.js";
 import { buildTcScript, buildTcUnit, expectedFilterSpecs, ownedPrefs, TC_POLICE_INDEX_EGRESS, TC_POLICE_INDEX_INGRESS, TC_PREF_BASE, TC_PREF_COUNT, TC_SCRIPT_PATH, TC_UNIT_NAME, validatePort, validateSpeed } from "./tc-script.js";
-import { runSsh, type SshCredentials, type SshResult } from "./ssh.executor.js";
+import { runSsh, safeSshErrorMessage as safeSsh, type SshCredentials, type SshResult } from "./ssh.executor.js";
 
 export type RemnaResult = { data?: unknown; error?: string; status: number };
 
@@ -176,6 +176,8 @@ export type LazeikaServiceDependencies = {
   beginSetup?: () => Promise<{ claimed: boolean; token?: string; raw?: string }>;
   /** Fenced запись: атомарный CAS от ожидаемого raw к новому состоянию (fencing, §2 финала). */
   casWrite?: (expectedRaw: string, nextState: LazeikaResourceState) => Promise<{ ok: boolean; raw: string }>;
+  /** Сырое чтение состояния — для heartbeat/lease-проверок владельца лока. */
+  readStateRaw?: () => Promise<string>;
   /** Сообщения notification-host + имя notification-профиля из настроек. */
   loadNotificationSettings?: () => Promise<{ messages: string[]; profileName: string }>;
   /** Атомарная фиксация входных настроек (нода/squad/скорость) в одной транзакции с READY. */
@@ -235,6 +237,11 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     },
     casWrite = async (expectedRaw: string, nextState: LazeikaResourceState) =>
       casUpdateResourceState(expectedRaw, nextState),
+    readStateRaw = async () => {
+      const { prisma } = await import("../../db.js");
+      const row = await prisma.systemSetting.findUnique({ where: { key: LAZEIKA_STATE_KEY } });
+      return row?.value ?? "";
+    },
     loadNotificationSettings = async () => {
       const { getLazeikaConfig } = await import("./lazeika-only.config.js");
       const cfg = await getLazeikaConfig();
@@ -367,9 +374,31 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     // Работаем строго от raw, захваченного claim'ом: каждая запись — атомарный CAS.
     // Потеря лока (другой воркер перезахватил) ⇒ LOCK_LOST и немедленный выход без
     // каких-либо компенсаций над чужими ресурсами (§2 финала).
+    const lockToken = claim.token ?? "";
     state = parseResourceState(claim.raw!);
     let stateRaw = claim.raw!;
     let lockLost = false;
+    /**
+     * Проверка владения lease + продление (lockedAt=now). Вызывается перед каждой
+     * внешней мутацией и после длинных SSH-шагов: протухший/перехваченный лок ⇒
+     * немедленный выход без изменений чужой инфраструктуры (§5 финального ревью).
+     */
+    const heartbeat = async (): Promise<void> => {
+      const rawNow = await readStateRaw();
+      let parsed: Record<string, unknown> = {};
+      try { parsed = JSON.parse(rawNow) as Record<string, unknown>; } catch { /* пусто */ }
+      if (parsed.lockToken !== lockToken || parsed.status !== "APPLYING") {
+        lockLost = true;
+        throw new SetupError("LOCK_LOST: lease потерян — другим процессом выполнен перезахват", "LOCK");
+      }
+      parsed.lockedAt = new Date().toISOString();
+      const res = await casWrite(rawNow, resourceStateSchema.parse(parsed));
+      if (!res.ok) {
+        lockLost = true;
+        throw new SetupError("LOCK_LOST: не удалось продлить lease", "LOCK");
+      }
+      stateRaw = res.raw;
+    };
     const fencedSave = async (): Promise<void> => {
       const res = await casWrite(stateRaw, state);
       if (!res.ok) {
@@ -410,6 +439,29 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       }
       if (!baseProfile?.config) throw new SetupError("Не удалось получить активный config-профиль ноды", "VALIDATION");
 
+      // Drift-guard (§6 финального ревью): в IN_PLACE активный профиль ноды обязан совпадать
+      // с сохранённым managed-профилем, иначе смешаются инбаунды старого и нового профилей.
+      if (
+        state.profileMode === "IN_PLACE"
+        && state.profileUuid
+        && nodeActiveProfileUuid(node) !== state.profileUuid
+      ) {
+        throw new SetupError(
+          "Активный профиль ноды изменён вручную и не совпадает с настроенным. Выполните reconcile после возврата профиля или POST /admin/lazeika-only/reset-state",
+          "VALIDATION",
+        );
+      }
+
+      // ── SSH preflight ДО любых мутаций Remnawave (§4 финального ревью) ──
+      await ssh(sshCreds!, "true").then((r) => {
+        if (!r.ok) {
+          throw new SetupError(
+            `SSH preflight failed (exit ${r.exitCode}): ${safeSsh(r.stderr)}`,
+            "SSH_TC",
+          );
+        }
+      });
+
       // ── Squad: ручной UUID либо авто-поиск по имени ──
       let squadUuid = input.squadUuid ?? state.squadUuid ?? null;
       let squadSource: "AUTO" | "MANUAL" = input.squadUuid ? "MANUAL" : state.squadSource;
@@ -444,6 +496,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       if (updatingExisting) {
         profileSnapshot = { uuid: managedProfile!.uuid!, name: managedProfile!.name, config: managedProfile!.config };
       }
+      await heartbeat();
       if (managedProfile?.uuid && (profileMode === "IN_PLACE" || state.profileUuid === managedProfile.uuid)) {
         await requireOk(
           await remna.updateConfigProfile({
@@ -505,6 +558,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
             { inboundTag: [notifTag], network: "tcp,udp", outboundTag: "BLOCK" },
           ];
         }
+      await heartbeat();
         await requireOk(
           await remna.updateConfigProfile({ uuid: managedProfileUuid, config: cfgNotif }),
           "PROFILE",
@@ -523,6 +577,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       const targetActiveProfileUuid = profileMode === "IN_PLACE"
         ? (nodeActiveProfileUuid(node) ?? managedProfileUuid)
         : managedProfileUuid;
+      await heartbeat();
       await requireOk(
         await remna.updateNode({
           uuid: input.nodeUuid,
@@ -537,6 +592,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       nodeChanged = true;
 
       // ── Squad: создать при отсутствии / привязать только managed inbound (§7.3) ──
+      await heartbeat();
       if (!squadUuid) {
         const raw = await requireOk(
           await remna.createInternalSquad({ name: LAZEIKA_SQUAD_NAME, inbounds: [managedInboundUuid, state.notifInboundUuid!] }),
@@ -553,6 +609,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         if (!squad && squadSource === "AUTO") {
           // Авто-squad удалён админом (в т.ч. через reconcile со старым UUID из
           // настроек) → создаём заново без дублей (§10 финала, §2 ревью).
+          await heartbeat();
           const rawNew = await requireOk(
             await remna.createInternalSquad({ name: LAZEIKA_SQUAD_NAME, inbounds: [managedInboundUuid, state.notifInboundUuid!] }),
             "SQUAD",
@@ -584,10 +641,17 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       if (accessible.error) {
         throw new SetupError(`Не удалось проверить ноды squad: ${accessible.error}`, "SQUAD");
       }
-      const extra = (accessible.data ?? []).filter((u) => u !== input.nodeUuid);
-      if (extra.length > 0) throw new SetupError(`Squad доступен на лишних нодах: ${extra.join(", ")}`, "SQUAD");
+      const nodesAcc = accessible.data ?? [];
+      // Требование режима: squad доступен РОВНО на выбранной ноде (§7 финального ревью).
+      if (nodesAcc.length !== 1 || nodesAcc[0] !== input.nodeUuid) {
+        throw new SetupError(
+          `Squad должен быть доступен ровно на выбранной ноде; фактически: ${nodesAcc.length ? nodesAcc.join(", ") : "ни одной"}`,
+          "SQUAD",
+        );
+      }
 
       // ── Hosts: 1 РАБОЧИЙ (managed inbound) + 3 FAKE notification (.invalid) ──
+      await heartbeat();
       const hosts = await fetchHosts();
       // Технический шаблон берём из рабочего host'а ИСХОДНОГО профиля (в CLONE это база).
       const templateProfileUuid = profileMode === "CLONE" ? (baseProfile.uuid ?? null) : managedProfileUuid;
@@ -626,6 +690,12 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         if (baseTemplate?.sni) body.sni = baseTemplate.sni;
         if (baseTemplate?.host) body.host = baseTemplate.host;
         if (baseTemplate?.path) body.path = baseTemplate.path;
+        // REALITY/TLS параметры — иначе рабочий host может стать нерабочим (§P2 ревью).
+        const tplAny = baseTemplate as Record<string, unknown> | null;
+        for (const k of ["securityLayer", "alpn", "fingerprint", "pbk", "sid", "headerType"]) {
+          const v = tplAny?.[k];
+          if (v !== undefined && v !== null && v !== "") body[k] = v;
+        }
         const raw = await requireOk(await remna.createHost(body), "HOSTS");
         const uuid = ((unwrap(raw) ?? raw) as HostShape)?.uuid ?? null;
         if (!uuid) throw new SetupError("Remnawave не вернул UUID рабочего host", "HOSTS");
@@ -662,7 +732,8 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
           await remna.createHost({
             remark: notificationMessages[i],
             address: `notification-${i + 1}.lazeika.invalid`,
-            port: null,
+            // Контракт Remnawave требует число; используем порт notification-inbound'а.
+            port: notifPort,
             isDisabled: false,
             inbound: notifBinding,
             tags: [LAZEIKA_HOST_TAG, LAZEIKA_NOTIFICATION_HOST_TAG],
@@ -675,7 +746,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         state.notificationHostUuids = [...state.notificationHostUuids.filter((u) => u !== uuid), uuid];
       }
 
-      // ── SSH / tc (§7.5) ──
+      // ── SSH / tc (§7.5): heartbeat после сетевого детекта и перед install ──
       const detectScript = [
         'IF="$(ip -o route show default 2>/dev/null | awk \'{print $5}\' | head -1)"',
         '[ -n "$IF" ] || exit 3',
@@ -738,6 +809,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
 
       // Скрипт содержит set -euo pipefail и самопроверку всех 8 pref'ов + обоих
       // общих police actions + enabled unit — любая ошибка ⇒ ненулевой exit (§6 финала).
+      await heartbeat();
       const remoteInstall = [
         // Верхнеуровневый fail-fast: ЛЮБАЯ ошибка (heredoc/chmod/systemctl/скрипт)
         // ⇒ ненулевой exit всего install-скрипта (§3 финального ревью).
@@ -766,16 +838,18 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       // ── Готово: READY + фиксация входных настроек АТОМАРНО (§5 ревью) ──
       state.createdResourceUuids = [];
       state.lastVerifiedAt = new Date().toISOString();
-      state.status = "READY";
-      state.lockToken = null;
-      state.lockedAt = null;
-      await fencedSave();
+      // Сначала НАСТРОЙКИ в транзакции, затем fenced READY — crash между ними оставит
+      // перезахватываемый APPLYING, но не «READY без сохранённых ноды/squad/speed».
       await runAtomic(async (tx) => {
         await persistProfileUuid(managedProfileUuid, tx);
         // Авто-созданный squad попадает в настройки: mergeSquads читает ключ (§4.4.3).
         await persistSquadUuid(squadUuid, tx);
         await persistSetupInputs?.({ nodeUuid: input.nodeUuid, squadUuid, speedMbit: speed }, tx);
       });
+      state.status = "READY";
+      state.lockToken = null;
+      state.lockedAt = null;
+      await fencedSave();
       {
         const { invalidateSystemConfigCache } = await import("../client/client.service.js");
         invalidateSystemConfigCache();
@@ -791,6 +865,8 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       }
       // Компенсирующий rollback (§7.6): только ресурсы, созданные текущим запуском.
       try {
+        // Не трогаем чужие ресурсы, если lease уже перехвачен другим воркером.
+        await heartbeat();
         if (nodeChanged && state.previousNodeConfig) {
           await remna.updateNode({
             uuid: input.nodeUuid,
@@ -944,6 +1020,13 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       Array.isArray(r.domain) && (r.domain as string[]).includes("domain:lazeika.xyz") && r.outboundTag === "DIRECT");
     const hasBlockCatchAll = Boolean(blockTag) && managedRules.some((r) =>
       r.outboundTag === blockTag && r.network === "tcp,udp");
+    const notifBlockOk = ((profile?.config?.routing?.rules ?? []) as Array<Record<string, unknown>>).some(
+      (r) => Array.isArray(r.inboundTag)
+        && (r.inboundTag as string[]).includes(state.notifInboundTag ?? "")
+        && r.network === "tcp,udp"
+        && r.outboundTag === "BLOCK",
+    );
+    add("notif_routing_block", notifBlockOk, notifBlockOk ? undefined : "нет BLOCK-правила для notification inbound");
     const noStale = managedRules.length === 3;
     add(
       "routing_rules",
@@ -963,7 +1046,16 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       const ids = (squad?.inbounds ?? [])
         .map((ib) => (typeof ib === "string" ? ib : ib?.uuid))
         .filter((u): u is string => !!u);
-      add("squad_inbounds_only_managed", ids.length === 1 && ids[0] === state.managedInboundUuid, ids.join(","));
+      // Допустимый набор ровно из двух наших inbound'ов: managed + notification.
+      const expectedSet = [state.managedInboundUuid, state.notifInboundUuid].filter((u): u is string => Boolean(u)).sort();
+      const actualSet = [...new Set(ids)].sort();
+      const sameSet = expectedSet.length === actualSet.length
+        && expectedSet.every((u, i) => actualSet[i] === u);
+      add(
+        "squad_inbounds_only_managed",
+        sameSet,
+        sameSet ? undefined : `фактические inbound'ы: ${ids.join(",") || "нет"}`,
+      );
     } catch (e) { add("squad", false, e instanceof Error ? e.message : String(e)); }
     if (state.squadUuid) {
       const acc = await remna.getSquadAccessibleNodeUuids(state.squadUuid).catch(() => ({ error: "accessible-nodes недоступен" }) as { data?: string[]; error?: string });
@@ -1002,7 +1094,10 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     if (state.nodeUuid) {
       const node = (await fetchNodes().catch(() => [])).find((n) => n.uuid === state.nodeUuid);
       add("node_profile", node ? nodeActiveProfileUuid(node) === state.profileUuid : false);
-      add("node_inbound_active", nodeActiveInboundUuids(node ?? { uuid: "" }).includes(state.managedInboundUuid ?? ""));
+      const nodeInboundsNow = nodeActiveInboundUuids(node ?? { uuid: "" });
+      add("node_inbound_active", nodeInboundsNow.includes(state.managedInboundUuid ?? ""));
+      // Notification-inbound обязан быть активен на выбранной ноде и отсутствовать на других.
+      add("node_notif_inbound_active", nodeInboundsNow.includes(state.notifInboundUuid ?? ""));
       if (node?.address && state.managedInboundPort && state.ssh.interface) {
         try {
           // Полный дамп: содержимое КАЖДОГО собственного фильтра + общие actions (§9 финала).

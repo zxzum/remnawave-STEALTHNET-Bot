@@ -697,7 +697,7 @@ export function SettingsPage() {
           nodeUuid: settings.lazeikaOnlyNodeUuid,
           squadUuid: settings.lazeikaOnlySquadUuid || null,
           speedMbit: settings.lazeikaOnlySpeedMbit ?? 5,
-          profileMode: "IN_PLACE",
+          profileMode: (settings.lazeikaOnlyProfileMode as "IN_PLACE" | "CLONE") ?? "IN_PLACE",
           ssh,
         });
         if (!res.ok) throw new Error(res.error ?? "Не удалось настроить инфраструктуру");
@@ -1818,7 +1818,7 @@ export function SettingsPage() {
 
       {/* SSH credentials modal (Lazeika-Only) */}
       {lazeikaSshOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setLazeikaSshOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => { setLazeikaSshPassword(""); setLazeikaSshOpen(false); }}>
           <div className="w-full max-w-md rounded-xl bg-background p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="mb-1 text-lg font-semibold">SSH-доступ к ноде</h3>
             <p className="mb-4 text-xs text-muted-foreground">
@@ -1854,7 +1854,7 @@ export function SettingsPage() {
               </div>
             </div>
             <div className="mt-5 flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setLazeikaSshOpen(false)}>Отмена</Button>
+              <Button variant="outline" size="sm" onClick={() => { setLazeikaSshPassword(""); setLazeikaSshOpen(false); }}>Отмена</Button>
               <Button
                 size="sm"
                 disabled={!lazeikaSshPassword || lazeikaBusy !== null}
@@ -5800,6 +5800,27 @@ export function SettingsPage() {
                       onChange={(e) => setSettings((s) => s ? { ...s, lazeikaOnlyNotificationProfileName: e.target.value } : s)}
                     />
                     <p className="text-xs text-muted-foreground">{(settings.lazeikaOnlyNotificationProfileName ?? "").length}/120</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <Label htmlFor="lazeika-profile-mode">Режим профиля</Label>
+                    <select
+                      id="lazeika-profile-mode"
+                      value={settings.lazeikaOnlyProfileMode ?? "IN_PLACE"}
+                      onChange={(e) => setSettings((st) => st ? { ...st, lazeikaOnlyProfileMode: e.target.value as "IN_PLACE" | "CLONE" } : st)}
+                      className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                    >
+                      <option value="IN_PLACE">IN_PLACE — расширить активный профиль (рекомендуется)</option>
+                      <option value="CLONE">CLONE — отдельная копия профиля</option>
+                    </select>
+                  </div>
+                  <div className="flex items-end">
+                    {lazeikaStatus && !lazeikaStatus.settingsInSync && (
+                      <p className="text-sm text-amber-500">
+                        ⚠ Настройки разошлись с состоянием — выполните «Перенастроить»
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">

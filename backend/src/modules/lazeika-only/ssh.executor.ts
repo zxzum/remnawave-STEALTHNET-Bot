@@ -35,7 +35,11 @@ export function matchKnownHostKeys(lines: string[], host: string, port: number):
         try {
           const salt = Buffer.from(saltB64, "base64");
           const expected = Buffer.from(hashB64, "base64");
-          if (createHmac("sha1", salt).update(host).digest().equals(expected)) return true;
+          // OpenSSH хеширует строку подключения: host для :22, "[host]:port" для нестандартных.
+          const variants = port === 22 ? [host] : [host, `[${host}]:${port}`];
+          for (const v of variants) {
+            if (createHmac("sha1", salt).update(v).digest().equals(expected)) return true;
+          }
         } catch { /* битая запись */ }
       }
       return false;
