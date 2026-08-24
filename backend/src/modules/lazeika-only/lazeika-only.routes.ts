@@ -30,7 +30,8 @@ export const lazeikaSetupSchema = z.object({
   // Режим профиля НЕ принимается: финальный публичный режим — только IN_PLACE (§2 финала).
   ssh: sshSchema,
 });
-const verifySchema = z.object({ ssh: sshSchema });
+/** Экспортировано для route-level тестов (reconcile принимает только SSH). */
+export const lazeikaVerifySchema = z.object({ ssh: sshSchema });
 
 function service() {
   return createLazeikaService({
@@ -86,8 +87,10 @@ lazeikaOnlyRouter.get("/status", async (_req: Request, res: Response) => {
     state,
     /** false → настройки (нода/squad) разошлись с resource_state, нужен reconcile. */
     settingsInSync: config.settingsInSync,
-    workingHost: hosts.find((h) => !h.tags?.includes("LAZEIKA_ONLY_NOTIFICATION")) ?? null,
-    notificationHosts: hosts.filter((h) => h.tags?.includes("LAZEIKA_ONLY_NOTIFICATION")),
+    // Показываем только ПРИНАДЛЕЖАЩИЕ конфигурации host'ы по сохранённым UUID,
+    // не «все с тегом» — чужие host'ы с тем же тегом не наши (§8 ревью).
+    workingHost: hosts.find((h) => h.uuid !== undefined && h.uuid === state.workingHostUuid) ?? null,
+    notificationHosts: hosts.filter((h) => h.uuid !== undefined && state.notificationHostUuids.includes(h.uuid)),
   });
 });
 
@@ -112,7 +115,7 @@ lazeikaOnlyRouter.post("/setup", async (req: Request, res: Response) => {
 });
 
 lazeikaOnlyRouter.post("/verify", async (req: Request, res: Response) => {
-  const parsed = verifySchema.safeParse(req.body ?? {});
+  const parsed = lazeikaVerifySchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     // Без credentials — одна содержательная проверка вместо каскада (§5 ТЗ).
     return res.json({
@@ -132,12 +135,9 @@ lazeikaOnlyRouter.post("/reconcile", async (req: Request, res: Response) => {
   if (!config.lazeikaOnlyNodeUuid) {
     return res.status(400).json({ ok: false, error: "Нода не выбрана в настройках" });
   }
-  const parsed = lazeikaSetupSchema.safeParse({
-    nodeUuid: config.lazeikaOnlyNodeUuid,
-    squadUuid: null,
-    speedMbit: config.lazeikaOnlySpeedMbit,
-    ...(req.body as Record<string, unknown>),
-  });
+  // Reconcile принимает ТОЛЬКО SSH credentials: nodeUuid/squadUuid/speedMbit берутся
+  // из сохранённых настроек и не могут быть переопределены через body (§8 ревью).
+  const parsed = lazeikaVerifySchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return res.status(400).json({
       ok: false,
@@ -147,11 +147,11 @@ lazeikaOnlyRouter.post("/reconcile", async (req: Request, res: Response) => {
   }
   try {
     const result = await service().setup({
-      nodeUuid: parsed.data.nodeUuid,
+      nodeUuid: config.lazeikaOnlyNodeUuid,
       // Всегда AUTO-режим: если сохранённый squad удалён, reconcile пересоздаст его,
       // а не упадёт со «squad не найден» на устаревшем UUID из настроек (§2 ревью).
       squadUuid: null,
-      speedMbit: parsed.data.speedMbit ?? config.lazeikaOnlySpeedMbit ?? 5,
+      speedMbit: config.lazeikaOnlySpeedMbit ?? 5,
       ssh: parsed.data.ssh,
     });
     return res.json({ ok: true, ...result });
@@ -172,9 +172,16 @@ lazeikaOnlyRouter.post("/disable", async (_req: Request, res: Response) => {
       update: { value: "false" },
     });
   }
-  const result = await service().disable();
-  invalidateSystemConfigCache();
-  return res.json({ ok: true, ...result });
+  try {
+    const result = await service().disable();
+    invalidateSystemConfigCache();
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Активный APPLYING-лок не трогаем: отключение во время setup — 409.
+    const applying = message.includes("выполняется") || message.includes("LOCK_LOST");
+    return res.status(applying ? 409 : 502).json({ ok: false, error: message });
+  }
 });
 
 /**
@@ -186,6 +193,11 @@ lazeikaOnlyRouter.post("/reset-state", async (_req: Request, res: Response) => {
   const [config, lazeika] = await Promise.all([getSystemConfig(), getLazeikaConfig()]);
   if (lazeika.enabled) {
     return res.status(409).json({ message: "Сначала выключите режим Lazeika-Only" });
+  }
+  // Активный APPLYING-лок работающего setup не затираем (§8 ревью).
+  const current = await loadResourceState();
+  if (current.status === "APPLYING" && current.lockToken) {
+    return res.status(409).json({ message: "Настройка выполняется — дождитесь её завершения перед reset-state" });
   }
   const value = JSON.stringify({
     version: 1,

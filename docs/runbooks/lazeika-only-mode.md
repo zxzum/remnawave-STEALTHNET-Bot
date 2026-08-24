@@ -46,7 +46,18 @@ secrets:
   с подсказкой вызвать `POST /admin/lazeika-only/reset-state`.
 - Squad: обычный видимый internal squad `Lazeika-Only` (создаётся один раз) либо выбранный
   вручную (обязан быть пустым или уже управляться режимом). Squad содержит ровно managed +
-  notification inbound и доступен ровно на выбранной ноде.
+  notification inbound и доступен ровно на выбранной ноде. Контракт Remnawave: write-операции
+  для accessible-nodes нет (только GET) — доступность вычисляется панелью из activeInbounds
+  ноды; setup добавляет оба inbound'а в activeInbounds выбранной ноды и строго проверяет
+  результат (ровно одна нода, без дублей).
+- Скорость: `lazeika_only_speed_mbit` сравнивается с фактически применённым tc-лимитом
+  (`resource_state.ssh.rateMbit`). Если админ изменил лимит в настройках, но не выполнил
+  «Перенастроить» — `settingsInSync=false`, `ready=false`, grace не выдаётся, UI показывает
+  «требуется перенастройка».
+- `POST /reconcile` принимает только SSH credentials; нода/squad/скорость берутся из
+  сохранённых настроек и не переопределяются телом запроса.
+- `POST /disable` и `POST /reset-state` не затирают активный APPLYING-лок работающего setup:
+  CAS-запись состояния, при гонке — `LOCK_LOST`/409.
 - Hosts пользователя: один рабочий host (binding на managed-inbound) и три fake
   notification-host'а. Владение fake-host'ами детерминировано: в `resource_state` хранятся
   ровно три `notificationHostUuids`; reconcile использует только их, чужие host'ы с тем же

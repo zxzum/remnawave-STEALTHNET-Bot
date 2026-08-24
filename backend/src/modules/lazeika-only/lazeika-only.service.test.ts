@@ -98,13 +98,14 @@ function createFakeRemna(options: {
     getConfigProfiles: async () => ok({ response: { configProfiles: state.profiles } }),
     createConfigProfile: async (body: { name: string; config: unknown }) => {
       if (options.failCreateProfile) return { status: 502, error: "profile create failed" };
-      const managedInbounds = ((body.config as { inbounds: Array<{ tag: string }> }).inbounds ?? [])
-        .filter((ib) => ib.tag.startsWith("LAZEIKA_ONLY_INBOUND"));
+      const cfgInbounds = ((body.config as { inbounds: Array<{ tag: string; port?: number }> }).inbounds ?? []);
+      const managedInbounds = cfgInbounds.filter((ib) => ib.tag.startsWith("LAZEIKA_ONLY_INBOUND"));
       const profile = {
         uuid: nextUuid(),
         name: body.name,
         config: body.config,
-        inbounds: managedInbounds.map((ib) => ({ uuid: ensureInboundUuid(ib.tag), tag: ib.tag, port: 40001 })),
+        // Реальная панель возвращает ФАКТИЧЕСКИЙ порт inbound из конфига.
+        inbounds: managedInbounds.map((ib) => ({ uuid: ensureInboundUuid(ib.tag), tag: ib.tag, port: Number(ib.port) || 40001 })),
       };
       state.profiles.push(profile);
       return ok({ response: profile });
@@ -116,10 +117,10 @@ function createFakeRemna(options: {
       if (body.name !== undefined) p.name = body.name;
       if (body.config !== undefined) {
         p.config = body.config;
-        const managedTags = ((body.config as { inbounds: Array<{ tag: string }> }).inbounds ?? [])
-          .filter((ib) => ib.tag.startsWith("LAZEIKA_ONLY_INBOUND"))
-          .map((ib) => ib.tag);
-        p.inbounds = managedTags.map((t) => ({ uuid: ensureInboundUuid(t), tag: t, port: 40001 }));
+        const cfgInbounds = ((body.config as { inbounds: Array<{ tag: string; port?: number }> }).inbounds ?? []);
+        const managedTags = cfgInbounds
+          .filter((ib) => ib.tag.startsWith("LAZEIKA_ONLY_INBOUND"));
+        p.inbounds = managedTags.map((ib) => ({ uuid: ensureInboundUuid(ib.tag), tag: ib.tag, port: Number(ib.port) || 40001 }));
       }
       return ok(p);
     },
@@ -1033,4 +1034,180 @@ test("rollback restores manual squad inbounds to the pre-setup snapshot", async 
   assert.deepEqual(squad?.inbounds, [], "inbounds ручного squad восстановлены");
   // Созданные hosts удалены, squad остался.
   assert.equal(env.state.calls.deleted.filter((d) => d.startsWith("host:")).length, 4);
+});
+
+test("disable does not clobber an active APPLYING lock of a running setup", async () => {
+  const store = createFencedStore();
+  store.setRaw(JSON.stringify({
+    ...resourceStateSchema.parse({}),
+    status: "APPLYING",
+    lockToken: "busy-worker",
+    lockedAt: new Date().toISOString(),
+  }));
+  const service = buildService(createFakeRemna(), createSshFake(), store);
+  await assert.rejects(() => service.disable(), /выполняется/);
+  // Лок работающего setup не затёрт.
+  assert.equal(store.state.status, "APPLYING");
+  assert.equal(store.state.lockToken, "busy-worker");
+});
+
+test("disable returns LOCK_LOST when state changes between read and CAS write", async () => {
+  const store = createFencedStore();
+  const staleRaw = store.rawValue || JSON.stringify(resourceStateSchema.parse({}));
+  const service = createLazeikaService({
+    remna: createFakeRemna().remna,
+    ssh: createSshFake().ssh,
+    ...fencedDeps(store),
+    // Читаем протухший raw — CAS обязан отклонить запись.
+    readStateRaw: async () => staleRaw,
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    persistSetupInputs: async () => {},
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
+  });
+  // Параллельный воркер изменил состояние после нашего чтения.
+  await assert.rejects(() => service.disable(), /LOCK_LOST/);
+});
+
+test("ambiguous failure of the notif profile PATCH still rolls back the notification inbound", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  let patchCount = 0;
+  const service = buildService(env, sshf, store, {
+    updateConfigProfile: async (body: { uuid: string; config?: unknown; name?: string }) => {
+      patchCount++;
+      const res = await env.remna.updateConfigProfile(body);
+      if (patchCount === 2) {
+        // Применилось на «сервере», но ответ — ошибка (таймаут/502 от прокси).
+        return { status: 502, error: "ambiguous gateway error" };
+      }
+      return res;
+    },
+  });
+  await assert.rejects(() => service.setup(SETUP_INPUT), /ambiguous/);
+  const cfg = profileConfig(env.state, BASE_PROFILE_UUID);
+  const leaked = cfg.inbounds.filter((ib) => String(ib.tag).startsWith("LAZEIKA_ONLY_INBOUND"));
+  assert.deepEqual(leaked, [], "managed и notification inbound удалены rollback'ом несмотря на ambiguous failure");
+  assert.equal(store.state.status, "ERROR");
+});
+
+test("existing notification inbound with a non-numeric port is repaired, hosts never point to a dead port", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  const service = buildService(env, sshf, store);
+  await service.setup(SETUP_INPUT);
+  // Панель/админ испортила порт notification-inbound (нечисловое значение).
+  const cfg = profileConfig(env.state, store.state.profileUuid!);
+  const notifIb = cfg.inbounds.find((ib) => ib.tag === store.state.notifInboundTag) as { port?: unknown };
+  notifIb.port = "abc";
+  await service.setup(SETUP_INPUT);
+  const cfgAfter = profileConfig(env.state, store.state.profileUuid!);
+  const repaired = cfgAfter.inbounds.find((ib) => ib.tag === store.state.notifInboundTag);
+  assert.equal(typeof repaired?.port, "number", "порт inbound починен в самом inbound");
+  const hostPorts = store.state.notificationHostUuids.map(
+    (u) => (env.state.hosts.find((h) => h.uuid === u) as { port?: number })?.port,
+  );
+  assert.ok(hostPorts.every((p) => p === repaired!.port), "host ports == фактический порт inbound");
+});
+
+test("working host of node A is not re-bound after reset-state and setup on node B", async () => {
+  const NODE_B = "88888888-8888-4888-8888-888888888888";
+  const PROFILE_B = "77777777-7777-4777-8777-777777777777";
+  const env = createFakeRemna();
+  // Нода B со своим активным профилем.
+  env.state.profiles.push({
+    uuid: PROFILE_B,
+    name: "Main B",
+    config: {
+      inbounds: [{ ...baseInbound, tag: "VLESS-B" }],
+      outbounds: [{ protocol: "freedom", tag: "DIRECT" }, { protocol: "blackhole", tag: "BLOCK" }],
+      routing: { rules: [] },
+    },
+    inbounds: [{ uuid: "inbound-b-uuid", tag: "VLESS-B", port: 443 }],
+  });
+  env.state.nodes.push({
+    uuid: NODE_B,
+    name: "Beta",
+    address: "203.0.113.20",
+    isDisabled: false,
+    configProfile: { activeConfigProfileUuid: PROFILE_B, activeInbounds: ["inbound-b-uuid"] },
+  });
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  const service = buildService(env, sshf, store);
+
+  // Setup на ноде A.
+  await service.setup(SETUP_INPUT);
+  const hostA = env.state.hosts.find((h) => h.uuid === store.state.workingHostUuid);
+  const hostASnapshot = JSON.parse(JSON.stringify(hostA));
+
+  // Админ сделал reset-state (режим выключен) — resource_state пуст, host'ы A остались в Remna.
+  // По runbook старый авто-squad при ручном сносе инфраструктуры удаляется.
+  store.setRaw(JSON.stringify(resourceStateSchema.parse({})));
+  env.state.squads = [];
+
+  // Setup на ноде B.
+  const serviceB = buildService(env, sshf, store);
+  const accessibleB = async () => ({ data: [NODE_B], error: undefined });
+  const serviceB2 = createLazeikaService({
+    remna: { ...env.remna, getSquadAccessibleNodeUuids: accessibleB },
+    ssh: sshf.ssh,
+    ...fencedDeps(store),
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    persistSetupInputs: async () => {},
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
+  });
+  await serviceB2.setup({ ...SETUP_INPUT, nodeUuid: NODE_B });
+  void serviceB;
+
+  const hostANow = env.state.hosts.find((h) => h.uuid === hostASnapshot.uuid);
+  assert.deepEqual(hostANow, hostASnapshot, "рабочий host ноды A НЕ перепривязан к ноде B");
+  assert.notEqual(store.state.workingHostUuid, hostASnapshot.uuid, "для B создан НОВЫЙ рабочий host");
+});
+
+test("verify flags a managed tc filter without police action (strict policeIndex)", async () => {
+  const env = createFakeRemna();
+  const sshf = createSshFake();
+  const store = createFencedStore();
+  const service = buildService(env, sshf, store);
+  await service.setup(SETUP_INPUT);
+  const port = store.state.managedInboundPort!;
+  const { expectedFilterSpecs } = await import("./tc-script.js");
+  const specs = expectedFilterSpecs({ port });
+  const lineFor = (spec: (typeof specs)[number], police: number | null) =>
+    `filter protocol ${spec.protocol} pref ${spec.pref} flower ip_proto ${spec.ipProto} `
+    + `${spec.direction === "ingress" ? "dst_port" : "src_port"} ${port}`
+    + (police !== null ? ` action police index ${police}` : "");
+  const dump = (broken: boolean) => [
+    "===FILTERS===",
+    ...specs.map((s, i) => lineFor(s, broken && i === 0 ? null : s.policeIndex)),
+    "===ACTIONS===",
+    "action police index 45101 rate 5mbit burst 256kb drop",
+    "action police index 45102 rate 5mbit burst 256kb drop",
+    "===FILES===",
+    "FILES_OK",
+    "UNIT_ENABLED",
+    "PORT_LISTENING",
+  ].join("\n");
+  const verifyWith = (out: string) => createLazeikaService({
+    remna: env.remna,
+    ssh: async (_c: unknown, script: string) =>
+      script.includes("===FILTERS===")
+        ? { ok: true, exitCode: 0, stdout: out, stderr: "" }
+        : sshf.ssh(_c as never, script),
+    ...fencedDeps(store),
+    persistProfileUuid: async () => {}, persistSquadUuid: async () => {},
+    persistSetupInputs: async () => {},
+    runAtomic: async (fn: (tx: never) => Promise<void>) => fn(undefined as never),
+  }).verify(SETUP_SSH);
+
+  const good = await verifyWith(dump(false));
+  const goodTc = good.checks.find((c) => c.name === "tc_filters");
+  assert.equal(goodTc?.ok, true, `эталонные фильтры принимаются: ${goodTc?.detail ?? ""}`);
+
+  const bad = await verifyWith(dump(true));
+  const badTc = bad.checks.find((c) => c.name === "tc_filters");
+  assert.equal(badTc?.ok, false, "фильтр без police action обязан быть ошибкой");
+  assert.match(badTc?.detail ?? "", /police/i);
 });

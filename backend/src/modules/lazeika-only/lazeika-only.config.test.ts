@@ -51,3 +51,39 @@ test("casUpdateResourceState writes only when expected raw matches", async () =>
     delegate.updateMany = originalUpdateMany;
   }
 });
+
+test("settingsInSync/ready=false when panel speed differs from applied tc rate", async () => {
+  const delegate = prisma.systemSetting as unknown as Record<string, unknown>;
+  const originalFindUnique = delegate.findUnique;
+  const NODE = "11111111-1111-1111-1111-111111111111";
+  const PROFILE = "22222222-2222-2222-2222-222222222222";
+  const SQUAD = "33333333-3333-3333-3333-333333333333";
+  const INBOUND = "44444444-4444-4444-4444-444444444444";
+  const stateRaw = JSON.stringify(config.resourceStateSchema.parse({
+    status: "READY",
+    nodeUuid: NODE,
+    profileUuid: PROFILE,
+    squadUuid: SQUAD,
+    managedInboundUuid: INBOUND,
+    ssh: { interface: "eth0", rateMbit: 5 },
+  }));
+  delegate.findUnique = async () => ({ key: config.LAZEIKA_STATE_KEY, value: stateRaw });
+  try {
+    const base = {
+      lazeikaOnlyEnabled: true,
+      lazeikaOnlyNodeUuid: NODE,
+      lazeikaOnlySquadUuid: SQUAD,
+      lazeikaOnlySpeedMbit: 5,
+    };
+    const inSync = await config.getLazeikaConfig(base);
+    assert.equal(inSync.settingsInSync, true, "скорость совпадает с применённой — синхронно");
+    assert.equal(inSync.ready, true);
+
+    // Админ поднял лимит 5 → 10 Mbit в настройках, но tc ещё не перенастроен.
+    const drifted = await config.getLazeikaConfig({ ...base, lazeikaOnlySpeedMbit: 10 });
+    assert.equal(drifted.settingsInSync, false, "скорость разошлась с state.ssh.rateMbit");
+    assert.equal(drifted.ready, false, "grace не выдаётся при устаревшем tc-лимите");
+  } finally {
+    delegate.findUnique = originalFindUnique;
+  }
+});

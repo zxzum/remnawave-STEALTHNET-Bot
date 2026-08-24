@@ -143,12 +143,16 @@ export async function getLazeikaConfig(
   const state = await loadResourceState();
   // Ключ настроек может отстать от resource_state (авто-создание squad в setup) — берём сохранённый.
   const effectiveSquadUuid = (cfg.lazeikaOnlySquadUuid ?? "").trim() || state.squadUuid || null;
+  const speedMbit = Math.min(1000, Math.max(1, Math.trunc(cfg.lazeikaOnlySpeedMbit ?? 5)));
   // Строгая синхронизация: нода в настройках обязана быть непустой и совпадать с resource_state
   // (пустая ≠ «синхронно» — иначе reconcile потом откажется работать, §4 ревью).
+  // Скорость тоже обязана совпадать с фактическим tc-лимитом (state.ssh.rateMbit): иначе
+  // grace выдавался бы при устаревшем шейпинге после смены лимита в панели (§8 ревью).
   const settingsInSync =
     Boolean(cfg.lazeikaOnlyNodeUuid)
     && cfg.lazeikaOnlyNodeUuid === state.nodeUuid
-    && (!cfg.lazeikaOnlySquadUuid || cfg.lazeikaOnlySquadUuid === state.squadUuid);
+    && (!cfg.lazeikaOnlySquadUuid || cfg.lazeikaOnlySquadUuid === state.squadUuid)
+    && speedMbit === state.ssh.rateMbit;
   const ready =
     state.status === "READY"
     && Boolean(state.squadUuid)
@@ -160,7 +164,7 @@ export async function getLazeikaConfig(
   return {
     enabled: cfg.lazeikaOnlyEnabled === true,
     days: Math.min(365, Math.max(1, Math.trunc(cfg.lazeikaOnlyDays ?? 7))),
-    speedMbit: Math.min(1000, Math.max(1, Math.trunc(cfg.lazeikaOnlySpeedMbit ?? 5))),
+    speedMbit,
     nodeUuid: cfg.lazeikaOnlyNodeUuid ?? null,
     squadUuid: effectiveSquadUuid,
     messageTemplate: cfg.lazeikaOnlyMessageTemplate || DEFAULT_LAZEIKA_MESSAGE_TEMPLATE,

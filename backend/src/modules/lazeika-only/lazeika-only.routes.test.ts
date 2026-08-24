@@ -6,7 +6,7 @@ process.env.JWT_SECRET ??= "test-secret-that-is-long-enough-for-validation";
 process.env.REMNA_API_URL ??= "http://127.0.0.1:1";
 process.env.REMNA_ADMIN_TOKEN ??= "test-token";
 
-const { lazeikaSetupSchema } = await import("./lazeika-only.routes.js");
+const { lazeikaSetupSchema, lazeikaVerifySchema } = await import("./lazeika-only.routes.js");
 
 const VALID = {
   nodeUuid: "11111111-1111-1111-1111-111111111111",
@@ -46,4 +46,19 @@ test("setup route schema rejects invalid nodeUuid and ssh port", () => {
     lazeikaSetupSchema.safeParse({ ...VALID, ssh: { user: "root", port: 22, password: "" } }).success,
     false,
   );
+});
+
+test("reconcile schema strips nodeUuid/squadUuid/speedMbit from body (SSH only)", () => {
+  // Reconcile обязан игнорировать всё, кроме ssh: нода/squad/скорость берутся из настроек.
+  const parsed = lazeikaVerifySchema.safeParse({
+    ssh: { user: "root", port: 22, password: "x" },
+    nodeUuid: "99999999-9999-9999-9999-999999999999",
+    squadUuid: "33333333-3333-3333-3333-333333333333",
+    speedMbit: 1000,
+  });
+  assert.equal(parsed.success, true);
+  if (parsed.success) {
+    assert.deepEqual(Object.keys(parsed.data), ["ssh"], "кроме ssh ничего не доходит до сервиса");
+  }
+  assert.equal(lazeikaVerifySchema.safeParse({}).success, false, "без ssh — ошибка");
 });

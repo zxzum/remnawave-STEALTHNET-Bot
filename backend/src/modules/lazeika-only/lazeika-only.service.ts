@@ -365,6 +365,11 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
     let squadSnapshot: { uuid: string; inbounds: string[] } | null = null;
     /** Конфиг managed-профиля ДО мутаций этого запуска — rollback восстанавливает свой срез. */
     let profileConfigSnapshot: XrayConfig | null = null;
+    /** Теги ЭТОГО запуска для rollback: state обновляется только после успешного PATCH,
+     * а при ambiguous failure (применилось на сервере, ответ — ошибка) rollback обязан
+     * всё равно найти и снять managed/notification части (§8 ревью). */
+    let managedTagForRun: string | null = null;
+    let notifTagForRun: string | null = null;
     let tcFilesExisted: boolean | null = null;
     const prevSsh = { ...state.ssh };
 
@@ -503,6 +508,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
 
       // ── Managed inbound: стабильный tag + свободный порт ──
       const tag = state.managedInboundTag ?? managedInboundTag(randomUUID());
+      managedTagForRun = tag;
       const port = state.managedInboundPort ?? pickManagedPort(baseProfile.config as XrayConfig, [input.ssh.port]);
       validatePort(port, [input.ssh.port]);
       const cloneSource = (baseProfile.config.inbounds ?? []).find((ib) => ib.tag !== tag);
@@ -577,6 +583,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       // Идемпотентность порта (§4 финала): существующий inbound сохраняет СВОЙ порт,
       // новый порт выбирается один раз при создании и больше не меняется. ──
       const notifTag = state.notifInboundTag ?? `${tag}_NOTIF`;
+      notifTagForRun = notifTag;
       const existingNotifInbound = (newConfig.inbounds ?? []).find((ib) => ib.tag === notifTag);
       const existingNotifPort = Number(existingNotifInbound?.port);
       const notifPort = Number.isInteger(existingNotifPort) && existingNotifPort > 0
@@ -584,10 +591,24 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         : pickManagedPort(newConfig, [input.ssh.port, port]);
       // Нечисловой/служебный/совпадающий порт — понятная ошибка ДО разрушительных изменений.
       validatePort(notifPort, [input.ssh.port, port]);
+      // Порт notification-inbound тоже обязан быть уникален: общий порт с чужим inbound
+      // направил бы fake-host'ы на чужой слушатель (§8 ревью).
+      const notifPortCollision = (newConfig.inbounds ?? []).filter((ib) => ib.tag !== notifTag && Number(ib.port) === notifPort);
+      if (notifPortCollision.length > 0) {
+        throw new SetupError(
+          `Порт ${notifPort} notification-inbound уже используется другим inbound (${notifPortCollision.map((ib) => String(ib.tag ?? "?")).join(", ")}). Освободите порт или выполните reset-state`,
+          "VALIDATION",
+        );
+      }
       {
         const cfgNotif: XrayConfig = JSON.parse(JSON.stringify(newConfig));
         cfgNotif.inbounds ??= [];
-        if (!cfgNotif.inbounds.some((ib) => ib.tag === notifTag)) {
+        const existingNotifIdx = cfgNotif.inbounds.findIndex((ib) => ib.tag === notifTag);
+        if (existingNotifIdx >= 0) {
+          // Существующий inbound сохраняет свой порт; НЕКОРРЕКТНЫЙ порт чиним в самом
+          // inbound — host'ы никогда не направляются на порт, который никто не слушает.
+          cfgNotif.inbounds[existingNotifIdx] = { ...cfgNotif.inbounds[existingNotifIdx], port: notifPort };
+        } else {
           cfgNotif.inbounds.push(buildManagedInbound(cloneSource as never, notifTag, notifPort));
         }
         // BLOCK-правило notif-тега приводим к эталону при каждом прогоне (идемпотентно).
@@ -681,6 +702,10 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       }
       const nodesAcc = accessible.data ?? [];
       // Требование режима: squad доступен РОВНО на выбранной ноде (§7 финального ревью).
+      // Контракт Remnawave: отдельной write-операции для accessible-nodes НЕТ (только GET
+      // /internal-squads/{uuid}/accessible-nodes) — доступность вычисляется панелью из
+      // activeInbounds ноды. Мы добавили managed+notification inbound'ы в activeInbounds
+      // выбранной ноды, поэтому здесь достаточно строгой проверки результата.
       if (nodesAcc.length !== 1 || nodesAcc[0] !== input.nodeUuid) {
         throw new SetupError(
           `Squad должен быть доступен ровно на выбранной ноде; фактически: ${nodesAcc.length ? nodesAcc.join(", ") : "ни одной"}`,
@@ -700,16 +725,25 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
 
       const workingExisting =
         hosts.find((h) => h.uuid && h.uuid === state.workingHostUuid)
-        ?? hosts.find((h) => isLazeikaHost(h) && !isNotificationHost(h));
+        // Без сохранённого UUID — только host, однозначно привязанный к ТЕКУЩЕМУ managed
+        // profile/inbound. Глобальный поиск по тегу после reset-state мог бы перепривязать
+        // чужой рабочий host другой ноды (§8 ревью).
+        ?? hosts.find((h) =>
+          isLazeikaHost(h) && !isNotificationHost(h)
+          && h.inbound?.configProfileUuid === managedProfileUuid
+          && h.inbound?.configProfileInboundUuid === managedInboundUuid);
       await heartbeat();
       if (workingExisting?.uuid) {
         hostSnapshots.push(snapshotHost(workingExisting));
-        // Рабочий host обязан быть ВКЛЮЧЁН (админ мог отключить вручную).
+        // Рабочий host обязан быть ВКЛЮЧЁН (админ мог отключить вручную), с портом
+        // managed-inbound и binding на managed profile/inbound; connection/security
+        // параметры не трогаем (остаются как у host'а).
         await requireOk(
           await remna.updateHost({
             uuid: workingExisting.uuid,
             inbound: workingBinding,
             isDisabled: false,
+            port,
             tags: Array.from(new Set([...(workingExisting.tags ?? []), LAZEIKA_HOST_TAG])),
           }),
           "HOSTS",
@@ -943,7 +977,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
           const prof = freshProfiles.find((pl) => pl.uuid === state.profileUuid);
           if (prof?.config) {
             const cfg: XrayConfig = JSON.parse(JSON.stringify(prof.config));
-            const ownTags = [state.managedInboundTag, state.notifInboundTag].filter((t): t is string => Boolean(t));
+            const ownTags = [managedTagForRun ?? state.managedInboundTag, notifTagForRun ?? state.notifInboundTag].filter((t): t is string => Boolean(t));
             const isOwnInbound = (ib: { tag?: unknown }) => ownTags.includes(String(ib.tag));
             const isOwnRule = (r: Record<string, unknown>) =>
               Array.isArray(r.inboundTag) && (r.inboundTag as string[]).some((t) => ownTags.includes(t));
@@ -1131,7 +1165,8 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       const nodeUuids = acc.data ?? [];
       add(
         "squad_nodes",
-        !acc.error && nodeUuids.length > 0 && nodeUuids.every((u) => u === state.nodeUuid),
+        // Ровно одна нода — выбранная; без дублей и лишних UUID (§8 ревью).
+        !acc.error && nodeUuids.length === 1 && nodeUuids[0] === state.nodeUuid,
         acc.error ?? nodeUuids.join(","),
       );
     } else add("squad_nodes", false);
@@ -1142,6 +1177,15 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
       add("working_host", !!workingHost);
       // Рабочий host обязан быть включён и с корректным адресом/портом.
       add("working_host_enabled", !!workingHost && workingHost.isDisabled !== true);
+      add(
+        "working_host_address_port",
+        !!workingHost
+          && Boolean(String(workingHost.address ?? "").trim())
+          && workingHost.port === state.managedInboundPort,
+        workingHost
+          ? `address=${workingHost.address ?? "?"}, port=${workingHost.port ?? "?"} (ожидается ${state.managedInboundPort ?? "?"})`
+          : "host отсутствует",
+      );
       // Binding рабочего host должен указывать на managed профиль/inbound.
       add(
         "working_host_binding",
@@ -1149,10 +1193,19 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
         && workingHost?.inbound?.configProfileInboundUuid === state.managedInboundUuid,
       );
       const notifications = hosts.filter(isNotificationHost);
-      // Ровно три ПРИНАДЛЕЖАЩИХ конфигурации (по сохранённым UUID), не «все по тегу».
-      const ownedNotifs = state.notificationHostUuids.length === 3
-        ? notifications.filter((h) => state.notificationHostUuids.includes(h.uuid ?? ""))
-        : notifications;
+      // Ровно три ПРИНАДЛЕЖАЩИХ конфигурации (по сохранённым UUID). Fallback «все по
+      // тегу» удалён: повреждённый state — понятная ошибка, а не захват чужих (§8 ревью).
+      const ownedUuids = state.notificationHostUuids;
+      const ownershipValid = ownedUuids.length === 3 && new Set(ownedUuids).size === 3;
+      if (!ownershipValid) {
+        add(
+          "notification_hosts",
+          false,
+          `state повреждён: notificationHostUuids=${ownedUuids.length} (нужно ровно 3 уникальных) — выполните «Перенастроить»`,
+        );
+        add("notification_host_port", false, "state повреждён (см. notification_hosts)");
+      } else {
+      const ownedNotifs = notifications.filter((h) => ownedUuids.includes(h.uuid ?? ""));
       const notifOk = ownedNotifs.filter((h) =>
         String(h.address ?? "").endsWith(".invalid")
         && h.isDisabled !== true // видимые в подписке
@@ -1175,6 +1228,7 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
           ? `порты host'ов: ${ownedNotifs.map((h) => h.port ?? "?").join(",")}; порт inbound: ${notifInboundPort}`
           : "порт notification-inbound нечисловой или отсутствует",
       );
+      }
     } catch (e) { add("working_host", false, e instanceof Error ? e.message : String(e)); }
 
     if (state.nodeUuid) {
@@ -1242,6 +1296,12 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
             }
             const specs = expectedFilterSpecs({ port: state.managedInboundPort! });
             const problems: string[] = [];
+            // Дубли собственных pref'ов недопустимы (§8 ревью).
+            const prefCounts = new Map<number, number>();
+            for (const pf of parsedFilters) prefCounts.set(pf.pref, (prefCounts.get(pf.pref) ?? 0) + 1);
+            for (const [p, c] of prefCounts) {
+              if (c > 1) problems.push(`pref ${p}: дубли фильтров (${c})`);
+            }
             for (const spec of specs) {
               const f = parsedFilters.find((pf) => pf.pref === spec.pref);
               if (!f) { problems.push(`pref ${spec.pref} отсутствует`); continue; }
@@ -1249,7 +1309,8 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
               if (f.ipProto !== spec.ipProto) problems.push(`pref ${spec.pref}: ip_proto ${f.ipProto || "?"} != ${spec.ipProto}`);
               if (f.port !== state.managedInboundPort) problems.push(`pref ${spec.pref}: порт ${f.port} != ${state.managedInboundPort}`);
               if (f.direction !== spec.direction) problems.push(`pref ${spec.pref}: направление ${f.direction} != ${spec.direction}`);
-              if (f.policeIndex !== null && f.policeIndex !== spec.policeIndex) problems.push(`pref ${spec.pref}: police index ${f.policeIndex} != общий ${spec.policeIndex}`);
+              // Police action ОБЯЗАТЕЛЕН и обязан ссылаться на общий aggregate bucket (§8 ревью).
+              if (f.policeIndex !== spec.policeIndex) problems.push(`pref ${spec.pref}: police index ${f.policeIndex ?? "отсутствует"} != общий ${spec.policeIndex}`);
             }
             add("tc_filters", problems.length === 0, problems.slice(0, 4).join("; ") || `${parsedFilters.length}/${TC_PREF_COUNT}`);
 
@@ -1278,9 +1339,17 @@ export function createLazeikaService(dependencies: LazeikaServiceDependencies) {
 
   /** Выключение режима: новые grace-доступы прекращаются, инфраструктура не удаляется. */
   async function disable(): Promise<{ status: string }> {
-    const state = await loadState();
+    // CAS-запись от прочитанного raw: не затираем APPLYING-лок работающего setup (§8 ревью).
+    const raw = await readStateRaw();
+    const state = parseResourceState(raw);
+    if (state.status === "APPLYING" && state.lockToken) {
+      throw new SetupError("Настройка Lazeika-Only выполняется — отключение режима временно недоступно", "LOCK");
+    }
     state.lastVerifiedAt = new Date().toISOString();
-    await saveState(state);
+    const res = await casWrite(raw, state);
+    if (!res.ok) {
+      throw new SetupError("LOCK_LOST: состояние изменено параллельной операцией, повторите", "LOCK");
+    }
     return { status: state.status };
   }
 
