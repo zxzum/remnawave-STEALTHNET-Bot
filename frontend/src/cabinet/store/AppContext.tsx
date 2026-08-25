@@ -187,8 +187,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       return;
     }
-    void reload();
-  }, [reload, state.token]);
+    void Promise.all([reload(), refreshProfile()]);
+  }, [reload, refreshProfile, state.token]);
+
+  useEffect(() => {
+    if (!state.token) return;
+    let checking = false;
+    const refreshOnReturn = () => {
+      if (document.visibilityState === "hidden" || checking || telegramLinkActiveRef.current) return;
+      checking = true;
+      void refreshProfile().finally(() => {
+        checking = false;
+      });
+    };
+    window.addEventListener("focus", refreshOnReturn);
+    window.addEventListener("pageshow", refreshOnReturn);
+    document.addEventListener("visibilitychange", refreshOnReturn);
+    return () => {
+      window.removeEventListener("focus", refreshOnReturn);
+      window.removeEventListener("pageshow", refreshOnReturn);
+      document.removeEventListener("visibilitychange", refreshOnReturn);
+    };
+  }, [refreshProfile, state.token]);
 
   useEffect(() => () => {
     stopTelegramLinkRef.current?.();

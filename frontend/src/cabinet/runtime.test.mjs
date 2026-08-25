@@ -357,3 +357,14 @@ test("password registration cannot submit while a request is loading", async () 
   const passwordStep = auth.slice(auth.indexOf('{step === "password"'), auth.indexOf('{step === "twofa"'));
   assert.match(passwordStep, /disabled=\{pw1\.length < 8 \|\| pw1 !== pw2 \|\| loading\}/);
 });
+
+test("refreshes the client profile on cabinet load and tab return", async () => {
+  const store = await readFile(new URL("./store/AppContext.tsx", import.meta.url), "utf8");
+  assert.match(store, /void Promise\.all\(\[reload\(\), refreshProfile\(\)\]\)/);
+  assert.match(store, /const refreshOnReturn = \(\) =>/);
+  assert.match(store, /window\.addEventListener\("focus", refreshOnReturn\)/);
+  assert.match(store, /window\.addEventListener\("pageshow", refreshOnReturn\)/);
+  assert.match(store, /document\.addEventListener\("visibilitychange", refreshOnReturn\)/);
+  assert.match(store, /window\.removeEventListener\("focus", refreshOnReturn\)/);
+  assert.match(store, /document\.removeEventListener\("visibilitychange", refreshOnReturn\)/);
+});
