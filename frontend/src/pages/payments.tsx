@@ -168,12 +168,8 @@ function clientDisplay(item: PaymentLogItem): string {
   return c.id;
 }
 
-function clientSearchQuery(item: PaymentLogItem): string {
-  const c = item.client!;
-  if (c.username) return c.username;
-  if (c.telegramId != null) return String(c.telegramId);
-  const name = [c.firstName, c.lastName].filter(Boolean).join(" ").trim();
-  return name || c.id;
+function clientDetailsHref(clientId: string): string {
+  return `/admin/clients?clientId=${encodeURIComponent(clientId)}`;
 }
 
 const initialPageSize = (() => {
@@ -526,12 +522,24 @@ export function PaymentsPage() {
                         <td className="px-4 py-3 whitespace-nowrap">
                           <div className="flex items-center gap-1.5">
                             <User className="h-3 w-3 text-muted-foreground shrink-0" />
-                            <span className={cn("text-xs font-medium", !item.client && item.kind === "external" && "text-muted-foreground italic")}>
-                              {clientDisplay(item)}
-                            </span>
+                            {item.client ? (
+                              <Link
+                                to={clientDetailsHref(item.client.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-xs font-medium text-primary hover:underline"
+                              >
+                                {clientDisplay(item)}
+                              </Link>
+                            ) : (
+                              <span className={cn("text-xs font-medium", item.kind === "external" && "text-muted-foreground italic")}>
+                                {clientDisplay(item)}
+                              </span>
+                            )}
                           </div>
-                          {item.client?.telegramId != null && (
-                            <span className="text-[10px] text-muted-foreground ml-4">ID: {String(item.client.telegramId)}</span>
+                          {item.client && (
+                            <span className="text-[10px] text-muted-foreground ml-4">
+                              Email: {item.client.email || "не указан"}
+                            </span>
                           )}
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap text-xs">
@@ -586,13 +594,24 @@ export function PaymentsPage() {
                                 <div className="flex items-center gap-2">
                                   <span className="text-muted-foreground w-28 shrink-0">Клиент:</span>
                                   {item.client ? (
-                                    <Link
-                                      to={`/admin/clients?search=${encodeURIComponent(clientSearchQuery(item))}`}
-                                      onClick={(e) => e.stopPropagation()}
-                                      className="text-primary hover:underline inline-flex items-center gap-1"
-                                    >
-                                      <User className="h-3 w-3" /> {clientDisplay(item)}
-                                    </Link>
+                                    <div className="space-y-1">
+                                      <Link
+                                        to={clientDetailsHref(item.client.id)}
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="text-primary hover:underline inline-flex items-center gap-1"
+                                      >
+                                        <User className="h-3 w-3" /> {clientDisplay(item)}
+                                      </Link>
+                                      <div className="text-muted-foreground">
+                                        Email: <span className="text-foreground">{item.client.email || "не указан"}</span>
+                                      </div>
+                                      <div className="text-muted-foreground">
+                                        Telegram ID: <span className="text-foreground">{item.client.telegramId ?? "не указан"}</span>
+                                      </div>
+                                      <div className="text-muted-foreground font-mono text-[11px] break-all">
+                                        Client ID: <span className="text-foreground">{item.client.id}</span>
+                                      </div>
+                                    </div>
                                   ) : (
                                     <span>{item.kind === "external" ? "Внешняя (Platega)" : "—"}</span>
                                   )}

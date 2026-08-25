@@ -104,6 +104,7 @@ export type PaymentsLogItem = {
   externalId: string | null;
   client: {
     id: string;
+    email: string | null;
     telegramId: string | null;
     username: string | null;
     firstName: string | null;
@@ -181,7 +182,7 @@ function methodForExternal(paymentMethod: string | null): { method: string | nul
 
 type PaymentRow = Prisma.PaymentGetPayload<{
   include: {
-    client: { select: { id: true; telegramId: true; telegramUsername: true } };
+    client: { select: { id: true; email: true; telegramId: true; telegramUsername: true } };
     tariff: { select: { name: true } };
     proxyTariff: { select: { name: true } };
     singboxTariff: { select: { name: true } };
@@ -331,7 +332,7 @@ async function loadCallbackMap(paymentIds: string[]): Promise<Map<string, Callba
   return map;
 }
 
-function paymentToItem(
+export function paymentToItem(
   p: PaymentRow,
   callback: PaymentsLogItem["callback"],
   diagnostic?: Pick<CallbackDiagnostic, "outcome" | "errorMessage">,
@@ -357,6 +358,7 @@ function paymentToItem(
     client: p.client
       ? {
           id: p.client.id,
+          email: p.client.email,
           telegramId: p.client.telegramId,
           username: p.client.telegramUsername,
           // firstName/lastName в модели Client не хранятся — отдаём null (стабильный контракт).
@@ -435,7 +437,7 @@ export async function listPaymentsLog(filters: PaymentsLogFilters) {
       orderBy: { createdAt: "desc" },
       take: overfetch,
       include: {
-        client: { select: { id: true, telegramId: true, telegramUsername: true } },
+        client: { select: { id: true, email: true, telegramId: true, telegramUsername: true } },
         tariff: { select: { name: true } },
         proxyTariff: { select: { name: true } },
         singboxTariff: { select: { name: true } },
@@ -514,7 +516,7 @@ export async function getPaymentsLogEntry(id: string, kind: "payment" | "externa
     const matched = t.paymentId
       ? await prisma.payment.findUnique({
           where: { id: t.paymentId },
-          include: { client: { select: { id: true, telegramId: true, telegramUsername: true } } },
+          include: { client: { select: { id: true, email: true, telegramId: true, telegramUsername: true } } },
         })
       : null;
     return {
@@ -530,7 +532,7 @@ export async function getPaymentsLogEntry(id: string, kind: "payment" | "externa
   const p = await prisma.payment.findUnique({
     where: { id },
     include: {
-      client: { select: { id: true, telegramId: true, telegramUsername: true } },
+      client: { select: { id: true, email: true, telegramId: true, telegramUsername: true } },
       tariff: { select: { name: true } },
       proxyTariff: { select: { name: true } },
       singboxTariff: { select: { name: true } },

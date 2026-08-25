@@ -160,6 +160,23 @@ export function ClientsPage() {
   }, [search]);
 
   useEffect(() => {
+    const clientId = new URLSearchParams(window.location.search).get("clientId")?.trim();
+    if (!clientId) return;
+    let cancelled = false;
+    api.getClientDetail(token, clientId)
+      .then((client) => {
+        if (cancelled) return;
+        setEditing(client);
+        setEditForm(clientEditForm(client));
+        setActionMessage(null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  useEffect(() => {
     const query = new URLSearchParams(window.location.search);
     query.set("pageSize", String(pageSize));
     window.history.replaceState(null, "", `${window.location.pathname}?${query.toString()}`);

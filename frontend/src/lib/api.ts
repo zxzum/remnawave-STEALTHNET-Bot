@@ -175,6 +175,7 @@ export type PaymentLogSource = "site" | "miniapp" | "bot";
 
 export interface PaymentLogClient {
   id: string;
+  email: string | null;
   telegramId: string | number | null;
   username: string | null;
   firstName: string | null;

@@ -31,3 +31,40 @@ test("callback outcomes are explained when the provider did not send an error te
 test("missing diagnostic data is not invented", () => {
   assert.equal(service.getPaymentLogReason({ status: "FAILED" }), null);
 });
+
+test("payment log preserves the client email", () => {
+  const paymentToItem = (service as unknown as {
+    paymentToItem?: (...args: unknown[]) => { client?: { email?: string | null } | null };
+  }).paymentToItem;
+
+  assert.equal(typeof paymentToItem, "function");
+  if (!paymentToItem) return;
+
+  const item = paymentToItem(
+    {
+      id: "payment-1",
+      provider: "platega",
+      metadata: '{"plategaMethodId":2}',
+      source: "site",
+      amount: 200,
+      currency: "RUB",
+      status: "PAID",
+      createdAt: new Date("2026-08-25T09:00:00.000Z"),
+      paidAt: null,
+      orderId: "order-1",
+      externalId: "external-1",
+      client: {
+        id: "client-1",
+        email: "user@example.com",
+        telegramId: "123",
+        telegramUsername: "user",
+      },
+      tariff: { name: "Стандарт" },
+      proxyTariff: null,
+      singboxTariff: null,
+    },
+    { status: "none", at: null, responseStatus: null },
+  );
+
+  assert.equal(item.client?.email, "user@example.com");
+});
