@@ -6,6 +6,7 @@ import test from "node:test";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const clientLayout = readFileSync(resolve(root, "frontend/src/cabinet/components/Layout.tsx"), "utf8");
+const cabinet = readFileSync(resolve(root, "frontend/src/cabinet/pages/Cabinet.tsx"), "utf8");
 const profile = readFileSync(resolve(root, "frontend/src/cabinet/pages/Profile.tsx"), "utf8");
 const floatingChat = readFileSync(resolve(root, "frontend/src/components/floating-chat.tsx"), "utf8");
 test("profile contains a top referral block and Telegram support button", () => {
@@ -45,6 +46,13 @@ test("the active client cabinet bottom navigation has four core items", () => {
   assert.match(clientLayout, /from-accent-500\/30/);
   assert.match(clientLayout, /border-accent-400\/60/);
   assert.match(clientLayout, /isActive \? "text-accent-400 drop-shadow-/);
+});
+
+test("mobile cabinet content cannot widen the viewport", () => {
+  assert.match(clientLayout, /min-h-dvh w-full min-w-0 max-w-full overflow-x-clip/);
+  assert.match(clientLayout, /bottom-nav-glass glass-strong mx-auto w-full min-w-0 max-w-md/);
+  assert.match(cabinet, /glass-strong liquid min-w-0 max-w-full/);
+  assert.match(cabinet, /flex min-w-0 flex-wrap items-end/);
 });
 
 test("profile keeps purchase cards before promos on mobile and pins desktop columns", () => {

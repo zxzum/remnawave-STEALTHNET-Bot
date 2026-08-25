@@ -62,15 +62,15 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -14, transition: { duration: 0.18 } }}
       transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-      className="glass-strong liquid rounded-4xl p-6 sm:p-7"
+      className="glass-strong liquid min-w-0 max-w-full rounded-4xl p-5 min-[380px]:p-6 sm:p-7"
     >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <p className="text-sm font-medium text-fog-500">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-fog-500">
             Подписка · <span className="font-semibold text-fog-300">{sub.name}</span>
           </p>
         </div>
-        <span className={cn("flex items-center gap-2 text-sm font-bold", expiredTrial ? "text-fog-500" : "text-mint-400")}>
+        <span className={cn("flex shrink-0 items-center gap-2 text-sm font-bold", expiredTrial ? "text-fog-500" : "text-mint-400")}>
           <span className={cn("status-dot", expiredTrial && "bg-fog-500 shadow-none")} />
           {expiredTrial ? "Завершена" : "Активна"}
         </span>
@@ -89,8 +89,8 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
           </Link>
         </div>
       ) : <>
-      <div className="mt-4 flex items-end gap-3">
-        <span className="bg-gradient-to-br from-white to-fog-300 bg-clip-text text-7xl leading-none font-extrabold tracking-tight text-transparent">
+      <div className="mt-4 flex min-w-0 flex-wrap items-end gap-x-3 gap-y-1">
+        <span className="bg-gradient-to-br from-white to-fog-300 bg-clip-text text-6xl leading-none font-extrabold tracking-tight text-transparent min-[380px]:text-7xl">
           {sub.daysLeft}
         </span>
         <span className="pb-1.5 text-xl font-semibold text-fog-500">{pluralDays(sub.daysLeft)}</span>
