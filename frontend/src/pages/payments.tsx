@@ -65,7 +65,7 @@ function providerLabel(p: string | null) {
   return p;
 }
 
-function statusBadge(status: string) {
+function statusBadge(status: string, rawStatus?: string | null) {
   if (status === "PAID") {
     return (
       <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 border-emerald-500/30">
@@ -74,9 +74,10 @@ function statusBadge(status: string) {
     );
   }
   if (status === "CANCELED" || status === "FAILED") {
+    const canceledByTimeout = status === "CANCELED" && rawStatus?.toUpperCase() === "EXPIRED";
     return (
       <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border bg-red-500/15 text-red-500 dark:text-red-400 border-red-500/30">
-        {status === "FAILED" ? "Ошибка" : "Отменён"} <CircleX className="h-3 w-3" />
+        {status === "FAILED" ? "Ошибка" : canceledByTimeout ? "Истёк timeout" : "Отменён"} <CircleX className="h-3 w-3" />
       </span>
     );
   }
@@ -92,6 +93,20 @@ function statusBadge(status: string) {
       {status === "PENDING" ? "Ожидание" : status} <Clock className="h-3 w-3" />
     </span>
   );
+}
+
+function outcomeLabel(outcome: string) {
+  const labels: Record<string, string> = {
+    accepted: "Callback принят",
+    rejected_signature: "Подпись отклонена",
+    rejected_payload: "Данные отклонены",
+    payment_not_found: "Платёж не найден",
+    payment_already_paid: "Платёж уже был оплачен",
+    payment_failed: "Callback сообщил об ошибке",
+    ignored_event: "Событие проигнорировано",
+    error: "Ошибка обработки callback",
+  };
+  return labels[outcome] ?? outcome;
 }
 
 function callbackBadge(cb: PaymentLogItem["callback"]) {
@@ -514,7 +529,7 @@ export function PaymentsPage() {
                             <span className="text-[10px] text-muted-foreground ml-1">· {providerLabel(item.provider)}</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap">{statusBadge(item.status)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap">{statusBadge(item.status, item.rawStatus)}</td>
                         <td className="px-4 py-3 whitespace-nowrap">{callbackBadge(item.callback)}</td>
                         <td className="px-4 py-3 whitespace-nowrap">{item.kind === "external" ? <span className="text-muted-foreground text-xs">—</span> : sourceBadge(item.source)}</td>
                         <td className="px-4 py-3 whitespace-nowrap text-right font-bold tabular-nums">{fmtMoney(item.amount)}</td>
@@ -587,6 +602,23 @@ export function PaymentsPage() {
                                     {item.callback.responseStatus != null && <span className="text-muted-foreground ml-1.5">HTTP {item.callback.responseStatus}</span>}
                                   </span>
                                 </div>
+                                <div className="flex items-start gap-2">
+                                  <span className="text-muted-foreground w-28 shrink-0">Причина:</span>
+                                  <span className={cn(
+                                    "break-words",
+                                    (detail?.reason ?? item.reason) ? "text-red-300" : "text-muted-foreground",
+                                  )}>
+                                    {detail === undefined
+                                      ? "Загрузка…"
+                                      : detail?.reason ?? item.reason ?? (item.status === "PAID" ? "Платёж подтверждён" : "Причина не записана")}
+                                  </span>
+                                </div>
+                                {(detail?.rawStatus ?? item.rawStatus) && (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-muted-foreground w-28 shrink-0">Статус провайдера:</span>
+                                    <span className="font-mono">{detail?.rawStatus ?? item.rawStatus}</span>
+                                  </div>
+                                )}
                               </div>
                               <div className="text-xs">
                                 <p className="text-muted-foreground mb-1.5 inline-flex items-center gap-1"><Hash className="h-3 w-3" /> События callback</p>
@@ -602,12 +634,19 @@ export function PaymentsPage() {
                                       <div key={ev.id} className="flex items-center gap-2 flex-wrap rounded-lg border border-white/5 bg-foreground/[0.02] dark:bg-white/[0.02] px-2.5 py-1.5">
                                         <span className={cn(
                                           "inline-flex h-1.5 w-1.5 rounded-full",
-                                          ev.outcome === "success" ? "bg-emerald-400" : "bg-red-400"
+                                          ev.outcome === "accepted" || ev.outcome === "success" ? "bg-emerald-400" : "bg-red-400"
                                         )} />
                                         <span className="font-medium">{ev.provider}</span>
-                                        <span className="text-muted-foreground">{ev.outcome}</span>
+                                        <span className="text-muted-foreground">{outcomeLabel(ev.outcome)}</span>
                                         {ev.responseStatus != null && <span className="text-muted-foreground">HTTP {ev.responseStatus}</span>}
+                                        {ev.durationMs != null && <span className="text-muted-foreground">{ev.durationMs} мс</span>}
+                                        {ev.replayedBy && <span className="text-muted-foreground">Replay: {ev.replayedBy}</span>}
                                         <span className="text-muted-foreground ml-auto">{fmtDate(ev.createdAt)}</span>
+                                        {ev.errorMessage && (
+                                          <div className="basis-full rounded-md bg-red-500/10 px-2 py-1 text-red-300 break-words">
+                                            Ошибка: {ev.errorMessage}
+                                          </div>
+                                        )}
                                       </div>
                                     ))}
                                   </div>

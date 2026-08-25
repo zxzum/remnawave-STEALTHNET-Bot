@@ -205,6 +205,8 @@ export interface PaymentLogItem {
   product: string;
   callback: PaymentLogCallback;
   description: string | null;
+  rawStatus: string | null;
+  reason: string | null;
 }
 
 export interface PaymentsLogAggregates {
@@ -224,7 +226,11 @@ export interface PaymentLogWebhookEvent {
   id: string;
   provider: string;
   outcome: string;
+  errorMessage: string | null;
   responseStatus: number | null;
+  durationMs: number | null;
+  replayedBy: string | null;
+  replayOfId: string | null;
   createdAt: string;
 }
 

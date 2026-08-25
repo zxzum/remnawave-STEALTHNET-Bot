@@ -13,6 +13,69 @@ import { prisma } from "../../db.js";
 
 export type PaymentSource = "site" | "miniapp" | "bot";
 
+const PAYMENT_LOG_OUTCOME_LABELS: Record<string, string> = {
+  rejected_signature: "Подпись callback отклонена",
+  rejected_payload: "Данные callback отклонены",
+  payment_not_found: "Платёж не найден по callback",
+  payment_already_paid: "Платёж уже был оплачен",
+  payment_failed: "Callback сообщил об ошибке платежа",
+  ignored_event: "Событие callback проигнорировано",
+  error: "Ошибка обработки callback",
+};
+
+function diagnosticText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  return text ? text.slice(0, 500) : null;
+}
+
+/** Человеческое объяснение сырого статуса транзакции провайдера. */
+export function providerStatusReason(rawStatus: string | null | undefined): string | null {
+  const raw = (rawStatus ?? "").trim().toUpperCase();
+  if (raw === "EXPIRED") return "Истёк срок оплаты (timeout)";
+  if (raw === "CANCELED" || raw === "CANCELLED") return "Платёж отменён провайдером";
+  if (raw === "DECLINED" || raw === "REJECTED") return "Платёж отклонён провайдером";
+  if (raw === "FAILED" || raw === "ERROR") return "Провайдер сообщил об ошибке платежа";
+  return null;
+}
+
+export function paymentLogOutcomeLabel(outcome: string | null | undefined): string | null {
+  return outcome ? PAYMENT_LOG_OUTCOME_LABELS[outcome] ?? null : null;
+}
+
+export type PaymentLogReasonInput = {
+  status: string;
+  rawStatus?: string | null;
+  outcome?: string | null;
+  errorMessage?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+/**
+ * Выбирает безопасное объяснение для админского журнала.
+ * Сырые body/headers сюда не попадают: берём только сохранённую причину,
+ * исходный статус провайдера, outcome callback и короткие текстовые поля metadata.
+ */
+export function getPaymentLogReason(input: PaymentLogReasonInput): string | null {
+  const providerReason = providerStatusReason(input.rawStatus);
+  if (providerReason) return providerReason;
+
+  const errorMessage = diagnosticText(input.errorMessage);
+  if (errorMessage) return errorMessage;
+
+  const outcomeReason = paymentLogOutcomeLabel(input.outcome);
+  if (outcomeReason) return outcomeReason;
+
+  if (input.status.toUpperCase() === "FAILED" || input.status.toUpperCase() === "CANCELED") {
+    for (const key of ["failureReason", "errorMessage", "error", "reason", "message", "note"]) {
+      const metadataReason = diagnosticText(input.metadata?.[key]);
+      if (metadataReason) return metadataReason;
+    }
+  }
+
+  return null;
+}
+
 export type PaymentsLogFilters = {
   page: number;
   limit: number;
@@ -53,6 +116,8 @@ export type PaymentsLogItem = {
     responseStatus: number | null;
   };
   description: string | null;
+  rawStatus: string | null;
+  reason: string | null;
 };
 
 // Platega method ids (см. platega.service.ts): 2=СБП, 11=Карты РФ, 12=Международные, 13=Крипто.
@@ -234,25 +299,47 @@ const RAW_STATUS_TO_NORMALIZED: Record<string, string> = {
 };
 
 /** Callback-статус по последнему webhook-событию платежа (батч, без N+1). */
-async function loadCallbackMap(paymentIds: string[]): Promise<Map<string, { status: "success" | "failed"; at: Date; responseStatus: number }>> {
-  const map = new Map<string, { status: "success" | "failed"; at: Date; responseStatus: number }>();
+type CallbackDiagnostic = {
+  status: "success" | "failed";
+  at: Date;
+  responseStatus: number;
+  outcome: string;
+  errorMessage: string | null;
+  durationMs: number | null;
+};
+
+async function loadCallbackMap(paymentIds: string[]): Promise<Map<string, CallbackDiagnostic>> {
+  const map = new Map<string, CallbackDiagnostic>();
   if (paymentIds.length === 0) return map;
   const events = await prisma.webhookEvent.findMany({
     where: { paymentId: { in: paymentIds } },
     orderBy: { createdAt: "desc" },
-    select: { paymentId: true, outcome: true, responseStatus: true, createdAt: true },
+    select: { paymentId: true, outcome: true, errorMessage: true, responseStatus: true, durationMs: true, createdAt: true },
   });
   for (const ev of events) {
     if (!ev.paymentId || map.has(ev.paymentId)) continue; // первый = самый свежий
     const ok = ev.responseStatus >= 200 && ev.responseStatus < 300;
-    map.set(ev.paymentId, { status: ok ? "success" : "failed", at: ev.createdAt, responseStatus: ev.responseStatus });
+    map.set(ev.paymentId, {
+      status: ok ? "success" : "failed",
+      at: ev.createdAt,
+      responseStatus: ev.responseStatus,
+      outcome: ev.outcome,
+      errorMessage: ev.errorMessage,
+      durationMs: ev.durationMs,
+    });
   }
   return map;
 }
 
-function paymentToItem(p: PaymentRow, callback: PaymentsLogItem["callback"]): PaymentsLogItem {
+function paymentToItem(
+  p: PaymentRow,
+  callback: PaymentsLogItem["callback"],
+  diagnostic?: Pick<CallbackDiagnostic, "outcome" | "errorMessage">,
+  rawStatus?: string | null,
+): PaymentsLogItem {
   const { method, methodId } = methodForPayment(p.provider, p.metadata);
   const source = p.source === "site" || p.source === "miniapp" || p.source === "bot" ? p.source : null;
+  const metadata = parseMetadata(p.metadata);
   return {
     id: p.id,
     kind: "payment",
@@ -280,6 +367,14 @@ function paymentToItem(p: PaymentRow, callback: PaymentsLogItem["callback"]): Pa
     product: productForPayment(p),
     callback,
     description: null,
+    rawStatus: rawStatus ?? null,
+    reason: getPaymentLogReason({
+      status: p.status,
+      rawStatus,
+      outcome: diagnostic?.outcome,
+      errorMessage: diagnostic?.errorMessage,
+      metadata,
+    }),
   };
 }
 
@@ -303,10 +398,26 @@ function externalToItem(t: Prisma.ProviderTransactionGetPayload<object>): Paymen
     product: "Пополнение баланса",
     callback: { status: "none", at: null, responseStatus: null },
     description: t.description,
+    rawStatus: t.status,
+    reason: getPaymentLogReason({ status: normalizeProviderStatus(t.status), rawStatus: t.status }),
   };
 }
 
 const NO_CALLBACK: PaymentsLogItem["callback"] = { status: "none", at: null, responseStatus: null };
+
+async function loadProviderStatusMap(paymentIds: string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (paymentIds.length === 0) return map;
+  const transactions = await prisma.providerTransaction.findMany({
+    where: { paymentId: { in: paymentIds } },
+    orderBy: { updatedAt: "desc" },
+    select: { paymentId: true, status: true },
+  });
+  for (const tx of transactions) {
+    if (tx.paymentId && !map.has(tx.paymentId)) map.set(tx.paymentId, tx.status);
+  }
+  return map;
+}
 
 export async function listPaymentsLog(filters: PaymentsLogFilters) {
   const { page, limit } = filters;
@@ -337,12 +448,20 @@ export async function listPaymentsLog(filters: PaymentsLogFilters) {
     }),
   ]);
 
-  const callbackMap = await loadCallbackMap(payments.map((p) => p.id));
+  const [callbackMap, providerStatusMap] = await Promise.all([
+    loadCallbackMap(payments.map((p) => p.id)),
+    loadProviderStatusMap(payments.map((p) => p.id)),
+  ]);
 
   const merged: PaymentsLogItem[] = [
     ...payments.map((p) => {
       const cb = callbackMap.get(p.id);
-      return paymentToItem(p, cb ? { status: cb.status, at: cb.at.toISOString(), responseStatus: cb.responseStatus } : NO_CALLBACK);
+      return paymentToItem(
+        p,
+        cb ? { status: cb.status, at: cb.at.toISOString(), responseStatus: cb.responseStatus } : NO_CALLBACK,
+        cb,
+        providerStatusMap.get(p.id),
+      );
     }),
     ...externals.map(externalToItem),
   ].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
@@ -420,14 +539,34 @@ export async function getPaymentsLogEntry(id: string, kind: "payment" | "externa
   if (!p) return null;
   const callbackMap = await loadCallbackMap([p.id]);
   const cb = callbackMap.get(p.id);
+  const providerTransaction = await prisma.providerTransaction.findFirst({
+    where: { paymentId: p.id },
+    orderBy: { updatedAt: "desc" },
+    select: { status: true },
+  });
   const webhookEvents = await prisma.webhookEvent.findMany({
     where: { paymentId: p.id },
     orderBy: { createdAt: "desc" },
     take: 50,
-    select: { id: true, provider: true, outcome: true, responseStatus: true, createdAt: true },
+    select: {
+      id: true,
+      provider: true,
+      outcome: true,
+      errorMessage: true,
+      responseStatus: true,
+      durationMs: true,
+      replayedBy: true,
+      replayOfId: true,
+      createdAt: true,
+    },
   });
   return {
-    ...paymentToItem(p, cb ? { status: cb.status, at: cb.at.toISOString(), responseStatus: cb.responseStatus } : NO_CALLBACK),
+    ...paymentToItem(
+      p,
+      cb ? { status: cb.status, at: cb.at.toISOString(), responseStatus: cb.responseStatus } : NO_CALLBACK,
+      cb,
+      providerTransaction?.status,
+    ),
     metadata: parseMetadata(p.metadata),
     webhookEvents: webhookEvents.map((ev) => ({ ...ev, createdAt: ev.createdAt.toISOString() })),
   };
