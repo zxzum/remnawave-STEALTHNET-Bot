@@ -165,8 +165,8 @@ function BottomNav() {
   const location = useLocation();
   const activeIndex = Math.max(0, items.findIndex(({ to }) => location.pathname === to));
   return (
-    <nav className="fixed inset-x-3 bottom-3 z-40 max-[420px]:inset-x-2 lg:hidden" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-      <div className="bottom-nav-glass glass-strong mx-auto max-w-md rounded-4xl border border-violet-glow/50 bg-ink-950/80 p-3 shadow-[0_18px_50px_-14px_rgba(0,0,0,0.92),0_0_28px_-10px_rgba(139,92,246,0.65)] ring-1 ring-white/10">
+    <nav className="fixed inset-x-3 bottom-3 z-40 min-w-0 max-w-full max-[420px]:inset-x-2 lg:hidden" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <div className="bottom-nav-glass glass-strong mx-auto w-full min-w-0 max-w-md rounded-4xl border border-violet-glow/50 bg-ink-950/80 p-3 shadow-[0_18px_50px_-14px_rgba(0,0,0,0.92),0_0_28px_-10px_rgba(139,92,246,0.65)] ring-1 ring-white/10">
         <div className="relative grid grid-cols-4">
           <motion.span
             className="pointer-events-none absolute inset-y-0 left-0 w-1/4 rounded-3xl border border-accent-400/60 bg-gradient-to-br from-accent-500/30 via-violet-glow/20 to-violet-glow/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_26px_-4px_rgba(167,139,250,0.95)]"
@@ -326,18 +326,19 @@ export function Layout() {
   }, [displayedRouteKey, outlet, routeKey]);
 
   return (
-    <div className="relative min-h-dvh">
+    <div className="relative min-h-dvh w-full min-w-0 max-w-full overflow-x-clip">
       <Background />
       <Sidebar />
       <BottomNav />
       <Toasts />
       <FloatingChat />
-      <main className="relative z-10 mx-auto w-full max-w-2xl px-4 pt-6 pb-32 max-[420px]:px-3 max-[420px]:pt-4 sm:px-6 lg:max-w-none lg:pr-8 lg:pl-84 lg:pb-12 xl:pr-12 2xl:max-w-[1800px]">
+      <main className="relative z-10 mx-auto w-full min-w-0 max-w-2xl px-4 pt-6 pb-32 max-[420px]:px-3 max-[420px]:pt-4 sm:px-6 lg:max-w-none lg:pr-8 lg:pl-84 lg:pb-12 xl:pr-12 2xl:max-w-[1800px]">
         <motion.div
           key={displayedRouteKey}
           initial={{ opacity: 0 }}
           animate={{ opacity: isLeaving ? 0 : 1 }}
           transition={{ duration: 0.2, ease: "easeOut" }}
+          className="min-w-0 max-w-full"
         >
           {loading ? <InitialSkeleton pathname={location.pathname} /> : error ? <LoadError message={error} onRetry={reload} /> : displayedOutlet}
         </motion.div>

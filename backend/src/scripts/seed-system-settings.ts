@@ -72,6 +72,14 @@ const DEFAULTS: Array<[string, string]> = [
     "gift_intro_text",
     "🤔 Устали смотреть, как мучается Ваш близкий человек?\n\nПодарите ему доступ к нашему VPN 💖\n\n🎁 После оплаты придёт доступ, который вам останется лишь переслать человеку, которому вы хотите его подарить! 🤗",
   ],
+  // Продажа дополнительного трафика: дефолты для новой установки.
+  ["sell_options_enabled", "true"],
+  ["sell_options_traffic_enabled", "true"],
+  ["sell_options_traffic_max_purchases", "1"],
+  [
+    "sell_options_traffic_products",
+    '[{"id":"whitelist_50","name":"+50 ГБ белых списков","trafficGb":50,"price":150,"currency":"rub","trafficMode":"LOCAL_SQUAD"},{"id":"whitelist_100","name":"+100 ГБ белых списков","trafficGb":100,"price":200,"currency":"rub","trafficMode":"LOCAL_SQUAD"},{"id":"vpn_100","name":"+100 ГБ обычного трафика","trafficGb":100,"price":50,"currency":"rub","trafficMode":"REMNAWAVE"}]',
+  ],
 ];
 
 export async function ensureSystemSettings() {

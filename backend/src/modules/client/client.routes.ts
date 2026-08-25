@@ -44,7 +44,7 @@ import { saveRedirectAndBuildUrl } from "../payment-redirect/payment-redirect.ut
 import { createProxySlotsByPaymentId } from "../proxy/proxy-slots-activation.service.js";
 import { createSingboxSlotsByPaymentId } from "../singbox/singbox-slots-activation.service.js";
 import { buildSingboxSlotSubscriptionLink } from "../singbox/singbox-link.js";
-import { applyExtraOptionByPaymentId, canRefundExtraOptionFailure, cancelExtraOptionPaymentBeforePending } from "../extra-options/extra-options.service.js";
+import { applyExtraOptionByPaymentId, canRefundExtraOptionFailure, cancelExtraOptionPaymentBeforePending, validateTrafficOptionPurchase } from "../extra-options/extra-options.service.js";
 import { getAuthUrl, exchangeCodeForToken, requestPayment, processPayment } from "../yoomoney/yoomoney.service.js";
 import { createYookassaPayment } from "../yookassa/yookassa.service.js";
 import { createCryptopayInvoice, isCryptopayConfigured } from "../cryptopay/cryptopay.service.js";
@@ -3234,13 +3234,13 @@ clientRouter.get("/subscription", async (req, res) => {
       remnawaveUuid: true,
       trialId: true,
       expireAt: true,
-      tariff: { select: { name: true } },
+      tariff: { select: { name: true, trafficLimitMode: true } },
       trial: { select: { name: true, convertEnabled: true } },
       trafficQuota: { include: { grants: true } },
     },
   });
   if (!rootSub?.remnawaveUuid) {
-    return res.json({ subscription: null, tariffDisplayName: null, currentPricePerDay: null, trafficQuota: null, message: "Подписка не привязана" });
+    return res.json({ subscription: null, tariffDisplayName: null, currentPricePerDay: null, trafficLimitMode: null, trafficQuota: null, message: "Подписка не привязана" });
   }
   const effectiveUuid = rootSub.remnawaveUuid;
   // Self-heal: clients.remnawaveUuid разошёлся с актуальной подпиской → чиним (влияет на устройства, доп.подписки и пр.).
@@ -3264,6 +3264,7 @@ clientRouter.get("/subscription", async (req, res) => {
         isTrial: Boolean(rootSub.trialId),
         trialName: rootSub.trialId ? (rootSub.trial?.name ?? null) : null,
         trialConvertEnabled: rootSub.trialId ? (rootSub.trial?.convertEnabled ?? true) : true,
+        trafficLimitMode: rootSub.tariff?.trafficLimitMode ?? (rootSub.trafficQuota ? "LOCAL_SQUAD" : "REMNAWAVE"),
         trafficQuota: toClientTrafficQuota(rootSub.trafficQuota),
         message: null,
       });
@@ -3381,6 +3382,7 @@ clientRouter.get("/subscription", async (req, res) => {
     isTrial: Boolean(rootSub?.trialId),
     trialName: rootSub?.trialId ? (rootSub.trial?.name ?? null) : null,
     trialConvertEnabled: rootSub?.trialId ? (rootSub.trial?.convertEnabled ?? true) : true,
+    trafficLimitMode: rootSub?.tariff?.trafficLimitMode ?? (rootSub?.trafficQuota ? "LOCAL_SQUAD" : "REMNAWAVE"),
     trafficQuota: toClientTrafficQuota(rootSub.trafficQuota),
     componentQuotas: [],
   });
@@ -3488,6 +3490,7 @@ clientRouter.get("/subscription/all", async (req, res) => {
     trialConvertEnabled: boolean;
     /** конвертация разрешена в любой тариф. */
     trialConvertAllTariffs: boolean;
+    trafficLimitMode: "REMNAWAVE" | "LOCAL_SQUAD";
     trafficQuota: unknown;
     componentQuotas: unknown[];
   };
@@ -3509,7 +3512,7 @@ clientRouter.get("/subscription/all", async (req, res) => {
       autoRenewEnabled: true,
       extraDevices: true,
       extraDevicesMonthlyPrice: true,
-      tariff: { select: { id: true, name: true, menuEmoji: true } },
+      tariff: { select: { id: true, name: true, menuEmoji: true, trafficLimitMode: true } },
       trial: { select: { name: true, convertEnabled: true, convertAllTariffs: true, convertTariffIds: true } },
       trafficQuota: { include: { grants: true } },
     },
@@ -3560,6 +3563,7 @@ clientRouter.get("/subscription/all", async (req, res) => {
       trialName: sub.trialId ? (sub.trial?.name ?? null) : null,
       trialConvertEnabled: sub.trialId ? (sub.trial?.convertEnabled ?? true) : true,
       trialConvertAllTariffs: sub.trialId ? (sub.trial?.convertAllTariffs ?? false) : false,
+      trafficLimitMode: sub.tariff?.trafficLimitMode ?? (sub.trafficQuota ? "LOCAL_SQUAD" : "REMNAWAVE"),
       trafficQuota: toClientTrafficQuota(sub.trafficQuota),
       componentQuotas: [],
     });
@@ -3983,9 +3987,11 @@ clientRouter.post("/payments/platega", async (req, res) => {
     if (extraOption.kind === "traffic") {
       const product = cfg.sellOptionsTrafficEnabled && cfg.sellOptionsTrafficProducts?.find((p) => p.id === extraOption.productId);
       if (!product) return res.status(400).json({ message: "Опция не найдена" });
+      const trafficCheck = await validateTrafficOptionPurchase(clientId, extraOption.targetSubscriptionId, product, config.sellOptionsTrafficMaxPurchases);
+      if (!trafficCheck.ok) return res.status(trafficCheck.status).json({ message: trafficCheck.message });
       finalAmount = product.price;
       currencyToUse = product.currency.toUpperCase();
-      metadataExtra = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3) } };
+      metadataExtra = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3), trafficMode: product.trafficMode }, targetSubscriptionId: trafficCheck.subscriptionId };
     } else if (extraOption.kind === "devices") {
       const product = cfg.sellOptionsDevicesEnabled && cfg.sellOptionsDevicesProducts?.find((p) => p.id === extraOption.productId);
       if (!product) return res.status(400).json({ message: "Опция не найдена" });
@@ -4842,13 +4848,17 @@ clientRouter.post("/payments/balance/option", async (req, res) => {
   let price: number;
   let currency: string;
   let metadataExtra: Record<string, unknown>;
+  let validatedTrafficSubscriptionId: string | null = null;
 
   if (kind === "traffic") {
     const product = cfg.sellOptionsTrafficEnabled && cfg.sellOptionsTrafficProducts?.find((p) => p.id === productId);
     if (!product) return res.status(400).json({ message: "Опция не найдена" });
+    const trafficCheck = await validateTrafficOptionPurchase(clientRaw, targetSubscriptionId, product, config.sellOptionsTrafficMaxPurchases);
+    if (!trafficCheck.ok) return res.status(trafficCheck.status).json({ message: trafficCheck.message });
+    validatedTrafficSubscriptionId = trafficCheck.subscriptionId;
     price = product.price;
     currency = product.currency;
-    metadataExtra = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3) } };
+    metadataExtra = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3), trafficMode: product.trafficMode }, targetSubscriptionId: trafficCheck.subscriptionId };
   } else if (kind === "devices") {
     const product = cfg.sellOptionsDevicesEnabled && cfg.sellOptionsDevicesProducts?.find((p) => p.id === productId);
     if (!product) return res.status(400).json({ message: "Опция не найдена" });
@@ -4882,7 +4892,7 @@ clientRouter.post("/payments/balance/option", async (req, res) => {
 
   // валидируем, что secondary принадлежит клиенту.
   // Если targetSubscriptionId не передан — опция применится к primary (старое поведение).
-  let optionSubscriptionId = targetSubscriptionId;
+  let optionSubscriptionId = validatedTrafficSubscriptionId ?? targetSubscriptionId;
   if (targetSubscriptionId) {
     const sec = await prisma.subscription.findUnique({
       where: { id: targetSubscriptionId },
@@ -4892,7 +4902,7 @@ clientRouter.post("/payments/balance/option", async (req, res) => {
       return res.status(400).json({ message: "Подписка для опции не найдена" });
     }
     metadataExtra.targetSubscriptionId = targetSubscriptionId;
-  } else {
+  } else if (!optionSubscriptionId) {
     const primary = await prisma.subscription.findFirst({
       where: { ownerId: clientDb.id, subscriptionIndex: 0, deletionRequestedAt: null, remnawaveUuid: { not: null } },
       select: { id: true },
@@ -5177,8 +5187,10 @@ clientRouter.post("/yoomoney/create-form-payment", async (req, res) => {
     if (extraOption.kind === "traffic") {
       const product = cfg.sellOptionsTrafficEnabled && cfg.sellOptionsTrafficProducts?.find((p) => p.id === extraOption.productId);
       if (!product) return res.status(400).json({ message: "Опция не найдена" });
+      const trafficCheck = await validateTrafficOptionPurchase(clientId, extraOption.targetSubscriptionId, product, config.sellOptionsTrafficMaxPurchases);
+      if (!trafficCheck.ok) return res.status(trafficCheck.status).json({ message: trafficCheck.message });
       amountRounded = Math.round(product.price * 100) / 100;
-      metadataObj = { paymentType, extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3) } };
+      metadataObj = { paymentType, extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3), trafficMode: product.trafficMode }, targetSubscriptionId: trafficCheck.subscriptionId };
     } else if (extraOption.kind === "devices") {
       const product = cfg.sellOptionsDevicesEnabled && cfg.sellOptionsDevicesProducts?.find((p) => p.id === extraOption.productId);
       if (!product) return res.status(400).json({ message: "Опция не найдена" });
@@ -5467,9 +5479,11 @@ clientRouter.post("/yookassa/create-payment", async (req, res) => {
       if (extraOption.kind === "traffic") {
         const product = cfg.sellOptionsTrafficEnabled && cfg.sellOptionsTrafficProducts?.find((p) => p.id === extraOption.productId);
         if (!product) return res.status(400).json({ message: "Опция не найдена" });
+        const trafficCheck = await validateTrafficOptionPurchase(clientId, extraOption.targetSubscriptionId, product, config.sellOptionsTrafficMaxPurchases);
+        if (!trafficCheck.ok) return res.status(trafficCheck.status).json({ message: trafficCheck.message });
         amountRounded = Math.round(product.price * 100) / 100;
         currencyUpper = product.currency.toUpperCase();
-        metadataObj = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3) } };
+        metadataObj = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3), trafficMode: product.trafficMode }, targetSubscriptionId: trafficCheck.subscriptionId };
       } else if (extraOption.kind === "devices") {
         const product = cfg.sellOptionsDevicesEnabled && cfg.sellOptionsDevicesProducts?.find((p) => p.id === extraOption.productId);
         if (!product) return res.status(400).json({ message: "Опция не найдена" });
@@ -5832,9 +5846,11 @@ clientRouter.post("/cryptopay/create-payment", async (req, res) => {
       if (extraOption.kind === "traffic") {
         const product = cfg.sellOptionsTrafficEnabled && cfg.sellOptionsTrafficProducts?.find((p) => p.id === extraOption.productId);
         if (!product) return res.status(400).json({ message: "Опция не найдена" });
+        const trafficCheck = await validateTrafficOptionPurchase(clientId, extraOption.targetSubscriptionId, product, config.sellOptionsTrafficMaxPurchases);
+        if (!trafficCheck.ok) return res.status(trafficCheck.status).json({ message: trafficCheck.message });
         amountRounded = Math.round(product.price * 100) / 100;
         currencyUpper = product.currency.toUpperCase();
-        metadataObj = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3) } };
+        metadataObj = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3), trafficMode: product.trafficMode }, targetSubscriptionId: trafficCheck.subscriptionId };
       } else if (extraOption.kind === "devices") {
         const product = cfg.sellOptionsDevicesEnabled && cfg.sellOptionsDevicesProducts?.find((p) => p.id === extraOption.productId);
         if (!product) return res.status(400).json({ message: "Опция не найдена" });
@@ -6130,9 +6146,11 @@ clientRouter.post("/heleket/create-payment", async (req, res) => {
       if (extraOption.kind === "traffic") {
         const product = cfg.sellOptionsTrafficEnabled && cfg.sellOptionsTrafficProducts?.find((p) => p.id === extraOption.productId);
         if (!product) return res.status(400).json({ message: "Опция не найдена" });
+        const trafficCheck = await validateTrafficOptionPurchase(clientId, extraOption.targetSubscriptionId, product, config.sellOptionsTrafficMaxPurchases);
+        if (!trafficCheck.ok) return res.status(trafficCheck.status).json({ message: trafficCheck.message });
         amountRounded = Math.round(product.price * 100) / 100;
         currencyUpper = product.currency.toUpperCase();
-        metadataObj = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3) } };
+        metadataObj = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3), trafficMode: product.trafficMode }, targetSubscriptionId: trafficCheck.subscriptionId };
       } else if (extraOption.kind === "devices") {
         const product = cfg.sellOptionsDevicesEnabled && cfg.sellOptionsDevicesProducts?.find((p) => p.id === extraOption.productId);
         if (!product) return res.status(400).json({ message: "Опция не найдена" });
@@ -6417,9 +6435,11 @@ clientRouter.post("/lava/create-payment", async (req, res) => {
       if (extraOption.kind === "traffic") {
         const product = cfg.sellOptionsTrafficEnabled && cfg.sellOptionsTrafficProducts?.find((p) => p.id === extraOption.productId);
         if (!product) return res.status(400).json({ message: "Опция не найдена" });
+        const trafficCheck = await validateTrafficOptionPurchase(clientId, extraOption.targetSubscriptionId, product, config.sellOptionsTrafficMaxPurchases);
+        if (!trafficCheck.ok) return res.status(trafficCheck.status).json({ message: trafficCheck.message });
         amountRounded = Math.round(product.price * 100) / 100;
         currencyUpper = product.currency.toUpperCase();
-        metadataObj = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3) } };
+        metadataObj = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3), trafficMode: product.trafficMode }, targetSubscriptionId: trafficCheck.subscriptionId };
       } else if (extraOption.kind === "devices") {
         const product = cfg.sellOptionsDevicesEnabled && cfg.sellOptionsDevicesProducts?.find((p) => p.id === extraOption.productId);
         if (!product) return res.status(400).json({ message: "Опция не найдена" });
@@ -6725,9 +6745,11 @@ clientRouter.post("/lavatop/create-payment", async (req, res) => {
       if (extraOption.kind === "traffic") {
         const product = cfg.sellOptionsTrafficEnabled && cfg.sellOptionsTrafficProducts?.find((p) => p.id === extraOption.productId);
         if (!product) return res.status(400).json({ message: "Опция не найдена" });
+        const trafficCheck = await validateTrafficOptionPurchase(clientId, extraOption.targetSubscriptionId, product, config.sellOptionsTrafficMaxPurchases);
+        if (!trafficCheck.ok) return res.status(trafficCheck.status).json({ message: trafficCheck.message });
         amountRounded = Math.round(product.price * 100) / 100;
         currencyUpper = product.currency.toUpperCase();
-        metadataObj = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3) } };
+        metadataObj = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3), trafficMode: product.trafficMode }, targetSubscriptionId: trafficCheck.subscriptionId };
       } else if (extraOption.kind === "devices") {
         const product = cfg.sellOptionsDevicesEnabled && cfg.sellOptionsDevicesProducts?.find((p) => p.id === extraOption.productId);
         if (!product) return res.status(400).json({ message: "Опция не найдена" });
@@ -7031,9 +7053,11 @@ clientRouter.post("/overpay/create-payment", async (req, res) => {
       if (extraOption.kind === "traffic") {
         const product = cfg.sellOptionsTrafficEnabled && cfg.sellOptionsTrafficProducts?.find((p) => p.id === extraOption.productId);
         if (!product) return res.status(400).json({ message: "Опция не найдена" });
+        const trafficCheck = await validateTrafficOptionPurchase(clientId, extraOption.targetSubscriptionId, product, config.sellOptionsTrafficMaxPurchases);
+        if (!trafficCheck.ok) return res.status(trafficCheck.status).json({ message: trafficCheck.message });
         amountRounded = Math.round(product.price * 100) / 100;
         currencyUpper = product.currency.toUpperCase();
-        metadataObj = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3) } };
+        metadataObj = { extraOption: { kind: "traffic", trafficBytes: Math.round(product.trafficGb * 1024 ** 3), trafficMode: product.trafficMode }, targetSubscriptionId: trafficCheck.subscriptionId };
       } else if (extraOption.kind === "devices") {
         const product = cfg.sellOptionsDevicesEnabled && cfg.sellOptionsDevicesProducts?.find((p) => p.id === extraOption.productId);
         if (!product) return res.status(400).json({ message: "Опция не найдена" });

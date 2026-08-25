@@ -84,7 +84,12 @@ export async function notifyTrafficMilestones(
     }
 
     try {
-      await dependencies.sendTelegramToUser(telegramId, milestoneText(percent, quota, limitBytes));
+      await dependencies.sendTelegramToUser(
+        telegramId,
+        milestoneText(percent, quota, limitBytes),
+        undefined,
+        { inline_keyboard: [[{ text: "➕ Докупить трафик", callback_data: "menu:extra_options" }]] },
+      );
       sent++;
     } catch (error) {
       await dependencies.prisma.trafficQuotaEvent.create({

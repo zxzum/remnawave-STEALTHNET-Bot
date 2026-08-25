@@ -544,6 +544,7 @@ export function SettingsPage() {
         aiChatEnabled: (data as AdminSettings).aiChatEnabled !== false,
         sellOptionsEnabled: (data as AdminSettings).sellOptionsEnabled ?? false,
         sellOptionsTrafficEnabled: (data as AdminSettings).sellOptionsTrafficEnabled ?? false,
+        sellOptionsTrafficMaxPurchases: (data as AdminSettings).sellOptionsTrafficMaxPurchases ?? 1,
         sellOptionsTrafficProducts: (data as AdminSettings).sellOptionsTrafficProducts ?? [],
         sellOptionsDevicesEnabled: (data as AdminSettings).sellOptionsDevicesEnabled ?? false,
         sellOptionsDevicesProducts: (data as AdminSettings).sellOptionsDevicesProducts ?? [],
@@ -768,6 +769,7 @@ export function SettingsPage() {
       const payload = {
         sellOptionsEnabled: settings.sellOptionsEnabled ?? false,
         sellOptionsTrafficEnabled: settings.sellOptionsTrafficEnabled ?? false,
+        sellOptionsTrafficMaxPurchases: settings.sellOptionsTrafficMaxPurchases ?? 1,
         sellOptionsTrafficProducts: (settings.sellOptionsTrafficProducts?.length ? JSON.stringify(settings.sellOptionsTrafficProducts) : "") as string | null,
         sellOptionsDevicesEnabled: settings.sellOptionsDevicesEnabled ?? false,
         sellOptionsDevicesProducts: (settings.sellOptionsDevicesProducts?.length ? JSON.stringify(settings.sellOptionsDevicesProducts) : "") as string | null,
@@ -957,6 +959,7 @@ export function SettingsPage() {
         allowUserThemeChange: (settings as any).allowUserThemeChange ?? true,
         sellOptionsEnabled: settings.sellOptionsEnabled ?? false,
         sellOptionsTrafficEnabled: settings.sellOptionsTrafficEnabled ?? false,
+        sellOptionsTrafficMaxPurchases: settings.sellOptionsTrafficMaxPurchases ?? 1,
         sellOptionsTrafficProducts: settings.sellOptionsTrafficProducts?.length ? JSON.stringify(settings.sellOptionsTrafficProducts) : null,
         sellOptionsDevicesEnabled: settings.sellOptionsDevicesEnabled ?? false,
         sellOptionsDevicesProducts: settings.sellOptionsDevicesProducts?.length ? JSON.stringify(settings.sellOptionsDevicesProducts) : null,
@@ -4490,6 +4493,19 @@ export function SettingsPage() {
                     />
                     <Label htmlFor="sell-traffic-enabled" className="cursor-pointer">{t("admin.settings.options_enable_short")}</Label>
                   </div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Label htmlFor="sell-traffic-max-purchases" className="whitespace-nowrap">Покупок трафика на подписку в месяц</Label>
+                    <Input
+                      id="sell-traffic-max-purchases"
+                      type="number"
+                      min={1}
+                      max={100}
+                      step={1}
+                      className="h-9 w-20"
+                      value={settings.sellOptionsTrafficMaxPurchases ?? 1}
+                      onChange={(e) => setSettings((s) => (s ? { ...s, sellOptionsTrafficMaxPurchases: Math.min(100, Math.max(1, parseInt(e.target.value, 10) || 1)) } : s))}
+                    />
+                  </div>
                   <div className="rounded-md border overflow-x-auto overflow-hidden">
                     <table className="w-full text-sm min-w-[400px] [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap">
                       <thead>
@@ -4498,6 +4514,7 @@ export function SettingsPage() {
                           <th className="text-left p-2 font-medium w-24">{t("admin.settings.options_col_gb")}</th>
                           <th className="text-left p-2 font-medium w-28">{t("admin.settings.options_col_price")}</th>
                           <th className="text-left p-2 font-medium w-24">{t("admin.settings.options_col_currency")}</th>
+                          <th className="text-left p-2 font-medium w-32">Режим</th>
                           <th className="w-10" />
                         </tr>
                       </thead>
@@ -4512,6 +4529,13 @@ export function SettingsPage() {
                                 {ALLOWED_CURRENCIES.map((c) => <option key={c} value={c}>{c.toUpperCase()}</option>)}
                               </select>
                             </td>
+                            <td className="p-2">
+                              <select className="h-9 rounded-md border px-2 w-full bg-background" value={p.trafficMode ?? "ANY"} onChange={(e) => setSettings((s) => { if (!s?.sellOptionsTrafficProducts) return s; const arr = [...s.sellOptionsTrafficProducts]; arr[i] = { ...arr[i], trafficMode: e.target.value as "LOCAL_SQUAD" | "REMNAWAVE" | "ANY" }; return { ...s, sellOptionsTrafficProducts: arr }; })}>
+                                <option value="LOCAL_SQUAD">Белые списки</option>
+                                <option value="REMNAWAVE">Обычный VPN</option>
+                                <option value="ANY">Любой</option>
+                              </select>
+                            </td>
                             <td className="p-1"><Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSettings((s) => (s ? { ...s, sellOptionsTrafficProducts: (s.sellOptionsTrafficProducts ?? []).filter((_, j) => j !== i) } : s))}><Trash2 className="h-4 w-4" /></Button></td>
                           </tr>
                         ))}
@@ -4519,7 +4543,7 @@ export function SettingsPage() {
                     </table>
                   </div>
                   <div className="mt-3">
-                    <Button type="button" variant="outline" size="sm" onClick={() => setSettings((s) => (s ? { ...s, sellOptionsTrafficProducts: [...(s.sellOptionsTrafficProducts ?? []), { id: `traffic_${Date.now()}`, name: "", trafficGb: 5, price: 0, currency: "rub" }] } : s))}>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setSettings((s) => (s ? { ...s, sellOptionsTrafficProducts: [...(s.sellOptionsTrafficProducts ?? []), { id: `traffic_${Date.now()}`, name: "", trafficGb: 5, price: 0, currency: "rub", trafficMode: "LOCAL_SQUAD" }] } : s))}>
                       <Plus className="h-4 w-4 mr-1" /> {t("admin.settings.options_add")}
                     </Button>
                   </div>

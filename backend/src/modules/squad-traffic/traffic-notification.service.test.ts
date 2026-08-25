@@ -13,7 +13,7 @@ function memoryNotifier(options: { telegramId?: string | null; failSend?: boolea
     subscription: { owner: { id: "client-1", telegramId: options.telegramId === undefined ? "12345" : options.telegramId } },
   };
   const events: Array<Record<string, unknown>> = [];
-  const messages: Array<{ telegramId: string; text: string }> = [];
+  const messages: Array<{ telegramId: string; text: string; replyMarkup?: Record<string, unknown> }> = [];
   const dependencies = {
     prisma: {
       squadTrafficQuota: {
@@ -27,8 +27,8 @@ function memoryNotifier(options: { telegramId?: string | null; failSend?: boolea
       },
       trafficQuotaEvent: { create: async ({ data }: { data: Record<string, unknown> }) => events.push(data) },
     },
-    sendTelegramToUser: async (telegramId: string, text: string) => {
-      messages.push({ telegramId, text });
+    sendTelegramToUser: async (telegramId: string, text: string, _threadId?: number | null, replyMarkup?: Record<string, unknown>) => {
+      messages.push({ telegramId, text, replyMarkup });
       if (options.failSend) throw new Error("telegram unavailable");
     },
   };
@@ -45,6 +45,7 @@ test("milestones reserve then send in 50/25/10/3/0 order exactly once across res
   assert.match(messages[0]?.text ?? "", /^📶 Осталось 50% трафика/);
   assert.match(messages[0]?.text ?? "", /Использовано: 75 Б из 100 Б/);
   assert.doesNotMatch(messages[0]?.text ?? "", /байт/i);
+  assert.equal((messages[0]?.replyMarkup as { inline_keyboard?: Array<Array<{ callback_data?: string }>> })?.inline_keyboard?.[0]?.[0]?.callback_data, "menu:extra_options");
   assert.match(messages[4]?.text ?? "", /^⛔ Трафик закончился/);
   assert.match(messages[4]?.text ?? "", /Продлите тариф или добавьте трафик/);
 });

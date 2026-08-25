@@ -116,7 +116,7 @@
           "type": "leastLoad",
           "settings": {
             "maxRTT": "3s",
-            "expected": 2,
+            "expected": 1,
             "baselines": [
               "1500ms"
             ],
@@ -205,27 +205,19 @@
     "injectHosts": [
       {
         "selector": {
-          "type": "uuids",
-          "values": [
-            "9aa00562-8035-484b-b928-db0eb957e208",
-            "17669559-66de-433c-9144-648a971858f8",
-            "86e47bfd-99db-4add-8ba4-fdd1ff250012",
-            "5406fbe8-d73d-4921-87bb-373345997761"
-          ]
+          "type": "tagRegex",
+          "pattern": "^AUTO_EU$"
         },
         "tagPrefix": "eu",
-        "selectFrom": "ALL"
+        "selectFrom": "NOT_HIDDEN"
       },
       {
         "selector": {
-          "type": "uuids",
-          "values": [
-            "b0f8cf1c-5aef-48ec-b7a1-591b94844a99",
-            "81f6e4ca-cc0c-467a-8ad4-7df1ddc8a242"
-          ]
+          "type": "tagRegex",
+          "pattern": "^WHITE_LIST$"
         },
         "tagPrefix": "wl",
-        "selectFrom": "ALL"
+        "selectFrom": "HIDDEN"
       }
     ],
     "addVirtualHostAsOutbound": false
@@ -234,14 +226,14 @@
     "pingConfig": {
       "timeout": "5s",
       "interval": "1m",
-      "sampling": 1,
+      "sampling": 3,
       "httpMethod": "HEAD",
       "destination": "https://connectivitycheck.gstatic.com/generate_204",
       "connectivity": ""
     },
     "subjectSelector": [
-      "eu",
-      "wl"
+      "wl",
+      "eu"
     ]
   }
 }

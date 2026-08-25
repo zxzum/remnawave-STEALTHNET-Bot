@@ -58,6 +58,7 @@ export type CabinetSubscription = {
   expiresAt: string;
   source: { type: "root" | "secondary"; id: string };
   tariffId: string | null;
+  trafficLimitMode: "LOCAL_SQUAD" | "REMNAWAVE";
   isTrial: boolean;
   convertTariffIds: string[];
   trialConvertEnabled: boolean;
@@ -191,6 +192,7 @@ type SubscriptionItem = {
   tariffDisplayName: string;
   subscription: unknown;
   trafficQuota?: unknown;
+  trafficLimitMode?: "LOCAL_SQUAD" | "REMNAWAVE";
   tariffId?: string | null;
   trialId?: string | null;
   convertTariffIds?: string[];
@@ -273,6 +275,7 @@ export function mapSubscription(
     expiresAt: validExpiry ? validExpiry.toLocaleDateString("ru-RU") : "—",
     source: { type: item.type, id: item.id },
     tariffId: item.tariffId ?? null,
+    trafficLimitMode: item.trafficLimitMode ?? (trafficQuota ? "LOCAL_SQUAD" : "REMNAWAVE"),
     isTrial: Boolean(item.trialId),
     convertTariffIds: item.convertTariffIds ?? [],
     trialConvertEnabled: item.trialConvertEnabled !== false,

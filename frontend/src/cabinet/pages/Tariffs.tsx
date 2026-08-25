@@ -31,6 +31,7 @@ import { cn } from "../lib/cn";
 import { useApp } from "../store/AppContext";
 import { conversionTargets, quoteTariff, resolvePaymentUrl, type CabinetSubscription, type TariffGroup, type TariffPlan } from "../model";
 import { preparePaymentRedirect } from "@/lib/open-payment-url";
+import { ExtraOptions } from "./Services";
 
 function durationPrice(plan: TariffPlan, days: number, extraDevices: number) {
   return quoteTariff(plan, days, extraDevices).total;
@@ -1107,6 +1108,8 @@ export default function Tariffs() {
           </Accordion.Item>
         ))}
       </Accordion.Root>
+
+      <ExtraOptions trafficOnly />
 
       <PlanDialog plan={selected} open={selected !== null} onOpenChange={(v) => !v && setSelected(null)} />
     </div>

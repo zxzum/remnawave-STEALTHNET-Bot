@@ -3789,6 +3789,7 @@ const updateSettingsSchema = z.object({
   blacklistEnabled: z.boolean().optional(),
   sellOptionsEnabled: z.boolean().optional(),
   sellOptionsTrafficEnabled: z.boolean().optional(),
+  sellOptionsTrafficMaxPurchases: z.number().int().min(1).max(100).optional(),
   sellOptionsTrafficProducts: z.string().max(10000).nullable().optional(),
   sellOptionsDevicesEnabled: z.boolean().optional(),
   sellOptionsDevicesProducts: z.string().max(10000).nullable().optional(),
@@ -4581,6 +4582,9 @@ adminRouter.patch("/settings", async (req, res) => {
   if (updates.sellOptionsTrafficEnabled !== undefined) {
     const val = updates.sellOptionsTrafficEnabled ? "true" : "false";
     await prisma.systemSetting.upsert({ where: { key: "sell_options_traffic_enabled" }, create: { key: "sell_options_traffic_enabled", value: val }, update: { value: val } });
+  }
+  if (updates.sellOptionsTrafficMaxPurchases !== undefined) {
+    await prisma.systemSetting.upsert({ where: { key: "sell_options_traffic_max_purchases" }, create: { key: "sell_options_traffic_max_purchases", value: String(updates.sellOptionsTrafficMaxPurchases) }, update: { value: String(updates.sellOptionsTrafficMaxPurchases) } });
   }
   if (updates.sellOptionsTrafficProducts !== undefined) {
     const val = typeof updates.sellOptionsTrafficProducts === "string" ? updates.sellOptionsTrafficProducts : (updates.sellOptionsTrafficProducts == null ? "" : JSON.stringify(updates.sellOptionsTrafficProducts));

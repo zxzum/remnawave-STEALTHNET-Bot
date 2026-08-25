@@ -63,5 +63,6 @@
     "фронтенда",
     "эндпоинты"
   ],
-  "commentTranslate.multiLineMerge": true
+  "commentTranslate.multiLineMerge": true,
+  "git.ignoreLimitWarning": true
 }
