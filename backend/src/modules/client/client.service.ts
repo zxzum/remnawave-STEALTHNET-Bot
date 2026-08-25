@@ -125,6 +125,7 @@ const SYSTEM_CONFIG_KEYS = [
   "yookassa_webhook_basic_user", "yookassa_webhook_basic_password",
   "cryptopay_api_token", "cryptopay_testnet",
   "heleket_merchant_id", "heleket_api_key",
+  "rollypay_api_key", "rollypay_signing_secret", "rollypay_enabled", "rollypay_test_mode",
   "lava_shop_id", "lava_secret_key", "lava_additional_key",
   "lavatop_api_key", "lavatop_default_offer_id",
   "overpay_api_url", "overpay_project_id", "overpay_login", "overpay_password",
@@ -177,6 +178,7 @@ const SYSTEM_CONFIG_KEYS = [
   "bot_welcome_enabled", "bot_welcome_text", "bot_welcome_image", "bot_welcome_show_once",
   "tickets_enabled", // Тикет-система: true/false
   "admin_front_notifications_enabled", // Всплывающие уведомления в админке: true/false
+  "cabinet_design", // Дизайн кабинета: default или aurora
   "theme_accent", // Глобальная цветовая тема: default, blue, violet, rose, orange, green, emerald, cyan, amber, red, pink, indigo
   "allow_user_theme_change", // Разрешить пользователям менять тему: true/false
   "force_subscribe_enabled", "force_subscribe_channel_id", "force_subscribe_message", // Принудительная подписка на канал/группу
@@ -611,7 +613,8 @@ async function loadSystemConfigFromDb() {
     trialSquadUuid: map.trial_squad_uuid || null,
     trialDeviceLimit: map.trial_device_limit != null && map.trial_device_limit !== "" ? parseInt(map.trial_device_limit, 10) : null,
     trialTrafficLimitBytes: map.trial_traffic_limit != null && map.trial_traffic_limit !== "" ? parseInt(map.trial_traffic_limit, 10) : null,
-    serviceName: map.service_name || "STEALTHNET",
+    serviceName: map.service_name || "Лазейка ВПН",
+    cabinetDesign: map.cabinet_design === "aurora" ? "aurora" : "default",
     logo: map.logo || null,
     logoBot: map.logo_bot || null,
     favicon: map.favicon || null,
@@ -664,6 +667,10 @@ async function loadSystemConfigFromDb() {
     cryptopayTestnet: map.cryptopay_testnet === "true" || map.cryptopay_testnet === "1",
     heleketMerchantId: (map.heleket_merchant_id ?? "").trim() || null,
     heleketApiKey: (map.heleket_api_key ?? "").trim() || null,
+    rollypayApiKey: (map.rollypay_api_key ?? "").trim() || null,
+    rollypaySigningSecret: (map.rollypay_signing_secret ?? "").trim() || null,
+    rollypayEnabled: (map.rollypay_enabled ?? "false").trim() === "true",
+    rollypayTestMode: (map.rollypay_test_mode ?? "false").trim() === "true",
     lavaShopId: (map.lava_shop_id ?? "").trim() || null,
     lavaSecretKey: (map.lava_secret_key ?? "").trim() || null,
     lavaAdditionalKey: (map.lava_additional_key ?? "").trim() || null,
@@ -1015,6 +1022,7 @@ const DEFAULT_PAYMENT_PROVIDERS: PaymentProviderConfig[] = [
   { id: "lava", label: "LAVA (СБП / Карты / СберPay)", sortOrder: 4 },
   { id: "lavatop", label: "Lava.top (СБП / Карты)", sortOrder: 5 },
   { id: "overpay", label: "Overpay (Карты / СБП)", sortOrder: 6 },
+  { id: "rollypay", label: "RollyPay", sortOrder: 7 },
 ];
 
 function parsePaymentProviders(raw: string | undefined): PaymentProviderConfig[] {
@@ -1300,6 +1308,11 @@ export async function getPublicConfig(_forCloneBot?: { markupPercent?: number | 
     yookassaRecurringEnabled: full.yookassaRecurringEnabled ?? false,
     cryptopayEnabled: Boolean((full as { cryptopayApiToken?: string | null }).cryptopayApiToken?.trim()),
     heleketEnabled: Boolean((full as { heleketMerchantId?: string | null }).heleketMerchantId?.trim() && (full as { heleketApiKey?: string | null }).heleketApiKey?.trim()),
+    rollypayEnabled: Boolean(
+      full.rollypayEnabled === true &&
+      (full as { rollypayApiKey?: string | null }).rollypayApiKey?.trim() &&
+      (full as { rollypaySigningSecret?: string | null }).rollypaySigningSecret?.trim(),
+    ),
     lavaEnabled: Boolean((full as { lavaShopId?: string | null }).lavaShopId?.trim() && (full as { lavaSecretKey?: string | null }).lavaSecretKey?.trim()),
     lavatopEnabled: Boolean((full as { lavatopApiKey?: string | null }).lavatopApiKey?.trim()),
     overpayEnabled: Boolean(
@@ -1381,6 +1394,7 @@ export async function getPublicConfig(_forCloneBot?: { markupPercent?: number | 
     videoInstructionsEnabled: full.videoInstructionsEnabled ?? false,
     videoInstructions: full.videoInstructionsEnabled ? (full.videoInstructions ?? []) : [],
     ticketsEnabled: (full as { ticketsEnabled?: boolean }).ticketsEnabled ?? false,
+    cabinetDesign: full.cabinetDesign === "aurora" ? "aurora" : "default",
     themeAccent: full.themeAccent ?? "default",
     allowUserThemeChange: (full as any).allowUserThemeChange ?? true,
     googleAnalyticsId: full.googleAnalyticsId ?? null,

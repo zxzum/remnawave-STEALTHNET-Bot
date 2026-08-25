@@ -186,6 +186,118 @@ export function isYookassaConfigured(shopId: string | null, secretKey: string | 
   return Boolean(shopId?.trim() && secretKey?.trim());
 }
 
+export type YookassaConfig = {
+  yookassaShopId?: string | null;
+  yookassaSecretKey?: string | null;
+};
+
+export type YookassaPayment = {
+  id?: string;
+  status?: string;
+  amount?: { value?: string; currency?: string };
+  metadata?: Record<string, string>;
+  payment_method?: {
+    type?: string;
+    id?: string;
+    saved?: boolean;
+    title?: string;
+    card?: { last4?: string; card_type?: string };
+  };
+};
+
+export type YookassaPaymentLookup =
+  | { ok: true; payment: YookassaPayment }
+  | { ok: false; kind: "transient" | "remote_rejection" | "not_configured"; status: number; error: string };
+
+export function isYookassaTransportTimeout(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const value = error as { name?: unknown; message?: unknown; code?: unknown };
+  const name = typeof value.name === "string" ? value.name.toLowerCase() : "";
+  const message = typeof value.message === "string" ? value.message.toLowerCase() : "";
+  const code = typeof value.code === "string" ? value.code.toLowerCase() : "";
+  return name === "aborterror"
+    || ["timeout", "timed out", "etimedout", "econnreset", "econnrefused", "enotfound", "network"].some((part) =>
+      message.includes(part) || code.includes(part));
+}
+
+export function yookassaPaymentLookupFailure(error: string, status = 503): Extract<YookassaPaymentLookup, { ok: false }> {
+  return {
+    ok: false,
+    kind: status === 408 || status === 429 || status >= 500 ? "transient" : "remote_rejection",
+    status,
+    error,
+  };
+}
+
+export async function getYookassaPayment(id: string, config: YookassaConfig): Promise<YookassaPaymentLookup> {
+  const paymentId = id.trim();
+  const shopId = config.yookassaShopId?.trim() ?? "";
+  const secretKey = config.yookassaSecretKey?.trim() ?? "";
+  if (!paymentId || !shopId || !secretKey) {
+    return { ok: false, kind: "not_configured", status: 503, error: "YooKassa not configured" };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const auth = Buffer.from(`${shopId}:${secretKey}`).toString("base64");
+    const proxy = await getProxyUrl("payments");
+    const response = await proxyFetch(`${YOOKASSA_API}/payments/${encodeURIComponent(paymentId)}`, {
+      headers: { Authorization: `Basic ${auth}` },
+      signal: controller.signal,
+    }, proxy);
+    if (!response.ok) {
+      return yookassaPaymentLookupFailure(`YooKassa API returned HTTP ${response.status}`, response.status);
+    }
+    try {
+      return { ok: true, payment: (await response.json()) as YookassaPayment };
+    } catch {
+      return yookassaPaymentLookupFailure("YooKassa returned invalid JSON", 502);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return yookassaPaymentLookupFailure(message, isYookassaTransportTimeout(error) ? 408 : 503);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+export type YookassaPaymentValidation =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+export function validateYookassaPayment(
+  localPayment: { id: string; externalId?: string | null; amount: number; currency: string },
+  remotePayment: YookassaPayment | null,
+  expectedId: string,
+): YookassaPaymentValidation {
+  const providerId = expectedId.trim();
+  if (!remotePayment) return { ok: false, reason: "payment_not_confirmed" };
+  if (!providerId || remotePayment.id !== providerId) return { ok: false, reason: "payment_id_mismatch" };
+  const storedExternalId = localPayment.externalId?.trim();
+  if (storedExternalId && storedExternalId !== remotePayment.id) {
+    return { ok: false, reason: "stored_external_id_mismatch" };
+  }
+  if (!storedExternalId && remotePayment.metadata?.payment_id !== localPayment.id) {
+    return { ok: false, reason: "metadata_payment_id_mismatch" };
+  }
+  if (storedExternalId && remotePayment.metadata?.payment_id && remotePayment.metadata.payment_id !== localPayment.id) {
+    return { ok: false, reason: "metadata_payment_id_mismatch" };
+  }
+  if (remotePayment.status !== "succeeded") return { ok: false, reason: "payment_not_succeeded" };
+
+  const remoteAmount = Number(remotePayment.amount?.value);
+  const localAmount = Number(localPayment.amount);
+  if (!Number.isFinite(remoteAmount) || !Number.isFinite(localAmount) || Math.round(remoteAmount * 100) !== Math.round(localAmount * 100)) {
+    return { ok: false, reason: "payment_amount_mismatch" };
+  }
+
+  const remoteCurrency = remotePayment.amount?.currency?.trim().toUpperCase();
+  const localCurrency = localPayment.currency.trim().toUpperCase();
+  if (!remoteCurrency || remoteCurrency !== localCurrency) return { ok: false, reason: "payment_currency_mismatch" };
+  return { ok: true };
+}
+
 // ────────────────────────────────────────────
 // Автоплатёж по сохранённому способу оплаты
 // ────────────────────────────────────────────

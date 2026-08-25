@@ -18,13 +18,17 @@ function getHeaders(): Record<string, string> {
     "Content-Type": "application/json",
     Authorization: `Bearer ${REMNA_ADMIN_TOKEN}`,
   };
-  if (REMNA_SECRET_KEY) {
-    const colonIdx = REMNA_SECRET_KEY.indexOf(":");
-    const cookieName = colonIdx > 0 ? REMNA_SECRET_KEY.slice(0, colonIdx) : REMNA_SECRET_KEY;
-    const cookieValue = colonIdx > 0 ? REMNA_SECRET_KEY.slice(colonIdx + 1) : REMNA_SECRET_KEY;
-    h["Cookie"] = `${cookieName}=${cookieValue}`;
-  }
+  const cookie = remnaSecretCookieHeader();
+  if (cookie) h["Cookie"] = cookie;
   return h;
+}
+
+export function remnaSecretCookieHeader(): string | null {
+  if (!REMNA_SECRET_KEY) return null;
+  const colonIdx = REMNA_SECRET_KEY.indexOf(":");
+  const name = colonIdx > 0 ? REMNA_SECRET_KEY.slice(0, colonIdx) : REMNA_SECRET_KEY;
+  const value = colonIdx > 0 ? REMNA_SECRET_KEY.slice(colonIdx + 1) : REMNA_SECRET_KEY;
+  return `${name}=${value}`;
 }
 
 export async function remnaFetch<T>(

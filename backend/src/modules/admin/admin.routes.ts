@@ -3504,7 +3504,7 @@ adminRouter.get("/settings", asyncRoute(async (_req, res) => {
 
 /** Версия панели — для мониторинга. Под auth, чтобы не светить наружу. */
 adminRouter.get("/version", asyncRoute(async (_req, res) => {
-  return res.json({ version: "5.2.0" });
+  return res.json({ version: "6.2.0" });
 }));
 
 /**
@@ -3713,6 +3713,10 @@ const updateSettingsSchema = z.object({
   cryptopayTestnet: z.boolean().optional(),
   heleketMerchantId: z.string().max(500).nullable().optional(),
   heleketApiKey: z.string().max(500).nullable().optional(),
+  rollypayApiKey: z.string().max(500).nullable().optional(),
+  rollypaySigningSecret: z.string().max(500).nullable().optional(),
+  rollypayEnabled: z.boolean().optional(),
+  rollypayTestMode: z.boolean().optional(),
   lavaShopId: z.string().max(200).nullable().optional(),
   lavaSecretKey: z.string().max(500).nullable().optional(),
   lavaAdditionalKey: z.string().max(500).nullable().optional(),
@@ -3781,6 +3785,7 @@ const updateSettingsSchema = z.object({
   installSecondDeviceText: z.string().max(8000).nullable().optional(),
   helpIntroText: z.string().max(8000).nullable().optional(),
   ticketsEnabled: z.boolean().optional(),
+  cabinetDesign: z.enum(["default", "aurora"]).optional(),
   themeAccent: z.string().max(50).optional(),
   allowUserThemeChange: z.boolean().optional(),
   forceSubscribeEnabled: z.boolean().optional(),
@@ -4316,6 +4321,22 @@ adminRouter.patch("/settings", async (req, res) => {
     const val = updates.heleketApiKey ?? "";
     await prisma.systemSetting.upsert({ where: { key: "heleket_api_key" }, create: { key: "heleket_api_key", value: val }, update: { value: val } });
   }
+  if (updates.rollypayApiKey !== undefined) {
+    const val = updates.rollypayApiKey ?? "";
+    await prisma.systemSetting.upsert({ where: { key: "rollypay_api_key" }, create: { key: "rollypay_api_key", value: val }, update: { value: val } });
+  }
+  if (updates.rollypaySigningSecret !== undefined) {
+    const val = updates.rollypaySigningSecret ?? "";
+    await prisma.systemSetting.upsert({ where: { key: "rollypay_signing_secret" }, create: { key: "rollypay_signing_secret", value: val }, update: { value: val } });
+  }
+  if (updates.rollypayEnabled !== undefined) {
+    const val = updates.rollypayEnabled ? "true" : "false";
+    await prisma.systemSetting.upsert({ where: { key: "rollypay_enabled" }, create: { key: "rollypay_enabled", value: val }, update: { value: val } });
+  }
+  if (updates.rollypayTestMode !== undefined) {
+    const val = updates.rollypayTestMode ? "true" : "false";
+    await prisma.systemSetting.upsert({ where: { key: "rollypay_test_mode" }, create: { key: "rollypay_test_mode", value: val }, update: { value: val } });
+  }
   if (updates.lavaShopId !== undefined) {
     const val = updates.lavaShopId ?? "";
     await prisma.systemSetting.upsert({ where: { key: "lava_shop_id" }, create: { key: "lava_shop_id", value: val }, update: { value: val } });
@@ -4523,6 +4544,13 @@ adminRouter.patch("/settings", async (req, res) => {
       where: { key: "theme_accent" },
       create: { key: "theme_accent", value: updates.themeAccent },
       update: { value: updates.themeAccent },
+    });
+  }
+  if (updates.cabinetDesign !== undefined) {
+    await prisma.systemSetting.upsert({
+      where: { key: "cabinet_design" },
+      create: { key: "cabinet_design", value: updates.cabinetDesign },
+      update: { value: updates.cabinetDesign },
     });
   }
   for (const [key, settingKey] of [

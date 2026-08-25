@@ -276,6 +276,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
     description: `Тариф «${plan.name}» · ${days} дней · ${totalDevices} устр.`,
   }));
   const payCryptoBot = () => state.token && openPayment("Crypto Bot", () => api.cryptopayCreatePayment(state.token!, purchasePayload));
+  const payRollyPay = () => state.token && openPayment("RollyPay", () => api.rollypayCreatePayment(state.token!, purchasePayload));
   const convertManually = async () => {
     if (!state.token || !manualQuote || manualBusy) return;
     setManualBusy(true);
@@ -784,6 +785,19 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                       <div className="flex-1">
                         <p className="font-bold">{paying ? "Оплата…" : "Crypto Bot"}</p>
                         <p className="text-xs text-fog-500">USDT · TON · BTC</p>
+                      </div>
+                    </button>}
+                    {config?.rollypayEnabled && plan.currency.toUpperCase() === "RUB" && <button
+                      disabled={paying}
+                      onClick={payRollyPay}
+                      className="glass group flex items-center gap-3 rounded-2xl p-4 text-left transition-all hover:border-emerald-400/30"
+                    >
+                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-emerald-400/25 bg-emerald-400/10 text-emerald-300">
+                        {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <CreditCard className="h-5 w-5" />}
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-bold">{paying ? "Оплата…" : "RollyPay"}</p>
+                        <p className="text-xs text-fog-500">Оплата в рублях</p>
                       </div>
                     </button>}
                   </div>

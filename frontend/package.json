@@ -1,6 +1,6 @@
 {
   "name": "stealthnet-admin",
-  "version": "5.2.0",
+  "version": "6.2.0",
   "description": "Лазейка ВПН — админ-панель и клиентский кабинет",
   "private": true,
   "engines": {

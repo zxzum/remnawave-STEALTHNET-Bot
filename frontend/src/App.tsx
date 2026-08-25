@@ -7,9 +7,11 @@ const routerFutureFlags = {
 };
 import { AuthProvider, useAuth } from "@/contexts/auth";
 import { ClientAuthProvider, useClientAuth } from "@/contexts/client-auth";
+import { CabinetConfigProvider, useCabinetConfig } from "@/contexts/cabinet-config";
 import { ThemeProvider } from "@/contexts/theme";
 import { AnimatedBackground } from "@/components/animated-background";
 import { api } from "@/lib/api";
+import { resolveCabinetDesign } from "@/lib/cabinet-design";
 import type { PublicConfig } from "@/lib/api";
 import { Toaster } from "@/components/ui/toast";
 import { Login as CabinetLogin, Register as CabinetRegister } from "@/cabinet/pages/Auth";
@@ -149,6 +151,11 @@ const GiftActivatePage = lazy(() => import("@/pages/gift-activate").then(({ Gift
 const LandingPage = lazy(() => import("@/pages/landing").then(({ LandingPage }) => ({ default: LandingPage })));
 const LegalOfferPage = lazy(() => import("@/pages/legal").then(({ LegalOfferPage }) => ({ default: LegalOfferPage })));
 const LegalPrivacyPage = lazy(() => import("@/pages/legal").then(({ LegalPrivacyPage }) => ({ default: LegalPrivacyPage })));
+const AuroraLayout = lazy(() => import("@/pages/cabinet/aurora/aurora-layout").then(({ AuroraLayout }) => ({ default: AuroraLayout })));
+const AuroraDashboard = lazy(() => import("@/pages/cabinet/aurora/aurora-dashboard").then(({ AuroraDashboard }) => ({ default: AuroraDashboard })));
+const AuroraTariffs = lazy(() => import("@/pages/cabinet/aurora/aurora-tariffs").then(({ AuroraTariffs }) => ({ default: AuroraTariffs })));
+const AuroraReferral = lazy(() => import("@/pages/cabinet/aurora/aurora-referral").then(({ AuroraReferral }) => ({ default: AuroraReferral })));
+const AuroraTickets = lazy(() => import("@/pages/cabinet/aurora/aurora-tickets").then(({ AuroraTickets }) => ({ default: AuroraTickets })));
 const lazyPageFallback = <div className="min-h-48 flex items-center justify-center text-sm text-muted-foreground">Загрузка раздела…</div>;
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -198,6 +205,16 @@ function RequireClientFeature({ feature, children }: { feature: ClientFeature; c
 
 function RequireOnboarding({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
+}
+
+function CabinetDesignLayout() {
+  const config = useCabinetConfig();
+  return resolveCabinetDesign(config?.cabinetDesign) === "aurora" ? <AuroraLayout /> : <ClientLayout />;
+}
+
+function CabinetDesignPage({ defaultPage, auroraPage }: { defaultPage: ReactNode; auroraPage: ReactNode }) {
+  const config = useCabinetConfig();
+  return resolveCabinetDesign(config?.cabinetDesign) === "aurora" ? auroraPage : defaultPage;
 }
 
 function CabinetIndexRedirect() {
@@ -352,9 +369,11 @@ function AppRoutes() {
       <Route
         path="/cabinet"
         element={
-          <ClientAuthProvider>
-            <ClientAppProvider><Outlet /></ClientAppProvider>
-          </ClientAuthProvider>
+          <CabinetConfigProvider>
+            <ClientAuthProvider>
+              <ClientAppProvider><Outlet /></ClientAppProvider>
+            </ClientAuthProvider>
+          </CabinetConfigProvider>
         }
       >
         <Route index element={<CabinetIndexRedirect />} />
@@ -387,16 +406,16 @@ function AppRoutes() {
         <Route
           element={
             <RequireClientAuth>
-              <ClientLayout />
+              <CabinetDesignLayout />
             </RequireClientAuth>
           }
         >
-          <Route path="dashboard" element={<CabinetDashboard />} />
+          <Route path="dashboard" element={<CabinetDesignPage defaultPage={<CabinetDashboard />} auroraPage={<AuroraDashboard />} />} />
           <Route path="subscribe" element={<CabinetKeys />} />
-          <Route path="tariffs" element={<CabinetTariffs />} />
-          <Route path="referral" element={<CabinetReferrals />} />
+          <Route path="tariffs" element={<CabinetDesignPage defaultPage={<CabinetTariffs />} auroraPage={<AuroraTariffs />} />} />
+          <Route path="referral" element={<CabinetDesignPage defaultPage={<CabinetReferrals />} auroraPage={<AuroraReferral />} />} />
           <Route path="profile" element={<CabinetProfile />} />
-          <Route path="tickets" element={<RequireClientFeature feature="tickets"><Tickets /></RequireClientFeature>} />
+          <Route path="tickets" element={<CabinetDesignPage defaultPage={<RequireClientFeature feature="tickets"><Tickets /></RequireClientFeature>} auroraPage={<RequireClientFeature feature="tickets"><AuroraTickets /></RequireClientFeature>} />} />
           <Route path="custom-build" element={<RequireClientFeature feature="customBuild"><CustomBuild /></RequireClientFeature>} />
           <Route path="extra-options" element={<RequireClientFeature feature="extraOptions"><ExtraOptions /></RequireClientFeature>} />
           <Route path="proxy" element={<RequireClientFeature feature="proxy"><ProxyService /></RequireClientFeature>} />

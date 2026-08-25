@@ -11,20 +11,40 @@ const UPLOAD_DIRS = {
   tickets: path.join(UPLOADS_ROOT, "tickets"),
 } as const;
 
-// Создаём директории при старте
-for (const dir of Object.values(UPLOAD_DIRS)) {
-  fs.mkdirSync(dir, { recursive: true });
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+]);
+
+const IMAGE_EXTENSION_BY_MIME: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+};
+
+export function isAllowedUploadedImage(mimetype: string): boolean {
+  return ALLOWED_IMAGE_MIME_TYPES.has(mimetype.trim().toLowerCase());
 }
 
-function makeFilename(originalname: string): string {
-  const ext = path.extname(originalname).toLowerCase();
+function ensureUploadDir(dir: string): string {
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+export function makeFilename(originalname: string, mimetype?: string): string {
+  const normalizedMime = mimetype?.trim().toLowerCase();
+  const ext = (normalizedMime && IMAGE_EXTENSION_BY_MIME[normalizedMime])
+    || path.extname(originalname).toLowerCase();
   const hash = crypto.randomBytes(12).toString("hex");
   return `${hash}${ext}`;
 }
 
 // ——— Mascot upload (PNG/JPG/WEBP, max 5MB) ———
 const mascotStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIRS.mascots),
+  destination: (_req, _file, cb) => cb(null, ensureUploadDir(UPLOAD_DIRS.mascots)),
   filename: (_req, file, cb) => cb(null, makeFilename(file.originalname)),
 });
 
@@ -44,7 +64,7 @@ export const uploadMascotImage = multer({
 
 // ——— Video upload (MP4/WEBM, max 150MB) ———
 const videoStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIRS.videos),
+  destination: (_req, _file, cb) => cb(null, ensureUploadDir(UPLOAD_DIRS.videos)),
   filename: (_req, file, cb) => cb(null, makeFilename(file.originalname)),
 });
 
@@ -66,20 +86,18 @@ export const uploadVideo = multer({
 // Используется как клиентской частью тикетов (POST /client/tickets, /client/tickets/:id/messages),
 // так и админской (POST /admin/tickets/:id/messages).
 const ticketStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIRS.tickets),
-  filename: (_req, file, cb) => cb(null, makeFilename(file.originalname)),
+  destination: (_req, _file, cb) => cb(null, ensureUploadDir(UPLOAD_DIRS.tickets)),
+  filename: (_req, file, cb) => cb(null, makeFilename(file.originalname, file.mimetype)),
 });
 
 export const uploadTicketAttachment = multer({
   storage: ticketStorage,
   limits: { fileSize: 10 * 1024 * 1024, files: 5 },
   fileFilter: (_req, file, cb) => {
-    const allowed = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".heic", ".heif"];
-    const ext = path.extname(file.originalname).toLowerCase();
-    if (allowed.includes(ext) || file.mimetype.startsWith("image/")) {
+    if (isAllowedUploadedImage(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error("Допустимые форматы: PNG, JPG, WEBP, GIF, HEIC"));
+      cb(new Error("Допустимые форматы: PNG, JPG, WEBP, GIF"));
     }
   },
 });

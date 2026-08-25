@@ -175,6 +175,7 @@ function TopUp() {
       methodId: item.id,
     })),
     ...(config?.cryptopayEnabled ? [{ id: "cryptobot", label: "Crypto Bot", icon: Zap, provider: "cryptobot" as const, methodId: null }] : []),
+    ...(config?.rollypayEnabled && currency.toUpperCase() === "RUB" ? [{ id: "rollypay", label: "RollyPay", icon: CreditCard, provider: "rollypay" as const, methodId: null }] : []),
   ];
   useEffect(() => {
     if (!methods.some((item) => item.id === method)) setMethod(methods[0]?.id ?? "");
@@ -198,7 +199,9 @@ function TopUp() {
             paymentMethod: selected.methodId!,
             description: "Пополнение баланса",
           })
-        : await api.cryptopayCreatePayment(state.token, { amount, currency });
+        : selected.provider === "cryptobot"
+        ? await api.cryptopayCreatePayment(state.token, { amount, currency })
+        : await api.rollypayCreatePayment(state.token, { amount, currency });
       const url = resolvePaymentUrl(result, redirect.isTelegramMiniApp);
       if (!url) throw new Error("Платёжная система не вернула ссылку");
       redirect.open(url);

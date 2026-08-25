@@ -13,15 +13,10 @@ import { Router, Request, Response } from "express";
 import { prisma } from "../../db.js";
 import { getSystemConfig } from "../client/client.service.js";
 import { verifyLavaWebhookSignature } from "../lava/lava.service.js";
-import { activateTariffByPaymentId } from "../tariff/tariff-activation.service.js";
-import { createProxySlotsByPaymentId } from "../proxy/proxy-slots-activation.service.js";
-import { createSingboxSlotsByPaymentId } from "../singbox/singbox-slots-activation.service.js";
 import { markPaymentPaid } from "../payment/mark-paid.service.js";
-import { distributeReferralRewards } from "../referral/referral.service.js";
-import { notifyBalanceToppedUp, notifyTariffActivated, notifyProxySlotsCreated, notifySingboxSlotsCreated } from "../notification/telegram-notify.service.js";
+import { notifyBalanceToppedUp, notifyTariffActivated } from "../notification/telegram-notify.service.js";
 import { recordPromoCodeUsageFromPayment } from "../payment/promo-code-usage.util.js";
 import { auditPaymentClientBotAlignment } from "../payment/payment-webhook-audit.util.js";
-import { isVpnSubscriptionPurchase } from "../trial/trial-purchase-lock.service.js";
 
 function hasExtraOptionInMetadata(metadata: string | null): boolean {
   if (!metadata?.trim()) return false;
@@ -131,56 +126,23 @@ lavaWebhooksRouter.post("/", async (req: Request, res: Response) => {
   }
 
   const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
-  if (isExtraOption) {
-    if (body.invoice_id != null) await prisma.payment.update({ where: { id: payment.id }, data: { externalId: body.invoice_id } });
-    await markPaymentPaid(payment.id);
-    return res.status(200).send("OK");
-  }
-
-  // Идемпотентность: если уже PAID — просто OK.
-  if (payment.status === "PAID") {
-    return res.status(200).send("OK");
-  }
-
   const invoiceId = body.invoice_id ?? null;
-  await prisma.payment.update({
-    where: { id: payment.id },
-    data: { status: "PAID", paidAt: new Date(), externalId: invoiceId },
-  });
+  if (invoiceId != null) {
+    await prisma.payment.update({ where: { id: payment.id }, data: { externalId: invoiceId } });
+  }
+
+  const result = await markPaymentPaid(payment.id, { allowFailedRecovery: true });
+  if (!result.ok) {
+    console.error("[Lava Webhook] Payment completion failed", { paymentId: payment.id, error: result.error });
+    return res.status(503).send("Retry");
+  }
   await recordPromoCodeUsageFromPayment(payment.id);
 
-  const isTopUp = !isVpnSubscriptionPurchase(payment) && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
-
-  if (isTopUp) {
-    await prisma.client.update({
-      where: { id: payment.clientId },
-      data: { balance: { increment: payment.amount } },
-    });
+  if (result.balanceCredited) {
     await notifyBalanceToppedUp(payment.clientId, payment.amount, payment.currency || "RUB", "Lava").catch(() => {});
-  } else if (payment.proxyTariffId) {
-    const proxyResult = await createProxySlotsByPaymentId(payment.id);
-    if (proxyResult.ok) {
-      const tariff = await prisma.proxyTariff.findUnique({ where: { id: payment.proxyTariffId }, select: { name: true } });
-      await notifyProxySlotsCreated(payment.clientId, proxyResult.slotIds, tariff?.name ?? undefined).catch(() => {});
-    }
-  } else if (payment.singboxTariffId) {
-    const singboxResult = await createSingboxSlotsByPaymentId(payment.id);
-    if (singboxResult.ok) {
-      const tariff = await prisma.singboxTariff.findUnique({ where: { id: payment.singboxTariffId }, select: { name: true } });
-      await notifySingboxSlotsCreated(payment.clientId, singboxResult.slotIds, tariff?.name ?? undefined).catch(() => {});
-    }
-  } else {
-    const activation = await activateTariffByPaymentId(payment.id);
-    if (activation.ok) await notifyTariffActivated(payment.clientId, payment.id).catch(() => {});
+  } else if (!isExtraOption && result.activation?.ok && !payment.proxyTariffId && !payment.singboxTariffId) {
+    await notifyTariffActivated(payment.clientId, payment.id).catch(() => {});
   }
-
-  // сжигаем одноразовую персональную скидку после продуктовой покупки.
-  if (!isTopUp) {
-    const { extinguishOneTimeDiscount } = await import("../client/personal-discount.js");
-    await extinguishOneTimeDiscount(payment.clientId).catch(() => {});
-  }
-
-  await distributeReferralRewards(payment.id).catch(() => {});
 
   return res.status(200).send("OK");
 });

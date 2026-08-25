@@ -17,6 +17,7 @@
  */
 
 import { readFile, unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { prisma } from "../db.js";
 import {
   runBroadcast,
@@ -27,6 +28,8 @@ import {
 
 const POLL_INTERVAL_MS = 3000;
 const PROGRESS_FLUSH_MS = 3000;
+const LEASE_MS = 30_000;
+const HEARTBEAT_MS = 5_000;
 
 function log(...args: unknown[]): void {
   console.log(`[broadcast-worker]`, ...args);
@@ -42,6 +45,7 @@ process.on("SIGINT", () => { shuttingDown = true; log("SIGINT, shutting down aft
  * атомарность, никто другой не подхватит ту же запись (если worker'ов несколько).
  */
 async function claimNextJob() {
+  const runToken = randomUUID();
   const rows = await prisma.$queryRaw<Array<{
     id: string;
     channel: string;
@@ -53,9 +57,13 @@ async function claimNextJob() {
     attachment_path: string | null;
     attachment_mime: string | null;
     target_group: string | null;
+    run_token: string;
   }>>`
     UPDATE broadcast_history
-       SET status = 'running'
+       SET status = 'running',
+           run_token = ${runToken},
+           heartbeat_at = NOW(),
+           lease_expires_at = NOW() + ${LEASE_MS} * INTERVAL '1 millisecond'
      WHERE id = (
        SELECT id FROM broadcast_history
         WHERE status = 'pending'
@@ -64,7 +72,7 @@ async function claimNextJob() {
         FOR UPDATE SKIP LOCKED
      )
     RETURNING id, channel, subject, message, button_text, button_url,
-              attachment_name, attachment_path, attachment_mime, target_group;
+              attachment_name, attachment_path, attachment_mime, target_group, run_token;
   `;
   return rows[0] ?? null;
 }
@@ -85,8 +93,8 @@ async function processOne(job: NonNullable<Awaited<ReturnType<typeof claimNextJo
     } catch (e) {
       log(`  WARN: cannot load attachment ${job.attachment_path}:`, e instanceof Error ? e.message : e);
       // Если оригинал был с media но файл потерян — отмечаем error.
-      await prisma.broadcastHistory.update({
-        where: { id: job.id },
+      await prisma.broadcastHistory.updateMany({
+        where: { id: job.id, status: "running", runToken: job.run_token },
         data: { status: "error", error: "attachment file missing on disk", finishedAt: new Date() },
       });
       return;
@@ -111,6 +119,26 @@ async function processOne(job: NonNullable<Awaited<ReturnType<typeof claimNextJo
   let finalStatus: "completed" | "cancelled" | "error" | "pending" = "completed";
   let finalError: string | null = null;
   let lastResult: Awaited<ReturnType<typeof runBroadcast>> | undefined;
+  let leaseLost = false;
+  const renewLease = async (): Promise<void> => {
+    const renewed = await prisma.broadcastHistory.updateMany({
+      where: { id: job.id, status: "running", runToken: job.run_token },
+      data: {
+        heartbeatAt: new Date(),
+        leaseExpiresAt: new Date(Date.now() + LEASE_MS),
+      },
+    });
+    if (renewed.count === 0) {
+      leaseLost = true;
+      cancelRequested = true;
+    }
+  };
+  const heartbeat = setInterval(() => {
+    void renewLease().catch(() => {
+      leaseLost = true;
+      cancelRequested = true;
+    });
+  }, HEARTBEAT_MS);
 
   try {
     lastResult = await runBroadcast({
@@ -127,8 +155,8 @@ async function processOne(job: NonNullable<Awaited<ReturnType<typeof claimNextJo
         const now = Date.now();
         if (now - lastProgressFlushAt < PROGRESS_FLUSH_MS) return;
         lastProgressFlushAt = now;
-        void prisma.broadcastHistory.update({
-          where: { id: job.id },
+        void prisma.broadcastHistory.updateMany({
+          where: { id: job.id, status: "running", runToken: job.run_token },
           data: {
             totalTelegram: p.totalTelegram,
             sentTelegram: p.sentTelegram,
@@ -156,24 +184,40 @@ async function processOne(job: NonNullable<Awaited<ReturnType<typeof claimNextJo
     log(`  ERROR running ${job.id}:`, finalError);
   } finally {
     clearInterval(cancelPoller);
+    clearInterval(heartbeat);
   }
 
   // Финализируем
+  if (leaseLost) {
+    log(`  finalization skipped for ${job.id}: run lease was lost`);
+    return;
+  }
   try {
-    await prisma.broadcastHistory.update({
-      where: { id: job.id },
-      data: {
-        status: finalStatus,
-        // Если pending — finishedAt НЕ ставим (запись снова станет «активной»).
-        finishedAt: finalStatus === "pending" ? null : new Date(),
-        sentTelegram: lastResult?.sentTelegram ?? 0,
-        failedTelegram: lastResult?.failedTelegram ?? 0,
-        sentEmail: lastResult?.sentEmail ?? 0,
-        failedEmail: lastResult?.failedEmail ?? 0,
-        errors: lastResult?.errors?.length ? lastResult.errors.slice(0, 50) : undefined,
-        error: finalError,
-      },
+    const finalData = lastResult
+      ? {
+          status: finalStatus,
+          // Если pending — finishedAt НЕ ставим (запись снова станет «активной»).
+          finishedAt: finalStatus === "pending" ? null : new Date(),
+          sentTelegram: lastResult.sentTelegram,
+          failedTelegram: finalStatus === "pending" ? 0 : lastResult.failedTelegram,
+          sentEmail: lastResult.sentEmail,
+          failedEmail: finalStatus === "pending" ? 0 : lastResult.failedEmail,
+          errors: finalStatus === "pending" ? [] : lastResult.errors.slice(0, 50),
+          error: finalStatus === "pending" ? null : finalError,
+        }
+      : {
+          status: finalStatus,
+          finishedAt: finalStatus === "pending" ? null : new Date(),
+          error: finalError,
+        };
+    const finalized = await prisma.broadcastHistory.updateMany({
+      where: { id: job.id, status: "running", runToken: job.run_token },
+      data: finalData,
     });
+    if (finalized.count === 0) {
+      log(`  finalization skipped for ${job.id}: status changed before worker completed`);
+      return;
+    }
   } catch (e) {
     log(`  WARN: finalize update failed:`, e instanceof Error ? e.message : e);
   }
@@ -192,9 +236,22 @@ async function processOne(job: NonNullable<Awaited<ReturnType<typeof claimNextJo
  * skip уже отправленных получателей).
  */
 async function reanimateZombies(): Promise<void> {
+  const now = new Date();
   const updated = await prisma.broadcastHistory.updateMany({
-    where: { status: "running" },
-    data: { status: "pending" },
+    where: {
+      status: "running",
+      OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lt: now } }],
+    },
+    data: {
+      status: "pending",
+      runToken: null,
+      heartbeatAt: null,
+      leaseExpiresAt: null,
+      failedTelegram: 0,
+      failedEmail: 0,
+      errors: [],
+      error: null,
+    },
   });
   if (updated.count > 0) {
     log(`reanimated ${updated.count} zombie 'running' broadcasts → 'pending'`);

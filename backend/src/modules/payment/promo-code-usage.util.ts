@@ -30,16 +30,23 @@ export async function recordPromoCodeUsageFromPayment(paymentId: string): Promis
   }
   if (!promoCodeId) return;
 
-  // Idempotency: если уже создана запись — не дублируем.
-  const existing = await prisma.promoCodeUsage.findFirst({
-    where: { promoCodeId, clientId: payment.clientId },
-    select: { id: true },
-  });
-  if (existing) return;
-
   try {
-    await prisma.promoCodeUsage.create({
-      data: { promoCodeId, clientId: payment.clientId },
+    await prisma.$transaction(async (tx) => {
+      // The schema intentionally has no promoCodeId+clientId unique constraint:
+      // maxUsesPerClient may allow more than one usage. Serialize the existing
+      // semantic check/create instead of changing that cardinality contract.
+      await tx.$queryRawUnsafe(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        `${promoCodeId}:${payment.clientId}`,
+      );
+      const existing = await tx.promoCodeUsage.findFirst({
+        where: { promoCodeId, clientId: payment.clientId },
+        select: { id: true },
+      });
+      if (existing) return;
+      await tx.promoCodeUsage.create({
+        data: { promoCodeId, clientId: payment.clientId },
+      });
     });
   } catch (err) {
     console.error(`[promo-code-usage] Failed to record usage for payment ${paymentId}:`, err);

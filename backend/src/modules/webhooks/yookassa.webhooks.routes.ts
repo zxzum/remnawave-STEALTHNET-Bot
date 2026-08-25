@@ -7,25 +7,20 @@
  * - YooKassa поддерживает HTTP Basic Auth на webhook URL. Админ настраивает это в кабинете
  *   ЮKassa: webhook URL вида https://user:pass@panel.example.com/api/webhooks/yookassa.
  *   Админ задаёт `yookassa_webhook_basic_user` / `yookassa_webhook_basic_password` в админке.
- * - Дополнительно: после прохождения basic-auth мы делаем double-check через YooKassa API
- *   (`GET /payments/:id`) — не доверяем event'у из webhook'а напрямую, ограничивает SSRF-риск.
- *   (Реализован отдельно в yookassa.service.ts; здесь только проверяем статус.)
+ * - После basic-auth подтверждаем платёж через YooKassa API и сверяем его с локальной
+ *   записью — webhook payload сам по себе не является доказательством оплаты.
  */
 
 import { Router } from "express";
 import { timingSafeEqual } from "node:crypto";
+import { getYookassaPayment, validateYookassaPayment } from "../yookassa/yookassa.service.js";
 import { prisma } from "../../db.js";
 import { getSystemConfig } from "../client/client.service.js";
-import { activateTariffByPaymentId } from "../tariff/tariff-activation.service.js";
-import { createProxySlotsByPaymentId } from "../proxy/proxy-slots-activation.service.js";
-import { createSingboxSlotsByPaymentId } from "../singbox/singbox-slots-activation.service.js";
-import { markPaymentPaid } from "../payment/mark-paid.service.js";
-import { distributeReferralRewards } from "../referral/referral.service.js";
-import { notifyBalanceToppedUp, notifyTariffActivated, notifyProxySlotsCreated, notifySingboxSlotsCreated } from "../notification/telegram-notify.service.js";
+import { markPaymentPaid, shouldRetryPaidActivation, shouldRetryPaidSlotActivation } from "../payment/mark-paid.service.js";
+import { notifyBalanceToppedUp, notifyTariffActivated } from "../notification/telegram-notify.service.js";
 import { createNalogReceipt } from "../nalog/nalog.service.js";
 import { recordPromoCodeUsageFromPayment } from "../payment/promo-code-usage.util.js";
 import { auditPaymentClientBotAlignment } from "../payment/payment-webhook-audit.util.js";
-import { isVpnSubscriptionPurchase } from "../trial/trial-purchase-lock.service.js";
 
 function hasExtraOptionInMetadata(metadata: string | null): boolean {
   if (!metadata?.trim()) return false;
@@ -74,8 +69,8 @@ function safeStringEqual(a: string, b: string): boolean {
  * Проверяет HTTP Basic Auth заголовок против `yookassa_webhook_basic_user/password`
  * из system_settings. Возвращает true если все ОК или basic-auth выключен (нет пароля).
  *
- * SECURITY: если в админке не задан пароль — webhook принимается без проверки (legacy).
- * Чтобы включить — заходишь в админку → Платежи → ЮKassa → задаёшь user+password,
+ * SECURITY: если в админке не задан пароль — webhook проходит только после подтверждения
+ * через YooKassa API. Чтобы включить дополнительный слой — задаёшь user+password,
  * затем в кабинете ЮKassa прописываешь URL вида `https://USER:PASS@panel.example.com/...`.
  * Когда пароль задан — все запросы без или с неверным auth получают 401.
  */
@@ -84,9 +79,9 @@ async function verifyYookassaWebhookAuth(req: { headers: Record<string, unknown>
   const expectedUser = (config as { yookassaWebhookBasicUser?: string | null }).yookassaWebhookBasicUser?.trim();
   const expectedPass = (config as { yookassaWebhookBasicPassword?: string | null }).yookassaWebhookBasicPassword?.trim();
 
-  // Не настроено — legacy mode, пропускаем (но громко предупреждаем).
+  // Не настроено — пропускаем только после подтверждения через YooKassa API.
   if (!expectedUser || !expectedPass) {
-    console.warn("[YooKassa Webhook] BASIC AUTH NOT CONFIGURED — REJECTING webhook. Set yookassaWebhookBasicUser / yookassaWebhookBasicPassword in admin settings.");
+    console.warn("[YooKassa Webhook] BASIC AUTH NOT CONFIGURED — using YooKassa API confirmation. Set yookassaWebhookBasicUser / yookassaWebhookBasicPassword for an additional check.");
     return { ok: false, reason: "no_credentials_configured" };
   }
 
@@ -116,7 +111,8 @@ async function verifyYookassaWebhookAuth(req: { headers: Record<string, unknown>
 yookassaWebhooksRouter.post("/yookassa", async (req, res) => {
   // ВАЖНО: проверка аутентификации ПЕРЕД любыми DB-операциями.
   const auth = await verifyYookassaWebhookAuth(req);
-  if (!auth.ok) {
+  const basicAuthNotConfigured = !auth.ok && auth.reason === "no_credentials_configured";
+  if (!auth.ok && !basicAuthNotConfigured) {
     console.warn(`[YooKassa Webhook] Auth failed: ${auth.reason}`);
     res.set("WWW-Authenticate", 'Basic realm="yookassa-webhook"');
     return res.status(401).json({ message: "Unauthorized" });
@@ -145,11 +141,18 @@ yookassaWebhooksRouter.post("/yookassa", async (req, res) => {
     return res.status(200).send("OK");
   }
 
+  const externalId = body.object?.id?.trim();
+  if (!externalId) {
+    console.warn("[YooKassa Webhook] Missing provider payment id", { paymentId });
+    return res.status(200).send("OK");
+  }
+
   const payment = await prisma.payment.findFirst({
     where: { id: paymentId, provider: "yookassa" },
     select: {
       id: true,
       clientId: true,
+      externalId: true,
       amount: true,
       currency: true,
       tariffId: true,
@@ -167,21 +170,46 @@ yookassaWebhooksRouter.post("/yookassa", async (req, res) => {
 
   await auditPaymentClientBotAlignment(payment);
 
+  const config = await getSystemConfig();
+  const paymentLookup = await getYookassaPayment(externalId, config);
+  if (!paymentLookup.ok) {
+    console.warn("[YooKassa Webhook] Payment confirmation lookup failed", {
+      paymentId,
+      externalId,
+      error: paymentLookup.error,
+      status: paymentLookup.status,
+      kind: paymentLookup.kind,
+    });
+    if (paymentLookup.kind === "transient" || paymentLookup.kind === "not_configured") {
+      return res.status(503).send("Retry");
+    }
+    return res.status(200).send("OK");
+  }
+  const confirmedPayment = paymentLookup.payment;
+  const validation = validateYookassaPayment(payment, confirmedPayment, externalId);
+  if (!validation.ok) {
+    console.warn("[YooKassa Webhook] Payment confirmation mismatch", {
+      paymentId,
+      externalId,
+      reason: validation.reason,
+    });
+    return res.status(200).send("OK");
+  }
+  if (basicAuthNotConfigured) {
+    console.log("[YooKassa Webhook] Confirmed by YooKassa API (Basic Auth not configured)", { paymentId });
+  }
+
   const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
 
-  if (payment.status === "PAID" && !isExtraOption) {
+  if (payment.status === "PAID" && !isExtraOption && !shouldRetryPaidActivation(payment) && !shouldRetryPaidSlotActivation(payment)) {
     console.log("[YooKassa Webhook] Already processed", { paymentId });
     return res.status(200).send("OK");
   }
 
-  const yookassaId = body.object?.id ?? null;
-  await prisma.payment.update({ where: { id: payment.id }, data: isExtraOption
-    ? { externalId: yookassaId }
-    : { status: "PAID", paidAt: new Date(), externalId: yookassaId } });
-  await recordPromoCodeUsageFromPayment(payment.id);
+  await prisma.payment.update({ where: { id: payment.id }, data: { externalId } });
 
   // Сохраняем способ оплаты для рекуррентных платежей
-  const pm = body.object?.payment_method;
+  const pm = confirmedPayment.payment_method;
   if (pm?.saved && pm.id) {
     const title = pm.title || (pm.card?.last4 ? `Карта *${pm.card.last4}` : pm.type || "Сохранённый способ");
     await prisma.client.update({
@@ -198,70 +226,27 @@ yookassaWebhooksRouter.post("/yookassa", async (req, res) => {
     });
   }
 
-  if (isExtraOption) {
-    await markPaymentPaid(payment.id);
-    return res.status(200).send("OK");
-  }
-
-  const isTopUp = !isVpnSubscriptionPurchase(payment) && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
-
-  if (isTopUp) {
-    await prisma.client.update({
-      where: { id: payment.clientId },
-      data: { balance: { increment: payment.amount } },
+  const result = await markPaymentPaid(payment.id, { allowFailedRecovery: true });
+  if (!result.ok) {
+    console.error("[YooKassa Webhook] Payment completion failed", {
+      paymentId: payment.id,
+      error: result.error,
     });
+    return res.status(503).send("Retry");
+  }
+  await recordPromoCodeUsageFromPayment(payment.id);
+
+  if (result.balanceCredited) {
     console.log("[YooKassa Webhook] Payment PAID, balance credited (top-up)", {
       paymentId: payment.id,
       clientId: payment.clientId,
       amount: payment.amount,
     });
     await notifyBalanceToppedUp(payment.clientId, payment.amount, payment.currency || "RUB", "YooKassa").catch(() => {});
-  } else if (payment.proxyTariffId) {
-    const proxyResult = await createProxySlotsByPaymentId(payment.id);
-    if (proxyResult.ok) {
-      console.log("[YooKassa Webhook] Proxy slots created", { paymentId: payment.id, slots: proxyResult.slotsCreated });
-      const tariff = await prisma.proxyTariff.findUnique({ where: { id: payment.proxyTariffId }, select: { name: true } });
-      await notifyProxySlotsCreated(payment.clientId, proxyResult.slotIds, tariff?.name ?? undefined).catch(() => {});
-    } else {
-      console.error("[YooKassa Webhook] Proxy slots creation failed", {
-        paymentId: payment.id,
-        error: proxyResult.error,
-      });
-    }
-  } else if (payment.singboxTariffId) {
-    const singboxResult = await createSingboxSlotsByPaymentId(payment.id);
-    if (singboxResult.ok) {
-      console.log("[YooKassa Webhook] Singbox slots created", { paymentId: payment.id, slots: singboxResult.slotsCreated });
-      const tariff = await prisma.singboxTariff.findUnique({ where: { id: payment.singboxTariffId }, select: { name: true } });
-      await notifySingboxSlotsCreated(payment.clientId, singboxResult.slotIds, tariff?.name ?? undefined).catch(() => {});
-    } else {
-      console.error("[YooKassa Webhook] Singbox slots creation failed", {
-        paymentId: payment.id,
-        error: singboxResult.error,
-      });
-    }
-  } else {
-    const activation = await activateTariffByPaymentId(payment.id);
-    if (activation.ok) {
-      console.log("[YooKassa Webhook] Tariff activated", { paymentId: payment.id });
-      await notifyTariffActivated(payment.clientId, payment.id).catch(() => {});
-    } else {
-      console.error("[YooKassa Webhook] Tariff activation failed", {
-        paymentId: payment.id,
-        error: (activation as { error?: string }).error,
-      });
-    }
+  } else if (!isExtraOption && result.activation?.ok && !payment.proxyTariffId && !payment.singboxTariffId) {
+    console.log("[YooKassa Webhook] Tariff activated", { paymentId: payment.id });
+    await notifyTariffActivated(payment.clientId, payment.id).catch(() => {});
   }
-
-  // сжигаем одноразовую персональную скидку после продуктовой покупки.
-  if (!isTopUp) {
-    const { extinguishOneTimeDiscount } = await import("../client/personal-discount.js");
-    await extinguishOneTimeDiscount(payment.clientId).catch(() => {});
-  }
-
-  await distributeReferralRewards(payment.id).catch((e) => {
-    console.error("[YooKassa Webhook] Referral distribution error", { paymentId: payment.id, error: e });
-  });
 
   const tariffForReceipt = payment.tariffId
     ? await prisma.tariff.findUnique({ where: { id: payment.tariffId }, select: { name: true } }).catch(() => null)

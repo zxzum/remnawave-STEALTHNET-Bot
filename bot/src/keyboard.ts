@@ -704,6 +704,7 @@ export function tariffPaymentMethodButtons(
   cryptopayEnabled?: boolean,
   tariffCurrency?: string,
   heleketEnabled?: boolean,
+  rollypayEnabled?: boolean,
   lavaEnabled?: boolean,
   lavatopEnabled?: boolean,
   // bot_emojis для backButton (text "← Назад" + premium icon).
@@ -740,6 +741,9 @@ export function tariffPaymentMethodButtons(
   }
   if (heleketEnabled) {
     rows.push([btn(providerLabel("heleket", "💳 Heleket — криптовалюта"), `pay_tariff_heleket:${tariffId}`, undefined, cardId)]);
+  }
+  if (rollypayEnabled && (!tariffCurrency || tariffCurrency.toUpperCase() === "RUB")) {
+    rows.push([btn(providerLabel("rollypay", "💳 RollyPay — рубли"), `pay_tariff_rollypay:${tariffId}`, undefined, cardId)]);
   }
   for (const m of methods) {
     rows.push([btn(m.label, `pay_tariff:${tariffId}:${m.id}`, undefined, cardId)]);
@@ -856,6 +860,7 @@ export function proxyPaymentMethodButtons(
   yookassaEnabled?: boolean,
   cryptopayEnabled?: boolean,
   currency?: string,
+  rollypayEnabled?: boolean,
 ): InlineMarkup {
   const back = (backLabel && backLabel.trim()) || DEFAULT_BACK_LABEL;
   const backSty = undefined;
@@ -869,6 +874,9 @@ export function proxyPaymentMethodButtons(
     rows.push([btn(providerLabel("yookassa", "💳 ЮKassa — карта / СБП"), `pay_proxy_yookassa:${proxyTariffId}`, undefined, cardId)]);
   }
   if (cryptopayEnabled) rows.push([btn(providerLabel("cryptopay", "💳 Crypto Bot — криптовалюта"), `pay_proxy_cryptopay:${proxyTariffId}`, undefined, cardId)]);
+  if (rollypayEnabled && (!currency || currency.toUpperCase() === "RUB")) {
+    rows.push([btn(providerLabel("rollypay", "💳 RollyPay — рубли"), `pay_proxy_rollypay:${proxyTariffId}`, undefined, cardId)]);
+  }
   for (const m of methods) {
     rows.push([btn(m.label, `pay_proxy:${proxyTariffId}:${m.id}`, undefined, cardId)]);
   }
@@ -943,6 +951,7 @@ export function singboxPaymentMethodButtons(
   yookassaEnabled?: boolean,
   cryptopayEnabled?: boolean,
   currency?: string,
+  rollypayEnabled?: boolean,
 ): InlineMarkup {
   const back = (backLabel && backLabel.trim()) || DEFAULT_BACK_LABEL;
   const backSty = undefined;
@@ -956,6 +965,9 @@ export function singboxPaymentMethodButtons(
     rows.push([btn(providerLabel("yookassa", "💳 ЮKassa — карта / СБП"), `pay_singbox_yookassa:${singboxTariffId}`, undefined, cardId)]);
   }
   if (cryptopayEnabled) rows.push([btn(providerLabel("cryptopay", "💳 Crypto Bot — криптовалюта"), `pay_singbox_cryptopay:${singboxTariffId}`, undefined, cardId)]);
+  if (rollypayEnabled && (!currency || currency.toUpperCase() === "RUB")) {
+    rows.push([btn(providerLabel("rollypay", "💳 RollyPay — рубли"), `pay_singbox_rollypay:${singboxTariffId}`, undefined, cardId)]);
+  }
   for (const m of methods) {
     rows.push([btn(m.label, `pay_singbox:${singboxTariffId}:${m.id}`, undefined, cardId)]);
   }
@@ -974,6 +986,7 @@ export function topupPaymentMethodButtons(
   yookassaEnabled?: boolean,
   cryptopayEnabled?: boolean,
   heleketEnabled?: boolean,
+  rollypayEnabled?: boolean,
   lavaEnabled?: boolean,
   lavatopEnabled?: boolean,
 ): InlineMarkup {
@@ -998,6 +1011,9 @@ export function topupPaymentMethodButtons(
   }
   if (heleketEnabled) {
     rows.push([btn(providerLabel("heleket", "💳 Heleket — криптовалюта"), `topup_heleket:${amount}`, "primary", cardId)]);
+  }
+  if (rollypayEnabled) {
+    rows.push([btn(providerLabel("rollypay", "💳 RollyPay — рубли"), `topup_rollypay:${amount}`, "primary", cardId)]);
   }
   for (const m of methods) {
     rows.push([btn(m.label, `topup:${amount}:${m.id}`, "primary", cardId)]);
@@ -1052,6 +1068,7 @@ export function optionPaymentMethodButtons(
   yoomoneyEnabled?: boolean,
   yookassaEnabled?: boolean,
   cryptopayEnabled?: boolean,
+  rollypayEnabled?: boolean,
 ): InlineMarkup {
   const back = (backLabel && backLabel.trim()) || DEFAULT_BACK_LABEL;
   const backSty = undefined;
@@ -1068,6 +1085,9 @@ export function optionPaymentMethodButtons(
   }
   if (cryptopayEnabled) {
     rows.push([btn(providerLabel("cryptopay", "💳 Crypto Bot — криптовалюта"), `pay_option_cryptopay:${option.kind}:${option.id}`, undefined, cardId)]);
+  }
+  if (rollypayEnabled && option.currency.toUpperCase() === "RUB") {
+    rows.push([btn(providerLabel("rollypay", "💳 RollyPay — рубли"), `pay_option_rollypay:${option.kind}:${option.id}`, undefined, cardId)]);
   }
   for (const m of plategaMethods) {
     rows.push([btn(m.label, `pay_option_platega:${option.kind}:${option.id}:${m.id}`, undefined, cardId)]);
