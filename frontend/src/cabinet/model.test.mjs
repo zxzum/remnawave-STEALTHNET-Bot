@@ -72,7 +72,7 @@ test("lists manual conversion targets only from the current tariff section", () 
   assert.deepEqual(conversionTargets(groups, null).map((plan) => plan.id), ["current", "target-1", "target-2"]);
 });
 
-test("keeps category emoji out of tariff card descriptions", () => {
+test("preserves tariff description whitespace for cabinet rendering", () => {
   const description = "  Выбор большинства  \n\n  50GB белых списков  ";
   const [group] = mapTariffGroups([{ id: "g1", name: "VPN", emoji: "⭐", tariffs: [{
     id: "t1", name: "Стандарт", description, durationDays: 30, price: 200,
