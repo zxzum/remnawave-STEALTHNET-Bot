@@ -5,6 +5,9 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../db.js";
 import { remnaGetUser, remnaUpdateUser, isRemnaConfigured } from "../remna/remna.client.js";
+import { restoreMeteredSquad } from "../squad-traffic/traffic-enforcement.service.js";
+import { effectiveLimitBytes } from "../squad-traffic/traffic-period.js";
+import type { SellOptionTrafficProduct, TrafficOptionMode } from "../client/client.service.js";
 
 export type ApplyExtraOptionResult =
   | { ok: true; outcome: "APPLIED" | "ALREADY_APPLIED" | "QUEUED" }
@@ -20,12 +23,81 @@ type ExtraOptionApplicationPlan = {
   uuid: string;
   remote: Record<string, unknown>;
   local: Record<string, number>;
+  trafficGrantBytes?: number;
 };
 
 type ExtraOptionPayload =
   | { kind: "traffic"; trafficBytes: number }
   | { kind: "devices"; deviceCount: number }
   | { kind: "servers"; squadUuid: string; trafficBytes?: number };
+
+export type TrafficOptionPurchaseCheck =
+  | { ok: true; subscriptionId: string }
+  | { ok: false; status: number; message: string };
+
+/** Validates the target quota and the monthly per-subscription purchase cap. */
+export async function validateTrafficOptionPurchase(
+  clientId: string,
+  targetSubscriptionId: string | null | undefined,
+  product: Pick<SellOptionTrafficProduct, "trafficGb"> & { trafficMode?: TrafficOptionMode },
+  maxPurchases = 1,
+): Promise<TrafficOptionPurchaseCheck> {
+  const requestedId = targetSubscriptionId?.trim() || null;
+  const subscription = await prisma.subscription.findFirst({
+    where: {
+      ...(requestedId ? { id: requestedId } : {}),
+      deletionRequestedAt: null,
+      OR: [
+        { ownerId: clientId, purchasedAsGift: false },
+        { giftedToClientId: clientId, giftStatus: "GIFTED" },
+      ],
+    },
+    orderBy: { subscriptionIndex: "asc" },
+    select: {
+      id: true,
+      remnawaveUuid: true,
+      tariff: { select: { trafficLimitMode: true } },
+      trafficQuota: { select: { id: true } },
+    },
+  });
+  if (!subscription?.remnawaveUuid) return { ok: false, status: 400, message: "Подписка для опции не найдена" };
+
+  const targetMode: TrafficOptionMode = subscription.tariff?.trafficLimitMode === "LOCAL_SQUAD" || subscription.trafficQuota
+    ? "LOCAL_SQUAD"
+    : "REMNAWAVE";
+  if (targetMode === "LOCAL_SQUAD" && !subscription.trafficQuota) {
+    return { ok: false, status: 409, message: "Для подписки не настроен учёт трафика белых списков" };
+  }
+  const productMode = product.trafficMode ?? "ANY";
+  if (productMode !== "ANY" && productMode !== targetMode) {
+    return {
+      ok: false,
+      status: 409,
+      message: productMode === "LOCAL_SQUAD"
+        ? "Этот пакет предназначен только для подписок с трафиком белых списков"
+        : "Этот пакет предназначен только для обычных VPN-подписок",
+    };
+  }
+
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const payments = await prisma.payment.findMany({
+    where: { clientId, createdAt: { gte: monthStart }, status: { in: ["PENDING", "PAID"] } },
+    select: { subscriptionId: true, metadata: true },
+  });
+  const purchases = payments.filter((payment) => {
+    const metadata = parseMetadata(payment.metadata);
+    const extra = metadata.extraOption;
+    if (!extra || typeof extra !== "object" || Array.isArray(extra) || (extra as Record<string, unknown>).kind !== "traffic") return false;
+    const paymentTarget = typeof metadata.targetSubscriptionId === "string" ? metadata.targetSubscriptionId : payment.subscriptionId;
+    return paymentTarget === subscription.id;
+  }).length;
+  const limit = Math.min(100, Math.max(1, Math.floor(maxPurchases) || 1));
+  if (purchases >= limit) {
+    return { ok: false, status: 409, message: `Лимит докупки трафика на этот месяц уже достигнут (${limit} пакет${limit === 1 ? "" : "а"})` };
+  }
+  return { ok: true, subscriptionId: subscription.id };
+}
 
 function parseMetadataExtraOption(metadata: string | null): ExtraOptionPayload | null {
   if (!metadata?.trim()) return null;
@@ -120,6 +192,9 @@ function parseApplicationPlan(metadata: Record<string, unknown>): ExtraOptionApp
     || !plan.local || typeof plan.local !== "object" || Array.isArray(plan.local)) return null;
   const local = plan.local as Record<string, unknown>;
   if (Object.values(local).some((entry) => typeof entry !== "number" || !Number.isFinite(entry))) return null;
+  const trafficGrantBytes = plan.trafficGrantBytes;
+  if (trafficGrantBytes !== undefined
+    && (typeof trafficGrantBytes !== "number" || !Number.isFinite(trafficGrantBytes) || trafficGrantBytes <= 0)) return null;
   const remote = plan.remote as Record<string, unknown>;
   const allowedRemote = new Set(["trafficLimitBytes", "hwidDeviceLimit", "activeInternalSquads"]);
   const allowedLocal = new Set(["customPrice", "extraDevices", "extraDevicesMonthlyPrice"]);
@@ -134,6 +209,7 @@ function parseApplicationPlan(metadata: Record<string, unknown>): ExtraOptionApp
     uuid: plan.uuid,
     remote,
     local: local as Record<string, number>,
+    ...(trafficGrantBytes !== undefined ? { trafficGrantBytes } : {}),
   };
 }
 
@@ -198,6 +274,8 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
         select: {
           id: true, remnawaveUuid: true, ownerId: true, giftedToClientId: true,
           customPrice: true, extraDevices: true, extraDevicesMonthlyPrice: true,
+          tariff: { select: { trafficLimitMode: true } },
+          trafficQuota: { select: { id: true } },
         },
       });
       const option = parseMetadataExtraOption(fresh.metadata);
@@ -218,27 +296,62 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
     if (claimed === "QUEUED") return { ok: true, outcome: "QUEUED" };
     if (claimed === "INVALID") return pre("Некорректная привязка платежа опции", 409);
 
-    const userRes = await remnaGetUser(claimed.uuid);
-    if (userRes.error) {
-      await prisma.payment.updateMany({
-        where: { id: paymentId, extraOptionState: "PLANNING", extraOptionClaimToken: claimToken },
-        data: { extraOptionState: "NEEDS_PLAN", extraOptionClaimToken: null, extraOptionNextAttemptAt: new Date(Date.now() + 60_000) },
-      });
-      return pre(userRes.error, userRes.status >= 400 ? userRes.status : 500);
-    }
-    const limits = getRemnaLimits(userRes.data);
     const local: Record<string, number> = {};
     let remote: Record<string, unknown>;
-    if (claimed.option.kind === "traffic") {
-      remote = { trafficLimitBytes: limits.trafficLimitBytes + claimed.option.trafficBytes };
-      local.customPrice = (claimed.subscription.customPrice ?? 0) + Math.max(0, claimed.payment.amount);
+    let trafficGrantBytes: number | undefined;
+    if (claimed.option.kind === "traffic"
+      && (claimed.subscription.tariff?.trafficLimitMode === "LOCAL_SQUAD" || claimed.subscription.trafficQuota)) {
+      const restored = await restoreMeteredSquad(claimed.subscription.id).catch((error) => ({
+        ok: false,
+        changed: false,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+      if (!restored.ok) {
+        await prisma.payment.updateMany({
+          where: { id: paymentId, extraOptionState: "PLANNING", extraOptionClaimToken: claimToken },
+          data: { extraOptionState: "NEEDS_PLAN", extraOptionClaimToken: null, extraOptionNextAttemptAt: new Date(Date.now() + 60_000) },
+        });
+        return pre(restored.error ?? "Не удалось восстановить локальный трафик", 502);
+      }
+      remote = {};
+      trafficGrantBytes = claimed.option.trafficBytes;
     } else if (claimed.option.kind === "devices") {
+      const userRes = await remnaGetUser(claimed.uuid);
+      if (userRes.error) {
+        await prisma.payment.updateMany({
+          where: { id: paymentId, extraOptionState: "PLANNING", extraOptionClaimToken: claimToken },
+          data: { extraOptionState: "NEEDS_PLAN", extraOptionClaimToken: null, extraOptionNextAttemptAt: new Date(Date.now() + 60_000) },
+        });
+        return pre(userRes.error, userRes.status >= 400 ? userRes.status : 500);
+      }
+      const limits = getRemnaLimits(userRes.data);
       const extraMeta = claimed.metadata.extraOption as Record<string, unknown>;
       const monthly = typeof extraMeta.productPriceMonthly === "number" && extraMeta.productPriceMonthly > 0 ? extraMeta.productPriceMonthly : Math.max(0, claimed.payment.amount);
       remote = { hwidDeviceLimit: (limits.hwidDeviceLimit ?? 0) + claimed.option.deviceCount };
       local.extraDevices = claimed.subscription.extraDevices + claimed.option.deviceCount;
       local.extraDevicesMonthlyPrice = claimed.subscription.extraDevicesMonthlyPrice + monthly;
+    } else if (claimed.option.kind === "traffic") {
+      const userRes = await remnaGetUser(claimed.uuid);
+      if (userRes.error) {
+        await prisma.payment.updateMany({
+          where: { id: paymentId, extraOptionState: "PLANNING", extraOptionClaimToken: claimToken },
+          data: { extraOptionState: "NEEDS_PLAN", extraOptionClaimToken: null, extraOptionNextAttemptAt: new Date(Date.now() + 60_000) },
+        });
+        return pre(userRes.error, userRes.status >= 400 ? userRes.status : 500);
+      }
+      const limits = getRemnaLimits(userRes.data);
+      remote = { trafficLimitBytes: limits.trafficLimitBytes + claimed.option.trafficBytes };
+      local.customPrice = (claimed.subscription.customPrice ?? 0) + Math.max(0, claimed.payment.amount);
     } else {
+      const userRes = await remnaGetUser(claimed.uuid);
+      if (userRes.error) {
+        await prisma.payment.updateMany({
+          where: { id: paymentId, extraOptionState: "PLANNING", extraOptionClaimToken: claimToken },
+          data: { extraOptionState: "NEEDS_PLAN", extraOptionClaimToken: null, extraOptionNextAttemptAt: new Date(Date.now() + 60_000) },
+        });
+        return pre(userRes.error, userRes.status >= 400 ? userRes.status : 500);
+      }
+      const limits = getRemnaLimits(userRes.data);
       const squads = getRemnaSquads(userRes.data);
       remote = {
         activeInternalSquads: squads.includes(claimed.option.squadUuid) ? squads : [...squads, claimed.option.squadUuid],
@@ -246,7 +359,14 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
       };
       local.customPrice = (claimed.subscription.customPrice ?? 0) + Math.max(0, claimed.payment.amount);
     }
-    plan = { state: "PENDING", subscriptionId: claimed.subscription.id, uuid: claimed.uuid, remote, local };
+    plan = {
+      state: "PENDING",
+      subscriptionId: claimed.subscription.id,
+      uuid: claimed.uuid,
+      remote,
+      local,
+      ...(trafficGrantBytes !== undefined ? { trafficGrantBytes } : {}),
+    };
     const pendingMetadata = JSON.stringify({ ...claimed.metadata, extraOptionApplication: plan });
     const persisted = await prisma.payment.updateMany({
       where: { id: paymentId, extraOptionState: "PLANNING", extraOptionClaimToken: claimToken },
@@ -304,19 +424,21 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
   });
   if (!applying) return { ok: true, outcome: "QUEUED" };
 
-  const update = await remnaUpdateUser({ uuid: plan.uuid, ...plan.remote });
-  if (update.error) {
-    const definitelyNotMutated = [400, 401, 403, 404, 409, 422].includes(update.status);
-    if (definitelyNotMutated) {
-      const released = await prisma.payment.updateMany({
-        where: { id: paymentId, extraOptionState: "APPLYING", extraOptionClaimToken: pendingClaimToken },
-        data: { extraOptionState: "PENDING", extraOptionClaimToken: null, extraOptionNextAttemptAt: new Date(Date.now() + 60_000) },
-      });
-      if (!released.count) return { ok: true, outcome: "QUEUED" };
-    } else if (!await quarantine("APPLYING", pendingClaimToken, `unknown Remnawave PATCH outcome (${update.status}): ${update.error}`)) {
-      return { ok: true, outcome: "QUEUED" };
+  if (Object.keys(plan.remote).length > 0) {
+    const update = await remnaUpdateUser({ uuid: plan.uuid, ...plan.remote });
+    if (update.error) {
+      const definitelyNotMutated = [400, 401, 403, 404, 409, 422].includes(update.status);
+      if (definitelyNotMutated) {
+        const released = await prisma.payment.updateMany({
+          where: { id: paymentId, extraOptionState: "APPLYING", extraOptionClaimToken: pendingClaimToken },
+          data: { extraOptionState: "PENDING", extraOptionClaimToken: null, extraOptionNextAttemptAt: new Date(Date.now() + 60_000) },
+        });
+        if (!released.count) return { ok: true, outcome: "QUEUED" };
+      } else if (!await quarantine("APPLYING", pendingClaimToken, `unknown Remnawave PATCH outcome (${update.status}): ${update.error}`)) {
+        return { ok: true, outcome: "QUEUED" };
+      }
+      return pendingFailure(update.error, update.status >= 400 ? update.status : 502);
     }
-    return pendingFailure(update.error, update.status >= 400 ? update.status : 502);
   }
   const appliedMetadata = JSON.stringify({ ...metadata, extraOptionApplication: { ...plan, state: "APPLIED" } });
   try {
@@ -325,6 +447,39 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
       const current = await tx.payment.findUnique({ where: { id: paymentId } });
       if (!current || current.extraOptionState !== "APPLYING" || current.extraOptionClaimToken !== pendingClaimToken) {
         throw new Error("extra-option lease lost");
+      }
+      if (plan.trafficGrantBytes !== undefined) {
+        const quota = await tx.squadTrafficQuota.findUnique({
+          where: { subscriptionId: plan.subscriptionId },
+          include: { grants: true },
+        });
+        if (!quota) throw new Error("Локальная квота подписки не найдена");
+        const bytes = BigInt(Math.round(plan.trafficGrantBytes));
+        const grant = await tx.trafficQuotaGrant.create({
+          data: {
+            quotaId: quota.id,
+            bytes,
+            scope: "CURRENT_PERIOD",
+            tariffIdAtGrant: null,
+            validPeriodStartAt: quota.periodStartedAt,
+          },
+        });
+        await tx.squadTrafficQuota.update({ where: { id: quota.id }, data: { status: "ACTIVE", exhaustedAt: null } });
+        await tx.trafficQuotaEvent.create({
+          data: {
+            quotaId: quota.id,
+            kind: "GRANT_CREATED",
+            deltaBytes: bytes,
+            usedBytes: quota.usedBytes,
+            limitBytes: effectiveLimitBytes(
+              quota.baseLimitBytes,
+              [...quota.grants.filter((grantItem) => grantItem.status === "ACTIVE"), grant],
+              quota.tariffIdAtPeriodStart,
+              quota.periodStartedAt,
+            ),
+            detail: { grantId: grant.id, actorId: `payment:${paymentId}`, scope: "CURRENT_PERIOD" },
+          },
+        });
       }
       await tx.subscription.update({ where: { id: plan.subscriptionId }, data: plan.local });
       const applied = await tx.payment.updateMany({

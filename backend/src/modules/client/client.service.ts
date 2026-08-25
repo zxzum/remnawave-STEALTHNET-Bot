@@ -184,7 +184,7 @@ const SYSTEM_CONFIG_KEYS = [
   "force_subscribe_enabled", "force_subscribe_channel_id", "force_subscribe_message", // Принудительная подписка на канал/группу
   "blacklist_enabled", // Блокировка пользователей из Community Blacklist
   // Продажа опций: доп. трафик, доп. устройства, доп. серверы (сквады)
-  "sell_options_enabled", "sell_options_traffic_enabled", "sell_options_traffic_products",
+  "sell_options_enabled", "sell_options_traffic_enabled", "sell_options_traffic_products", "sell_options_traffic_max_purchases",
   "sell_options_devices_enabled", "sell_options_devices_products",
   "sell_options_servers_enabled", "sell_options_servers_products",
   "google_analytics_id", "yandex_metrika_id", // Маркетинг: счётчики для кабинета
@@ -267,8 +267,9 @@ const SYSTEM_CONFIG_KEYS = [
   "bot_info_block",
 ];
 
-/** Продукт «Доп. трафик»: объём в ГБ, цена, валюта */
-export type SellOptionTrafficProduct = { id: string; name: string; trafficGb: number; price: number; currency: string };
+/** Продукт «Доп. трафик»: объём в ГБ, цена, валюта и тип лимита. */
+export type TrafficOptionMode = "LOCAL_SQUAD" | "REMNAWAVE" | "ANY";
+export type SellOptionTrafficProduct = { id: string; name: string; trafficGb: number; price: number; currency: string; trafficMode: TrafficOptionMode };
 /** Продукт «Доп. устройства»: кол-во устройств, цена */
 export type SellOptionDeviceProduct = { id: string; name: string; deviceCount: number; price: number; currency: string };
 /** Продукт «Доп. сервер»: сквад Remna, опционально трафик (ГБ), цена */
@@ -839,6 +840,7 @@ async function loadSystemConfigFromDb() {
     sellOptionsEnabled: map.sell_options_enabled === "true" || map.sell_options_enabled === "1",
     sellOptionsTrafficEnabled: map.sell_options_traffic_enabled === "true" || map.sell_options_traffic_enabled === "1",
     sellOptionsTrafficProducts: parseSellOptionTrafficProducts(map.sell_options_traffic_products),
+    sellOptionsTrafficMaxPurchases: Math.min(100, Math.max(1, parseInt(map.sell_options_traffic_max_purchases ?? "1", 10) || 1)),
     sellOptionsDevicesEnabled: map.sell_options_devices_enabled === "true" || map.sell_options_devices_enabled === "1",
     sellOptionsDevicesProducts: parseSellOptionDeviceProducts(map.sell_options_devices_products),
     sellOptionsServersEnabled: map.sell_options_servers_enabled === "true" || map.sell_options_servers_enabled === "1",
@@ -1089,6 +1091,7 @@ function parseSellOptionTrafficProducts(raw: string | undefined): SellOptionTraf
         trafficGb: typeof x.trafficGb === "number" ? x.trafficGb : Number(x.trafficGb) || 0,
         price: typeof x.price === "number" ? x.price : Number(x.price) || 0,
         currency: typeof x.currency === "string" ? x.currency : "rub",
+        trafficMode: (x.trafficMode === "LOCAL_SQUAD" || x.trafficMode === "REMNAWAVE" ? x.trafficMode : "ANY") as TrafficOptionMode,
       }))
       .filter((p) => p.trafficGb > 0 && p.price >= 0);
   } catch {
@@ -1429,13 +1432,13 @@ export async function getPublicConfig(_forCloneBot?: { markupPercent?: number | 
       };
       if (!so.sellOptionsEnabled) return [];
       const out: Array<
-        { kind: "traffic"; id: string; name: string; trafficGb: number; price: number; currency: string } |
+        { kind: "traffic"; id: string; name: string; trafficGb: number; price: number; currency: string; trafficMode: TrafficOptionMode } |
         { kind: "devices"; id: string; name: string; deviceCount: number; price: number; currency: string } |
         { kind: "servers"; id: string; name: string; squadUuid: string; trafficGb: number; price: number; currency: string }
       > = [];
       if (so.sellOptionsTrafficEnabled && so.sellOptionsTrafficProducts?.length) {
         for (const p of so.sellOptionsTrafficProducts) {
-          out.push({ kind: "traffic", id: p.id, name: p.name, trafficGb: p.trafficGb, price: withMarkup(p.price), currency: p.currency });
+          out.push({ kind: "traffic", id: p.id, name: p.name, trafficGb: p.trafficGb, price: withMarkup(p.price), currency: p.currency, trafficMode: p.trafficMode });
         }
       }
       if (so.sellOptionsDevicesEnabled && so.sellOptionsDevicesProducts?.length) {

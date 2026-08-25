@@ -275,7 +275,7 @@ export async function getPublicConfig(): Promise<{
   forceSubscribeMessage?: string | null;
   sellOptionsEnabled?: boolean;
   sellOptions?: Array<
-    | { kind: "traffic"; id: string; name: string; trafficGb: number; price: number; currency: string }
+    | { kind: "traffic"; id: string; name: string; trafficGb: number; price: number; currency: string; trafficMode?: "LOCAL_SQUAD" | "REMNAWAVE" | "ANY" }
     | { kind: "devices"; id: string; name: string; deviceCount: number; price: number; currency: string }
     | { kind: "servers"; id: string; name: string; squadUuid: string; trafficGb?: number; price: number; currency: string }
   >;
@@ -1280,6 +1280,7 @@ export type SubscriptionListItem = {
   trialConvertEnabled?: boolean;
   /** конвертация триала разрешена в любой тариф. */
   trialConvertAllTariffs?: boolean;
+  trafficLimitMode?: "LOCAL_SQUAD" | "REMNAWAVE";
   trafficQuota?: {
     usedBytes: string;
     limitBytes: string;

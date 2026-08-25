@@ -5214,17 +5214,20 @@ composer.on("callback_query:data", async (ctx) => {
       const kind = (parts[1] ?? "") as "traffic" | "devices" | "servers";
       const productId = parts.length > 2 ? parts.slice(2).join(":") : "";
       try {
+        const product = (config?.sellOptions ?? []).find((o) => o.kind === kind && o.id === productId);
         const subs = await api.getAllSubscriptions(token);
-        const subItems = subs.items ?? [];
+        let subItems = subs.items ?? [];
+        if (product?.kind === "traffic" && product.trafficMode && product.trafficMode !== "ANY") {
+          subItems = subItems.filter((item) => (item.trafficLimitMode ?? (item.trafficQuota ? "LOCAL_SQUAD" : "REMNAWAVE")) === product.trafficMode);
+        }
         if (subItems.length === 0) {
-          await editMessageContent(ctx, "❌ Сначала оформите подписку — потом сможете покупать опции.", backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
+          await editMessageContent(ctx, kind === "traffic" ? "❌ Для этого пакета нет подходящей подписки." : "❌ Сначала оформите подписку — потом сможете покупать опции.", backToMenu(config?.botBackLabel ?? null, innerStyles?.back, innerEmojiIds));
           return;
         }
         extraOptionPending.set(userId, { kind, productId });
 
         // рассчитываем актуальную цену
         // для каждой подписки с объяснением (коэф по остатку дней + личная скидка).
-        const product = (config?.sellOptions ?? []).find((o) => o.kind === kind && o.id === productId);
         const basePrice = product?.price ?? 0;
         const me = await api.getMe(token).catch(() => null);
         const personalDiscount = me?.personalDiscountPercent ?? 0;

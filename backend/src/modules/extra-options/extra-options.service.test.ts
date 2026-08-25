@@ -209,6 +209,39 @@ test("balance refund eligibility stops exactly at durable PENDING", () => {
   assert.equal(service.canRefundExtraOptionFailure({ ok: true, outcome: "QUEUED" }), false);
 });
 
+test("traffic package validation enforces the subscription mode and monthly cap", async () => {
+  const subscriptionDelegate = prisma.subscription as unknown as Record<string, unknown>;
+  const paymentDelegate = prisma.payment as unknown as Record<string, unknown>;
+  const originalFindFirst = subscriptionDelegate.findFirst;
+  const originalFindMany = paymentDelegate.findMany;
+  subscriptionDelegate.findFirst = async () => ({
+    id: "sub-1",
+    remnawaveUuid: "uuid-1",
+    tariff: { trafficLimitMode: "LOCAL_SQUAD" },
+    trafficQuota: { id: "quota-1" },
+  });
+  paymentDelegate.findMany = async () => [];
+  try {
+    const wrongMode = await service.validateTrafficOptionPurchase("client-1", "sub-1", { trafficGb: 50, trafficMode: "REMNAWAVE" });
+    assert.equal(wrongMode.ok, false);
+    if (!wrongMode.ok) assert.equal(wrongMode.status, 409);
+
+    const allowed = await service.validateTrafficOptionPurchase("client-1", "sub-1", { trafficGb: 50, trafficMode: "LOCAL_SQUAD" });
+    assert.deepEqual(allowed, { ok: true, subscriptionId: "sub-1" });
+
+    paymentDelegate.findMany = async () => [{
+      subscriptionId: "sub-1",
+      metadata: JSON.stringify({ extraOption: { kind: "traffic" }, targetSubscriptionId: "sub-1" }),
+    }];
+    const capped = await service.validateTrafficOptionPurchase("client-1", "sub-1", { trafficGb: 50, trafficMode: "LOCAL_SQUAD" });
+    assert.equal(capped.ok, false);
+    if (!capped.ok) assert.equal(capped.status, 409);
+  } finally {
+    subscriptionDelegate.findFirst = originalFindFirst;
+    paymentDelegate.findMany = originalFindMany;
+  }
+});
+
 test("a stale PENDING worker loses its lease before PATCH and cannot overwrite newer payments", async () => {
   const h = queueHarness({ blockFirstLeasedValidation: true });
   try {

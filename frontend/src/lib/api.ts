@@ -2285,6 +2285,7 @@ export const api = {
     isTrial?: boolean;
     trialName?: string | null;
     trialConvertEnabled?: boolean;
+    trafficLimitMode?: "LOCAL_SQUAD" | "REMNAWAVE" | null;
     componentQuotas?: ComponentQuota[];
     trafficQuota?: ClientTrafficQuota | null;
     message?: string;
@@ -2325,6 +2326,7 @@ export const api = {
       trialConvertEnabled?: boolean;
       /** конвертация триала разрешена в любой тариф. */
       trialConvertAllTariffs?: boolean;
+      trafficLimitMode?: "LOCAL_SQUAD" | "REMNAWAVE";
       componentQuotas?: ComponentQuota[];
       trafficQuota?: ClientTrafficQuota | null;
     }>;
@@ -3688,6 +3690,7 @@ export type UpdateSettingsPayload = {
   botShowTariffCategories?: boolean;
   sellOptionsEnabled?: boolean;
   sellOptionsTrafficEnabled?: boolean;
+  sellOptionsTrafficMaxPurchases?: number;
   sellOptionsTrafficProducts?: string | null;
   sellOptionsDevicesEnabled?: boolean;
   sellOptionsDevicesProducts?: string | null;
@@ -4311,7 +4314,8 @@ export interface AdminSettings {
   /** Продажа опций: доп. трафик, устройства, серверы */
   sellOptionsEnabled?: boolean;
   sellOptionsTrafficEnabled?: boolean;
-  sellOptionsTrafficProducts?: { id: string; name: string; trafficGb: number; price: number; currency: string }[];
+  sellOptionsTrafficMaxPurchases?: number;
+  sellOptionsTrafficProducts?: { id: string; name: string; trafficGb: number; price: number; currency: string; trafficMode?: "LOCAL_SQUAD" | "REMNAWAVE" | "ANY" }[];
   sellOptionsDevicesEnabled?: boolean;
   sellOptionsDevicesProducts?: { id: string; name: string; deviceCount: number; price: number; currency: string }[];
   sellOptionsServersEnabled?: boolean;
@@ -5739,7 +5743,7 @@ export interface LanguageInfo {
 
 /** Одна опция для продажи в кабинете (трафик / устройства / сервер) */
 export type PublicSellOption =
-  | { kind: "traffic"; id: string; name: string; trafficGb: number; price: number; currency: string }
+  | { kind: "traffic"; id: string; name: string; trafficGb: number; price: number; currency: string; trafficMode?: "LOCAL_SQUAD" | "REMNAWAVE" | "ANY" }
   | { kind: "devices"; id: string; name: string; deviceCount: number; price: number; currency: string }
   | { kind: "servers"; id: string; name: string; squadUuid: string; trafficGb?: number; price: number; currency: string };
 
@@ -5772,6 +5776,7 @@ export interface PublicConfig {
   cabinetDesign?: "default" | "aurora" | string;
   ticketsEnabled?: boolean;
   sellOptionsEnabled?: boolean;
+  sellOptionsTrafficMaxPurchases?: number;
   sellOptions?: PublicSellOption[];
   showProxyEnabled?: boolean;
   showSingboxEnabled?: boolean;
