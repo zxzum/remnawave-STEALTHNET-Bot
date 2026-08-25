@@ -11,6 +11,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   CreditCard, Search, RefreshCw, X, ChevronDown, Copy, Check,
   Filter, User, Package, Hash, CalendarDays, DollarSign, Globe, Smartphone, Bot, CircleCheck, CircleX, Clock,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtMskShort } from "@/lib/datetime";
@@ -66,6 +67,16 @@ function providerLabel(p: string | null) {
 }
 
 function statusBadge(status: string, rawStatus?: string | null) {
+  if (status === "PAID" && rawStatus?.toUpperCase() === "EXPIRED") {
+    return (
+      <span
+        title="Локальный платёж отмечен как оплаченный, но провайдер сообщил EXPIRED"
+        className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30"
+      >
+        Оплачен · провайдер EXPIRED <AlertTriangle className="h-3 w-3" />
+      </span>
+    );
+  }
   if (status === "PAID") {
     return (
       <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 border-emerald-500/30">
@@ -640,7 +651,8 @@ export function PaymentsPage() {
                                         <span className="text-muted-foreground">{outcomeLabel(ev.outcome)}</span>
                                         {ev.responseStatus != null && <span className="text-muted-foreground">HTTP {ev.responseStatus}</span>}
                                         {ev.durationMs != null && <span className="text-muted-foreground">{ev.durationMs} мс</span>}
-                                        {ev.replayedBy && <span className="text-muted-foreground">Replay: {ev.replayedBy}</span>}
+                                        {ev.replayedBy && <span className="text-muted-foreground">Повторил: {ev.replayedBy}</span>}
+                                        {ev.replayOfId && <span className="text-muted-foreground break-all">Повтор события: {ev.replayOfId}</span>}
                                         <span className="text-muted-foreground ml-auto">{fmtDate(ev.createdAt)}</span>
                                         {ev.errorMessage && (
                                           <div className="basis-full rounded-md bg-red-500/10 px-2 py-1 text-red-300 break-words">
