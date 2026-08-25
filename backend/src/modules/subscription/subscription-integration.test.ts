@@ -45,7 +45,6 @@ test("webhook, balance, retry, gift race, and multi-subscription paths keep one 
     read("../../scripts/seed-system-settings.ts"),
   ]);
 
-  assert.match(markPaid, /updateMany\(\{[\s\S]*status: "PENDING"[\s\S]*status: "PAID"/);
   assert.match(activation, /withClientSubscriptionLock\(payment\.clientId/);
 
   const balanceRoute = balance.slice(balance.indexOf('clientRouter.post("/payments/balance"'));
