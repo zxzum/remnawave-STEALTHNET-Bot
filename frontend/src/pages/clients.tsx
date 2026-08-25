@@ -304,7 +304,6 @@ export function ClientsPage() {
     const interval = setInterval(poll, 30000);
     return () => clearInterval(interval);
   }, [token, data?.items, pageVisible]);
-
   function openEdit(c: ClientRecord) {
     setEditing(c);
     setEditForm(clientEditForm(c));
