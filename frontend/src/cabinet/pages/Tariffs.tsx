@@ -5,7 +5,7 @@ import * as Accordion from "@radix-ui/react-accordion";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { useClientAuth } from "@/contexts/client-auth";
-import { ApiError, api, type ManualConversionQuote, type ManualConversionResult, type PublicConfig, type TariffConversionPreview } from "@/lib/api";
+import { api, type PublicConfig, type TariffConversionPreview } from "@/lib/api";
 import {
   Box,
   ChevronDown,
@@ -29,7 +29,7 @@ import {
 } from "lucide-react";
 import { cn } from "../lib/cn";
 import { useApp } from "../store/AppContext";
-import { conversionTargets, quoteTariff, resolvePaymentUrl, type CabinetSubscription, type TariffGroup, type TariffPlan } from "../model";
+import { quoteTariff, resolvePaymentUrl, type TariffPlan } from "../model";
 import { preparePaymentRedirect } from "@/lib/open-payment-url";
 import { ExtraOptions } from "./Services";
 
@@ -69,9 +69,6 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
   const [keepExistingExtras, setKeepExistingExtras] = useState(true);
   const [selectedTrialId, setSelectedTrialId] = useState<string | null>(null);
   const [pendingPaymentId, setPendingPaymentId] = useState<string | null>(null);
-  const [manualQuote, setManualQuote] = useState<ManualConversionQuote | null>(null);
-  const [manualResult, setManualResult] = useState<ManualConversionResult | null>(null);
-  const [manualBusy, setManualBusy] = useState(false);
 
   useEffect(() => { if (open) void api.getPublicConfig().then(setConfig).catch(() => undefined); }, [open]);
   useEffect(() => {
@@ -93,28 +90,15 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
   useEffect(() => {
     if (!open || !plan || !state.token) {
       setConversion(null);
-      setManualQuote(null);
       return;
     }
     let current = true;
     setKeepExistingExtras(true);
-    setManualQuote(null);
-    setManualResult(null);
     void api.clientTariffConversionPreview(state.token, {
       tariffId: plan.id,
       priceOptionId: selectedOptionId ?? undefined,
     }).then((preview) => {
       if (current) setConversion(preview);
-      if (!preview.willConvert || !preview.subscription?.id) return null;
-      return api.clientSubscriptionConversionQuote(state.token!, {
-        subscriptionId: preview.subscription.id,
-        tariffId: plan.id,
-        priceOptionId: selectedOptionId,
-      }).then((quote) => {
-        if (current) setManualQuote(quote);
-      }).catch(() => {
-        if (current) setManualQuote(null);
-      });
     }).catch(() => {
       if (current) setConversion(null);
     });
@@ -201,9 +185,6 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
     setConversion(null);
     setKeepExistingExtras(true);
     setSelectedTrialId(null);
-    setManualQuote(null);
-    setManualResult(null);
-    setManualBusy(false);
   };
 
   const applyPromo = async () => {
@@ -278,32 +259,6 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
   }));
   const payCryptoBot = () => state.token && openPayment("Crypto Bot", () => api.cryptopayCreatePayment(state.token!, purchasePayload));
   const payRollyPay = () => state.token && openPayment("RollyPay", () => api.rollypayCreatePayment(state.token!, purchasePayload));
-  const convertManually = async () => {
-    if (!state.token || !manualQuote || manualBusy) return;
-    setManualBusy(true);
-    try {
-      const result = await api.clientSubscriptionConversion(state.token, manualQuote.quoteToken);
-      setManualResult(result);
-      await Promise.all([refreshProfile(), reload()]);
-      if (result.direction !== "upgrade") {
-        toast({ title: "Конвертация выполнена", description: `Добавлено ${result.convertedDays} дн. без покупки месяца`, variant: "success" });
-        onOpenChange(false);
-        reset();
-      } else {
-        toast({ title: "Тариф изменён", description: "Можно оплатить ещё месяц", variant: "success" });
-      }
-    } catch (cause) {
-      if (cause instanceof ApiError && cause.status === 409) {
-        setManualQuote(null);
-        setConversion(null);
-        toast({ title: "Расчёт устарел", description: "Откройте тариф заново и подтвердите актуальный остаток", variant: "error" });
-      } else {
-        toast({ title: "Не удалось выполнить конвертацию", description: cause instanceof Error ? cause.message : undefined, variant: "error" });
-      }
-    } finally {
-      setManualBusy(false);
-    }
-  };
   const plategaMethods = config?.plategaMethods ?? [];
   const sbpMethod = plategaMethods.find((method) => /сбп|sbp|qr/i.test(method.label));
   const cardMethod = plategaMethods.find((method) => /карт|card/i.test(method.label));
@@ -592,41 +547,6 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                     </div>
                   )}
 
-                  {manualQuote && (
-                    <div className="mt-4 rounded-3xl border border-accent-400/30 bg-accent-500/8 p-4">
-                      <p className="text-sm font-bold">Конвертация без покупки месяца</p>
-                      <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                        <span className="text-fog-500">Текущий тариф</span>
-                        <span className="text-right font-semibold">{manualQuote.currentTariff.name ?? "—"}</span>
-                        <span className="text-fog-500">Целевой тариф</span>
-                        <span className="text-right font-semibold">{manualQuote.targetTariff.name}</span>
-                        <span className="text-fog-500">Остаток</span>
-                        <span className="text-right font-semibold">{manualQuote.remainingDays} дн.</span>
-                        <span className="text-fog-500">Расчёт и округление</span>
-                        <span className="text-right font-semibold">{manualQuote.rawConvertedDays.toFixed(2)} → {manualQuote.rounding}</span>
-                        <span className="text-fog-500">Комиссия</span>
-                        <span className="text-right font-semibold">{manualQuote.commissionPercent}%</span>
-                        <span className="text-fog-500">Итоговые дни</span>
-                        <span className="text-right font-bold text-accent-300">{manualQuote.totalDays} дн.</span>
-                      </div>
-                      {manualResult?.direction === "upgrade" ? (
-                        <div className="mt-3 rounded-2xl border border-mint-400/25 bg-mint-500/10 p-3 text-xs text-fog-300">
-                          Конвертация выполнена. <button type="button" className="font-bold text-mint-300 underline" onClick={() => setManualResult(null)}>Оплатить ещё месяц</button>
-                        </div>
-                      ) : !manualResult ? (
-                        <button
-                          type="button"
-                          disabled={manualBusy}
-                          onClick={convertManually}
-                          className="btn-primary mt-3 w-full justify-center disabled:opacity-50"
-                        >
-                          {manualBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                          {manualBusy ? "Конвертация…" : "Конвертация"}
-                        </button>
-                      ) : null}
-                    </div>
-                  )}
-
                   {conversion?.willConvert && (conversion.extras?.extraDevices ?? 0) > 0 && (
                     <div className="mt-3 grid grid-cols-2 gap-2.5">
                       <button
@@ -805,206 +725,6 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                 </motion.div>
               )}
             </AnimatePresence>
-          </motion.div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  );
-}
-
-/* ---------------- Строка тарифа ---------------- */
-
-export function ManualConversionDialog({
-  open,
-  onOpenChange,
-  source,
-  tariffGroups,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  source: CabinetSubscription;
-  tariffGroups: TariffGroup[];
-}) {
-  const { reload, toast } = useApp();
-  const { state, refreshProfile } = useClientAuth();
-  const [targetId, setTargetId] = useState<string | null>(null);
-  const [quote, setQuote] = useState<ManualConversionQuote | null>(null);
-  const [quoteError, setQuoteError] = useState<string | null>(null);
-  const [quoting, setQuoting] = useState(false);
-  const [applying, setApplying] = useState(false);
-  const targets = useMemo(() => conversionTargets(tariffGroups, source.tariffId), [source.tariffId, tariffGroups]);
-  const selectedTargetId = targetId ?? targets[0]?.id ?? null;
-  const target = targets.find((plan) => plan.id === selectedTargetId) ?? null;
-  const option = target?.durationOptions[0] ?? null;
-
-  useEffect(() => {
-    if (!open) {
-      setTargetId(null);
-      setQuote(null);
-      setQuoteError(null);
-      setQuoting(false);
-      setApplying(false);
-      return;
-    }
-    setTargetId((current) => current && targets.some((plan) => plan.id === current) ? current : null);
-  }, [open, targets]);
-
-  useEffect(() => {
-    if (!open || !state.token || !target || !option) {
-      setQuote(null);
-      setQuoteError(target ? "У выбранного тарифа нет доступного срока" : null);
-      setQuoting(false);
-      return;
-    }
-    let current = true;
-    setQuoting(true);
-    setQuote(null);
-    setQuoteError(null);
-    void api.clientSubscriptionConversionQuote(state.token, {
-      subscriptionId: source.id,
-      tariffId: target.id,
-      priceOptionId: option.id,
-    }).then((nextQuote) => {
-      if (current) setQuote(nextQuote);
-    }).catch((cause) => {
-      if (current) setQuoteError(cause instanceof Error ? cause.message : "Для этого тарифа конвертация недоступна");
-    }).finally(() => {
-      if (current) setQuoting(false);
-    });
-    return () => { current = false; };
-  }, [open, option, source.id, state.token, target]);
-
-  const apply = async () => {
-    if (!state.token || !quote || applying) return;
-    setApplying(true);
-    try {
-      const result = await api.clientSubscriptionConversion(state.token, quote.quoteToken);
-      await Promise.all([reload(), refreshProfile()]);
-      toast({
-        title: "Тариф изменён",
-        description: `Остаток пересчитан: ${result.totalDays} дн.${result.commissionPercent > 0 ? " Комиссия 5% учтена." : ""}`,
-        variant: "success",
-      });
-      onOpenChange(false);
-    } catch (cause) {
-      if (cause instanceof ApiError && cause.status === 409) {
-        setQuote(null);
-        setQuoteError("Расчёт устарел. Выберите тариф ещё раз.");
-      } else {
-        setQuoteError(cause instanceof Error ? cause.message : "Не удалось выполнить конвертацию");
-      }
-    } finally {
-      setApplying(false);
-    }
-  };
-
-  return (
-    <Dialog.Root open={open} onOpenChange={(nextOpen) => { if (!applying) onOpenChange(nextOpen); }}>
-      <Dialog.Portal>
-        <Dialog.Overlay asChild>
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="fixed inset-0 z-50 bg-ink-950/70 backdrop-blur-md"
-          />
-        </Dialog.Overlay>
-        <Dialog.Content asChild>
-          <motion.div
-            initial={{ opacity: 0, y: 28, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ type: "spring", stiffness: 320, damping: 28 }}
-            className="glass-strong fixed inset-x-3 top-1/2 z-50 mx-auto max-h-[90dvh] w-[calc(100%-1.5rem)] max-w-lg -translate-y-1/2 overflow-y-auto rounded-4xl p-6 sm:inset-x-0 sm:w-[calc(100%-2rem)] sm:p-7"
-          >
-            <Dialog.Close disabled={applying} className="absolute top-4 right-4 grid h-8 w-8 place-items-center rounded-xl text-fog-500 transition-colors hover:bg-white/8 hover:text-white disabled:opacity-50">
-              <X className="h-4 w-4" />
-            </Dialog.Close>
-            <Dialog.Title className="pr-9 text-2xl font-extrabold">Конвертация подписки</Dialog.Title>
-            <Dialog.Description className="mt-2 text-sm leading-relaxed text-fog-500">
-              Выберите тариф — остаток будет пересчитан без создания новой ссылки.
-            </Dialog.Description>
-
-            <div className="mt-5 rounded-3xl border border-white/8 bg-white/3 p-4">
-              <p className="text-xs font-bold tracking-wider text-fog-600 uppercase">Текущая подписка</p>
-              <div className="mt-1 flex items-baseline justify-between gap-3">
-                <span className="font-bold">{source.name}</span>
-                <span className="text-sm font-semibold text-fog-400">{source.daysLeft} дн.</span>
-              </div>
-            </div>
-
-            <p className="mt-5 mb-2 text-sm font-bold">Целевой тариф</p>
-            {targets.length > 0 ? (
-              <div className="-mx-4 grid max-h-64 gap-2 overflow-y-auto px-4 py-3">
-                {targets.map((plan) => {
-                  const selected = plan.id === selectedTargetId;
-                  const firstOption = plan.durationOptions[0];
-                  return (
-                    <button
-                      key={plan.id}
-                      type="button"
-                      onClick={() => { setTargetId(plan.id); setQuote(null); setQuoteError(null); }}
-                      className={cn(
-                        "flex items-center gap-3 rounded-2xl border p-3 text-left transition-all",
-                        selected ? "border-accent-400/55 bg-accent-500/12 shadow-neon-blue" : "border-white/8 bg-white/3 hover:border-accent-400/30",
-                      )}
-                    >
-                      <span className="icon-tile h-10 w-10 rounded-xl"><RefreshCw className="h-4 w-4" /></span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-bold">{plan.name}</span>
-                        <span className="mt-0.5 block text-xs text-fog-500">
-                          {firstOption ? `${firstOption.days} дн. · ${formatMoney(firstOption.price, plan.currency)}` : "Срок не настроен"}
-                        </span>
-                      </span>
-                      {plan.popular && <span className="chip chip-amber text-[10px]">Рекомендуем</span>}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="rounded-2xl border border-white/8 bg-white/3 p-4 text-sm text-fog-500">Других тарифов пока нет.</p>
-            )}
-
-            <div className="mt-4 min-h-52">
-              {target && (quoting || (!quote && !quoteError)) && (
-                <div className="h-52 animate-pulse rounded-3xl border border-white/8 bg-white/3 p-4" aria-label="Считаем новый срок" aria-busy="true">
-                  <div className="h-5 w-40 rounded-lg bg-white/8" />
-                  <div className="mt-5 grid grid-cols-2 gap-3">
-                    {[0, 1, 2, 3].map((item) => <div key={item} className="h-4 rounded-md bg-white/6" />)}
-                  </div>
-                </div>
-              )}
-              {quoteError && !quoting && <p className="rounded-2xl border border-red-400/20 bg-red-500/10 p-3 text-sm text-red-200">{quoteError}</p>}
-              {quote && !quoting && (
-              <div className="rounded-3xl border border-accent-400/30 bg-accent-500/8 p-4">
-                <p className="text-sm font-bold">Расчёт конвертации</p>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                  <span className="text-fog-500">Текущий тариф</span>
-                  <span className="text-right font-semibold">{quote.currentTariff.name ?? source.name}</span>
-                  <span className="text-fog-500">Целевой тариф</span>
-                  <span className="text-right font-semibold">{quote.targetTariff.name}</span>
-                  <span className="text-fog-500">Остаток</span>
-                  <span className="text-right font-semibold">{quote.remainingDays} дн.</span>
-                  <span className="text-fog-500">После пересчёта</span>
-                  <span className="text-right font-semibold">{quote.convertedDays} дн.</span>
-                  {quote.commissionPercent > 0 && <>
-                    <span className="text-fog-500">Комиссия</span>
-                    <span className="text-right font-semibold text-amber-glow">5%</span>
-                  </>}
-                  <span className="text-fog-500">Итого</span>
-                  <span className="text-right font-bold text-accent-300">{quote.totalDays} дн.</span>
-                </div>
-              </div>
-              )}
-            </div>
-
-            <button
-              type="button"
-              disabled={!quote || quoting || applying}
-              onClick={() => void apply()}
-              className="btn-primary mt-5 w-full justify-center px-6 py-4 text-base disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              {applying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              {applying ? "Конвертируем…" : "Конвертировать подписку"}
-            </button>
           </motion.div>
         </Dialog.Content>
       </Dialog.Portal>

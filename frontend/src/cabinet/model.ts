@@ -132,11 +132,6 @@ export type TariffPlan = {
 };
 export type TariffGroup = { id: string; title: string; plans: TariffPlan[] };
 
-export function conversionTargets(groups: TariffGroup[], currentTariffId: string | null): TariffPlan[] {
-  const currentGroup = groups.find((group) => group.plans.some((plan) => plan.id === currentTariffId));
-  return (currentGroup?.plans ?? groups.flatMap((group) => group.plans)).filter((plan) => plan.id !== currentTariffId);
-}
-
 type PublicTariffGroupShape = {
   id: string;
   name: string;
