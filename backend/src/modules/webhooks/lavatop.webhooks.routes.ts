@@ -101,6 +101,13 @@ async function handleRecurringRenewal(event: LavatopWebhookEvent): Promise<Webho
     console.warn("[Lava.top Webhook] recurring: parent payment не найден", { parentOrderId });
     return { ok: true };
   }
+  if (parent.tariffId) {
+    const tariff = await prisma.tariff.findUnique({ where: { id: parent.tariffId }, select: { archivedAt: true } });
+    if (tariff?.archivedAt) {
+      console.warn("[Lava.top Webhook] recurring пропущен: тариф архивирован", { parentOrderId, tariffId: parent.tariffId });
+      return { ok: true };
+    }
+  }
 
   // Сумма берётся из webhook'а (Lava сообщает фактически списанную сумму)
   const amount = event.amount ?? 0;

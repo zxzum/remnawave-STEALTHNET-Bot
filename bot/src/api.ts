@@ -557,8 +557,10 @@ export async function getPublicTariffs(): Promise<{
       description?: string | null;
       durationDays: number;
       trafficLimitBytes?: number | null;
+      localTrafficLimitBytes?: number | string | null;
       trafficResetMode?: string;
       trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
+      meteredSquadUuid?: string | null;
       isBestChoice?: boolean;
       deviceLimit?: number | null;
       price: number;
@@ -1135,6 +1137,8 @@ export async function createGiftCode(
   /** T-unify (12.05.2026) — для отображения формата подарка. */
   durationDays: number | null;
   trafficLimitBytes: number | null;
+  localTrafficLimitBytes: number | null;
+  trafficLimitMode: "REMNAWAVE" | "LOCAL_SQUAD" | null;
 }> {
   return fetchJson("/api/client/gift/create-code", { method: "POST", body, token });
 }
@@ -1153,6 +1157,8 @@ export async function redeemGiftCode(
   /** T-unify (12.05.2026) — для текста получателю. */
   durationDays: number | null;
   trafficLimitBytes: number | null;
+  localTrafficLimitBytes: number | null;
+  trafficLimitMode: "REMNAWAVE" | "LOCAL_SQUAD" | null;
   subscriptionUrl: string | null;
   tariffPrice: number | null;
   tariffCurrency: string | null;

@@ -28,6 +28,7 @@ import { requireClientAuth } from "../client/client.middleware.js";
 import { prisma, createPayment } from "../../db.js";
 import { randomUUID } from "crypto";
 import { deleteSeparateTrialSubscriptions, markTrialUsedForPaidPurchase } from "../trial/trial-purchase-lock.service.js";
+import { applyTrafficEntitlement } from "../squad-traffic/traffic-entitlement.service.js";
 
 // ─── Public Router (no auth) ─────────────────────────────────────────────────
 
@@ -110,6 +111,10 @@ giftRouter.post("/buy", async (req: Request, res: Response) => {
       currency: true,
       durationDays: true,
       trafficLimitBytes: true,
+      localTrafficLimitBytes: true,
+      trafficLimitMode: true,
+      meteredSquadUuid: true,
+      archivedAt: true,
       deviceLimit: true,
       includedDevices: true,
       pricePerExtraDevice: true,
@@ -123,6 +128,9 @@ giftRouter.post("/buy", async (req: Request, res: Response) => {
 
   if (!tariff) {
     return res.status(404).json({ message: "Тариф не найден" });
+  }
+  if (tariff.archivedAt) {
+    return res.status(409).json({ message: "Тариф архивирован и недоступен для покупки", code: "TARIFF_ARCHIVED" });
   }
 
   // Выбранная опция длительности: явный priceOptionId → найти; иначе минимальная по цене.
@@ -164,17 +172,29 @@ giftRouter.post("/buy", async (req: Request, res: Response) => {
   // Создаём дополнительную подписку с новой моделью устройств.
   // purchasedAsGift=true → подписка попадёт ТОЛЬКО в «🎁 Мои подарки»,
   // не будет дублироваться в «📋 Мои подписки». При activateForSelf флаг сбрасывается.
-  const result = await createAdditionalSubscription(clientId, {
-    id: tariff.id,
-    name: tariff.name,
-    price: paySnap.amount,
-    durationDays: effectiveDays,
-    trafficLimitBytes: tariff.trafficLimitBytes,
-    deviceLimit: tariff.deviceLimit,
-    includedDevices: tariff.includedDevices,
-    internalSquadUuids: tariff.internalSquadUuids,
-    trafficResetMode: tariff.trafficResetMode ?? undefined,
-  }, { extraDevices: requestedExtras, purchasedAsGift: true });
+  let result;
+  try {
+    result = await createAdditionalSubscription(clientId, {
+      id: tariff.id,
+      name: tariff.name,
+      price: paySnap.amount,
+      durationDays: effectiveDays,
+      trafficLimitBytes: tariff.trafficLimitBytes,
+      localTrafficLimitBytes: tariff.localTrafficLimitBytes,
+      deviceLimit: tariff.deviceLimit,
+      includedDevices: tariff.includedDevices,
+      internalSquadUuids: tariff.internalSquadUuids,
+      trafficResetMode: tariff.trafficResetMode ?? undefined,
+      trafficLimitMode: tariff.trafficLimitMode,
+      meteredSquadUuid: tariff.meteredSquadUuid,
+    }, { extraDevices: requestedExtras, purchasedAsGift: true });
+  } catch (error) {
+    await prisma.client.update({
+      where: { id: clientId },
+      data: { balance: { increment: paySnap.amount } },
+    }).catch(() => {});
+    return res.status(502).json({ message: error instanceof Error ? error.message : "Ошибка создания подписки" });
+  }
 
   if (!result.ok) {
     // Возвращаем баланс при ошибке
@@ -185,22 +205,51 @@ giftRouter.post("/buy", async (req: Request, res: Response) => {
     return res.status(result.status).json({ message: result.error });
   }
 
-  // Создаём запись Payment для истории — с привязкой опции и количеством extras.
-  const payment = await createPayment({
-    data: {
-      clientId,
-      orderId: randomUUID(),
+  const refund = async () => prisma.client.update({
+    where: { id: clientId },
+    data: { balance: { increment: paySnap.amount } },
+  }).catch(() => {});
+
+  try {
+    await applyTrafficEntitlement(result.data.subscriptionId, {
       tariffId: tariff.id,
-      tariffPriceOptionId: selectedOption?.id ?? null,
-      deviceCount: requestedExtras,
-      amount: paySnap.amount,
-      currency: tariff.currency.toUpperCase(),
-      status: "PAID",
-      provider: "balance",
-      paidAt: new Date(),
-      metadata: JSON.stringify({ isAdditionalSubscription: true, purchasedAsGift: true }),
-    },
-  });
+      mode: tariff.trafficLimitMode,
+      internalSquadUuids: tariff.internalSquadUuids,
+      meteredSquadUuid: tariff.meteredSquadUuid,
+      trafficLimitBytes: tariff.localTrafficLimitBytes,
+    }, "NEW_PURCHASE");
+  } catch (error) {
+    await deleteSubscription(clientId, result.data.subscriptionId).catch(() => {});
+    await refund();
+    return res.status(502).json({ message: error instanceof Error ? error.message : "Ошибка применения лимита трафика" });
+  }
+
+  // Создаём запись Payment для истории — с привязкой опции и количеством extras.
+  let payment;
+  try {
+    payment = await createPayment({
+      data: {
+        clientId,
+        orderId: randomUUID(),
+        tariffId: tariff.id,
+        tariffPriceOptionId: selectedOption?.id ?? null,
+        deviceCount: requestedExtras,
+        amount: paySnap.amount,
+        currency: tariff.currency.toUpperCase(),
+        status: "PAID",
+        provider: "balance",
+        paidAt: new Date(),
+        metadata: JSON.stringify({ isAdditionalSubscription: true, purchasedAsGift: true }),
+      },
+    });
+  } catch (error) {
+    await deleteSubscription(clientId, result.data.subscriptionId).catch(() => {});
+    await refund();
+    if ((error as { code?: string }).code === "TARIFF_ARCHIVED") {
+      return res.status(409).json({ message: "Тариф архивирован и недоступен для покупки", code: "TARIFF_ARCHIVED" });
+    }
+    return res.status(502).json({ message: "Не удалось записать платёж" });
+  }
 
   // Покупатель подарка тоже уже совершил платную VPN-покупку.
   await markTrialUsedForPaidPurchase(clientId).catch((error) => {
@@ -298,6 +347,8 @@ giftRouter.post("/create-code", async (req: Request, res: Response) => {
     // T-unify (12.05.2026) — для рендера текста подарка (стандарт без трафика / Unblock с трафиком).
     durationDays: result.data.durationDays,
     trafficLimitBytes: result.data.trafficLimitBytes,
+    localTrafficLimitBytes: result.data.localTrafficLimitBytes,
+    trafficLimitMode: result.data.trafficLimitMode,
   });
 });
 

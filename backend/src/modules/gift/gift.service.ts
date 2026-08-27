@@ -33,6 +33,7 @@ import {
   deleteSingleSubscription,
   runSingleSubscriptionOperation,
 } from "../subscription/single-subscription-lifecycle.service.js";
+import { applyTrafficEntitlement } from "../squad-traffic/traffic-entitlement.service.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -176,6 +177,7 @@ const giftTariffSelect = {
   name: true,
   durationDays: true,
   trafficLimitBytes: true,
+  localTrafficLimitBytes: true,
   price: true,
   currency: true,
   deviceLimit: true,
@@ -221,6 +223,7 @@ async function extendGiftIntoCanonicalSubscription(
     id: tariff?.id ?? gift.tariffId ?? undefined,
     durationDays: giftDurationDays(gift),
     trafficLimitBytes: tariff?.trafficLimitBytes ?? null,
+    localTrafficLimitBytes: tariff?.localTrafficLimitBytes ?? null,
     deviceLimit: tariff?.deviceLimit ?? null,
     includedDevices: tariff?.includedDevices ?? undefined,
     pricePerExtraDevice: tariff?.pricePerExtraDevice ?? undefined,
@@ -273,6 +276,9 @@ export async function createAdditionalSubscription(
     deviceDiscountTiers?: unknown;
     internalSquadUuids: string[];
     trafficResetMode?: string;
+    trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
+    meteredSquadUuid?: string | null;
+    localTrafficLimitBytes?: bigint | null;
   },
   options?: { skipConfigCheck?: boolean; extraDevices?: number; purchasedAsGift?: boolean },
   dependencies: CreateAdditionalSubscriptionDependencies = createAdditionalSubscriptionDependencies,
@@ -600,7 +606,15 @@ export async function createGiftCode(
   subscriptionId: string,
   giftMessage?: string,
   options?: { skipConfigCheck?: boolean },
-): Promise<GiftResult<{ code: string; expiresAt: Date; tariffName: string | null; durationDays: number | null; trafficLimitBytes: number | null }>> {
+): Promise<GiftResult<{
+  code: string;
+  expiresAt: Date;
+  tariffName: string | null;
+  durationDays: number | null;
+  trafficLimitBytes: number | null;
+  localTrafficLimitBytes: number | null;
+  trafficLimitMode: "REMNAWAVE" | "LOCAL_SQUAD" | null;
+}>> {
   const config = await getSystemConfig();
   if (!options?.skipConfigCheck && !config.giftSubscriptionsEnabled) {
     return { ok: false, error: "Подарки отключены", status: 403 };
@@ -609,7 +623,7 @@ export async function createGiftCode(
   // Read for ownership check + tariff name lookup (read-only).
   const sub = await prisma.subscription.findUnique({
     where: { id: subscriptionId },
-    include: { tariff: { select: { name: true, durationDays: true, trafficLimitBytes: true } } },
+    include: { tariff: { select: { name: true, durationDays: true, trafficLimitBytes: true, localTrafficLimitBytes: true, trafficLimitMode: true } } },
   });
   if (!sub || sub.ownerId !== rootClientId) {
     return { ok: false, error: "Подписка не найдена", status: 404 };
@@ -711,6 +725,8 @@ export async function createGiftCode(
       tariffName: sub.tariff?.name ?? null,
       durationDays: (sub.expireAt && sub.createdAt) ? Math.max(1, Math.round((new Date(sub.expireAt).getTime() - new Date(sub.createdAt).getTime()) / 86400000)) : (sub.tariff?.durationDays ?? null),
       trafficLimitBytes: sub.tariff?.trafficLimitBytes != null ? Number(sub.tariff.trafficLimitBytes) : null,
+      localTrafficLimitBytes: sub.tariff?.localTrafficLimitBytes != null ? Number(sub.tariff.localTrafficLimitBytes) : null,
+      trafficLimitMode: sub.tariff?.trafficLimitMode ?? null,
     },
   };
 }
@@ -732,6 +748,8 @@ export async function redeemGiftCode(
   /** для красивого render-текста получателю. */
   durationDays: number | null;
   trafficLimitBytes: number | null;
+  localTrafficLimitBytes: number | null;
+  trafficLimitMode: "REMNAWAVE" | "LOCAL_SQUAD" | null;
   subscriptionUrl: string | null;
   tariffPrice: number | null;
   tariffCurrency: string | null;
@@ -981,6 +999,8 @@ export async function redeemGiftCode(
       tariffName: sub.tariff?.name ?? null,
       durationDays: (sub.expireAt && sub.createdAt) ? Math.max(1, Math.round((new Date(sub.expireAt).getTime() - new Date(sub.createdAt).getTime()) / 86400000)) : (sub.tariff?.durationDays ?? null),
       trafficLimitBytes: sub.tariff?.trafficLimitBytes != null ? Number(sub.tariff.trafficLimitBytes) : null,
+      localTrafficLimitBytes: sub.tariff?.localTrafficLimitBytes != null ? Number(sub.tariff.localTrafficLimitBytes) : null,
+      trafficLimitMode: sub.tariff?.trafficLimitMode ?? null,
       subscriptionUrl,
       tariffPrice: sub.tariff?.price ?? null,
       tariffCurrency: sub.tariff?.currency ?? null,
@@ -1254,6 +1274,9 @@ export async function adminCreateGiftCode(
   if (!tariff) {
     return { ok: false, error: "Тариф не найден", status: 404 };
   }
+  if (tariff.archivedAt) {
+    return { ok: false, error: "Тариф архивирован и недоступен для покупки", status: 409 };
+  }
 
   // admin-flow создания кода — всегда создаём НОВУЮ подписку
   // помеченную purchasedAsGift=true. Так createGiftCode пропустит её через проверку
@@ -1272,12 +1295,28 @@ export async function adminCreateGiftCode(
     price: 0, // admin-created, no cost
     durationDays: effDurationDays,
     trafficLimitBytes: effTrafficLimitBytes,
+    localTrafficLimitBytes: tariff.localTrafficLimitBytes,
     deviceLimit: tariff.deviceLimit,
     internalSquadUuids: tariff.internalSquadUuids ?? [],
     trafficResetMode: tariff.trafficResetMode ?? undefined,
+    trafficLimitMode: tariff.trafficLimitMode,
+    meteredSquadUuid: tariff.meteredSquadUuid,
   }, { skipConfigCheck: true, purchasedAsGift: true });
   if (!subResult.ok) {
     return subResult;
+  }
+
+  try {
+    await applyTrafficEntitlement(subResult.data.subscriptionId, {
+      tariffId: tariff.id,
+      mode: tariff.trafficLimitMode,
+      internalSquadUuids: tariff.internalSquadUuids ?? [],
+      meteredSquadUuid: tariff.meteredSquadUuid,
+      trafficLimitBytes: tariff.localTrafficLimitBytes,
+    }, "NEW_PURCHASE");
+  } catch (error) {
+    await deleteSingleSubscription(subResult.data.subscriptionId).catch(() => {});
+    return { ok: false, error: error instanceof Error ? error.message : "Ошибка применения лимита трафика", status: 502 };
   }
 
   // Создаём подарочный код (админ обходит проверку giftSubscriptionsEnabled)
@@ -1288,6 +1327,7 @@ export async function adminCreateGiftCode(
     { skipConfigCheck: true },
   );
   if (!codeResult.ok) {
+    await deleteSingleSubscription(subResult.data.subscriptionId).catch(() => {});
     return codeResult;
   }
 

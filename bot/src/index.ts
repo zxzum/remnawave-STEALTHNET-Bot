@@ -349,7 +349,8 @@ type TariffItem = {
   name: string;
   description?: string | null;
   durationDays: number;
-  trafficLimitBytes?: number | null;
+  trafficLimitBytes?: number | string | null;
+  localTrafficLimitBytes?: number | string | null;
   trafficResetMode?: string;
   trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
   isBestChoice?: boolean;
@@ -1083,11 +1084,14 @@ function formatTariffLine(tariff: TariffItem, fields: Required<BotTariffLineFiel
     parts.push(`${currencySymbol(tariff.currency)}`);
   }
   if (fields.trafficLimit) {
-    const limit = tariff.trafficLimitBytes;
-    if (limit != null) {
+    const limit = tariff.trafficLimitMode === "LOCAL_SQUAD"
+      ? (tariff.localTrafficLimitBytes ?? tariff.trafficLimitBytes)
+      : tariff.trafficLimitBytes;
+    const limitBytes = limit == null ? null : Number(limit);
+    if (limitBytes != null && Number.isFinite(limitBytes)) {
       parts.push(tariff.trafficLimitMode === "LOCAL_SQUAD"
-        ? `Включено ${bytesToGb(limit)} ГБ белых списков`
-        : `Общее ограничение трафика ${bytesToGb(limit)} ГБ`);
+        ? `Включено ${bytesToGb(limitBytes)} ГБ белых списков`
+        : `Общее ограничение трафика ${bytesToGb(limitBytes)} ГБ`);
     }
   }
   if (fields.trafficResetMode) {
@@ -2155,7 +2159,10 @@ async function handleStart(ctx: Context, payload: string): Promise<void> {
       // новые тексты получателю по ТЗ клиента.
       // Стандартная (без трафика) — короткий красивый текст.
       // Unblock (с трафиком) — полное описание Unblock с лимитом.
-      const hasTrafficLimit = result.trafficLimitBytes != null && result.trafficLimitBytes > 0;
+      const giftTrafficBytes = result.trafficLimitMode === "LOCAL_SQUAD"
+        ? (result.localTrafficLimitBytes ?? result.trafficLimitBytes)
+        : result.trafficLimitBytes;
+      const hasTrafficLimit = giftTrafficBytes != null && giftTrafficBytes > 0;
       const days = result.durationDays ?? 0;
       const tariffName = result.tariffName ?? "Подписка";
       const supportLink = giftCfg?.supportLink || "";
@@ -2169,7 +2176,7 @@ async function handleStart(ctx: Context, payload: string): Promise<void> {
         : "";
       let receiverText: string;
       if (hasTrafficLimit) {
-        const trafficGb = Math.round((result.trafficLimitBytes ?? 0) / 1024 ** 3);
+        const trafficGb = Math.round((giftTrafficBytes ?? 0) / 1024 ** 3);
         // добавляем «💰 Стоимость: X ₽» для Unblock по ТЗ клиента.
         const priceBlock = result.tariffPrice != null && result.tariffPrice > 0
           ? `💰 Стоимость: ${Math.round(result.tariffPrice)} ${(result.tariffCurrency ?? "RUB").toUpperCase() === "RUB" ? "₽" : (result.tariffCurrency ?? "")}\n\n`
@@ -8298,9 +8305,12 @@ composer.on("callback_query:data", async (ctx) => {
         // два формата текста подарка из ТЗ клиента —
         // 1) Стандартная (без трафика) — формат «Код / Тариф / N дней».
         // 2) Unblock (с трафиком) — формат «N дней, NN GB» + «💡 Чтобы скопировать ссылку, нажмите...».
-        const hasTrafficLimit = result.trafficLimitBytes != null && result.trafficLimitBytes > 0;
+        const giftTrafficBytes = result.trafficLimitMode === "LOCAL_SQUAD"
+          ? (result.localTrafficLimitBytes ?? result.trafficLimitBytes)
+          : result.trafficLimitBytes;
+        const hasTrafficLimit = giftTrafficBytes != null && giftTrafficBytes > 0;
         const tariffDisplay = result.tariffName ?? "Подписка";
-        const trafficGb = hasTrafficLimit ? `${Math.round((result.trafficLimitBytes ?? 0) / 1024 ** 3)} GB` : "";
+        const trafficGb = hasTrafficLimit ? `${Math.round((giftTrafficBytes ?? 0) / 1024 ** 3)} GB` : "";
         const days = result.durationDays ?? 0;
         let msgText: string;
         if (hasTrafficLimit) {

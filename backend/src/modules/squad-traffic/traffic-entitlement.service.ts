@@ -183,7 +183,8 @@ export async function applyTrafficEntitlement(
       return created;
     }
 
-    if (current.tariffIdAtPeriodStart !== input.tariffId) {
+    const squadChanged = current.meteredSquadUuid !== meteredSquadUuid;
+    if (current.tariffIdAtPeriodStart !== input.tariffId || squadChanged) {
       await tx.trafficQuotaGrant.updateMany({
         where: { quotaId: current.id, status: "ACTIVE" },
         data: { status: "EXPIRED" },
@@ -204,9 +205,29 @@ export async function applyTrafficEntitlement(
         },
         include: { grants: true, subscription: { select: { expireAt: true } } },
       });
+      if (squadChanged) {
+        await tx.trafficUsageCheckpoint.upsert({
+          where: { subscriptionId },
+          create: {
+            subscriptionId,
+            squadUuid: meteredSquadUuid,
+            currentDate: now,
+            currentObservedBytes: 0n,
+            previousDate: null,
+            previousObservedBytes: 0n,
+          },
+          update: {
+            squadUuid: meteredSquadUuid,
+            currentDate: now,
+            currentObservedBytes: 0n,
+            previousDate: null,
+            previousObservedBytes: 0n,
+          },
+        });
+      }
       await writeEvent(tx, {
         quotaId: updated.id,
-        kind: "TARIFF_CHANGED",
+        kind: squadChanged ? "METERED_SQUAD_CHANGED" : "TARIFF_CHANGED",
         usedBytes: 0n,
         limitBytes: baseLimitBytes,
         detail: { reason, tariffId: input.tariffId },

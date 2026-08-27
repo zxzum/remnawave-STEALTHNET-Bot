@@ -36,7 +36,12 @@ export async function syncTariffSubscribers(
   const tariff = await prisma.tariff.findUnique({ where: { id: tariffId } });
   if (!tariff) throw new Error("Тариф не найден");
   const subscriptions = await prisma.subscription.findMany({
-    where: { tariffId, deletionRequestedAt: null, expireAt: { gt: new Date() }, remnawaveUuid: { not: null } },
+    where: {
+      tariffId,
+      deletionRequestedAt: null,
+      OR: [{ expireAt: { gt: new Date() } }, { expireAt: null }],
+      remnawaveUuid: { not: null },
+    },
     select: { id: true, remnawaveUuid: true, extraDevices: true },
   });
   const snapshots = await Promise.all(subscriptions.map(async (subscription) => ({
@@ -58,7 +63,10 @@ export async function syncTariffSubscribers(
       const preserved = currentSquads.filter((uuid) => !previous.internalSquadUuids.includes(uuid));
       let targetSquads = [...new Set([...preserved, ...tariff.internalSquadUuids])];
       const currentQuota = await prisma.squadTrafficQuota.findUnique({ where: { subscriptionId: snapshot.subscription.id } });
-      if (tariff.trafficLimitMode === "LOCAL_SQUAD" && currentQuota?.status === "EXHAUSTED" && tariff.meteredSquadUuid) {
+      if (tariff.trafficLimitMode === "LOCAL_SQUAD"
+        && currentQuota?.status === "EXHAUSTED"
+        && currentQuota.meteredSquadUuid === tariff.meteredSquadUuid
+        && tariff.meteredSquadUuid) {
         targetSquads = targetSquads.filter((uuid) => uuid !== tariff.meteredSquadUuid);
       }
       const updated = await remnaUpdateUser({

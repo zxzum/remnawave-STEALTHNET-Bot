@@ -30,7 +30,9 @@ export const FALLBACK_FAQ: LandingFaq = [
 
 export function mapPublicTariffs(categories: PublicTariffCategory[]): LandingTariff[] {
   const tariffs = categories.flatMap((category) => category.tariffs).map((tariff) => {
-    const bytes = Number(tariff.trafficLimitBytes);
+    const bytes = Number(tariff.trafficLimitMode === "LOCAL_SQUAD"
+      ? (tariff.localTrafficLimitBytes ?? tariff.trafficLimitBytes)
+      : tariff.trafficLimitBytes);
     return {
       id: tariff.id,
       name: tariff.name,

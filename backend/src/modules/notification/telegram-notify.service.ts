@@ -497,7 +497,7 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
       tariffId: true,
       metadata: true,
       deviceCount: true,
-      tariff: { select: { name: true, durationDays: true, price: true, locations: true, trafficLimitBytes: true } },
+      tariff: { select: { name: true, durationDays: true, price: true, locations: true, trafficLimitBytes: true, localTrafficLimitBytes: true, trafficLimitMode: true } },
       tariffPriceOption: { select: { durationDays: true } },
     },
   });
@@ -540,7 +540,9 @@ export async function notifyTariffActivated(clientId: string, paymentId: string)
         const botUsername = botUsernameRes?.result?.username ?? "bot";
         const giftUrl = `https://t.me/${botUsername}?start=gift_${codeResult.data.code}`;
         const durationDays = codeResult.data.durationDays ?? payment.tariff?.durationDays ?? 0;
-        const trafficBytes = codeResult.data.trafficLimitBytes ?? (payment.tariff?.trafficLimitBytes != null ? Number(payment.tariff.trafficLimitBytes) : 0);
+        const trafficBytes = codeResult.data.trafficLimitMode === "LOCAL_SQUAD"
+          ? (codeResult.data.localTrafficLimitBytes ?? 0)
+          : (codeResult.data.trafficLimitBytes ?? (payment.tariff?.trafficLimitBytes != null ? Number(payment.tariff.trafficLimitBytes) : 0));
         const hasTraffic = trafficBytes > 0;
         let giftText: string;
         if (hasTraffic) {

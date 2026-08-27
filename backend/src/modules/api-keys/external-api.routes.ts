@@ -372,13 +372,14 @@ externalApiRouter.get("/client/referrals", async (req: Request, res: Response) =
 /*  TARIFFS (public, no client token needed)   */
 /* ═══════════════════════════════════════════ */
 
-function tariffToJson(t: { id: string; name: string; description: string | null; durationDays: number; trafficLimitBytes: bigint | null; trafficResetMode?: string; trafficLimitMode: "REMNAWAVE" | "LOCAL_SQUAD"; meteredSquadUuid: string | null; deviceLimit: number | null; price: number; currency: string }) {
+function tariffToJson(t: { id: string; name: string; description: string | null; durationDays: number; trafficLimitBytes: bigint | null; localTrafficLimitBytes?: bigint | null; trafficResetMode?: string; trafficLimitMode: "REMNAWAVE" | "LOCAL_SQUAD"; meteredSquadUuid: string | null; deviceLimit: number | null; price: number; currency: string }) {
   return {
     id: t.id,
     name: t.name,
     description: t.description,
     durationDays: t.durationDays,
     trafficLimitBytes: t.trafficLimitBytes != null ? t.trafficLimitBytes.toString() : null,
+    localTrafficLimitBytes: t.localTrafficLimitBytes != null ? t.localTrafficLimitBytes.toString() : null,
     trafficResetMode: t.trafficResetMode ?? null,
     trafficLimitMode: t.trafficLimitMode,
     meteredSquadUuid: t.meteredSquadUuid,
@@ -392,12 +393,12 @@ externalApiRouter.get("/tariffs", async (_req: Request, res: Response) => {
   const categories = await prisma.tariffCategory.findMany({
     orderBy: { sortOrder: "asc" },
     include: {
-      tariffs: { orderBy: { sortOrder: "asc" } },
+      tariffs: { where: { archivedAt: null }, orderBy: { sortOrder: "asc" } },
     },
   });
 
   res.json(
-    categories.map((c) => ({
+    categories.filter((c) => c.tariffs.length > 0).map((c) => ({
       id: c.id,
       name: c.name,
       tariffs: c.tariffs.map(tariffToJson),

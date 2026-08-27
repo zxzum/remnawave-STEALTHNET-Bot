@@ -784,7 +784,7 @@ export function TariffsPage() {
   }, [token]);
 
   const handleDeleteCategory = async (id: string) => {
-    if (!token || !confirm("Удалить категорию и все тарифы в ней?")) return;
+    if (!token || !confirm("Удалить пустую категорию? Сначала переместите или удалите её тарифы.")) return;
     try {
       await api.deleteTariffCategory(token, id);
       await load();
@@ -1458,7 +1458,7 @@ function TariffModal({
       setValidationError("Проверьте лимиты трафика");
       return;
     }
-    if (trafficLimitBytes != null && localTrafficLimitBytes != null && trafficLimitBytes < localTrafficLimitBytes) {
+    if (trafficLimitBytes != null && trafficLimitBytes > 0 && localTrafficLimitBytes != null && trafficLimitBytes < localTrafficLimitBytes) {
       setValidationError("Лимит Remnawave должен быть не меньше локального");
       return;
     }

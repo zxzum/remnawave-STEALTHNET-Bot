@@ -90,10 +90,12 @@ export function TariffsLive({ block }: TariffsLiveProps) {
                               До {t.deviceLimit} устройств
                             </li>
                           ) : null}
-                          {t.trafficLimitBytes ? (
+                          {(t.trafficLimitMode === "LOCAL_SQUAD" ? t.localTrafficLimitBytes : t.trafficLimitBytes) ? (
                             <li className="flex items-center gap-2">
                               <Check className="h-4 w-4" style={{ color: accentTheme.primary }} />
-                              {Math.round(t.trafficLimitBytes / 1024 / 1024 / 1024)} GB трафика
+                              {t.trafficLimitMode === "LOCAL_SQUAD"
+                                ? `${Math.round(Number(t.localTrafficLimitBytes ?? t.trafficLimitBytes) / 1024 / 1024 / 1024)} GB белых списков`
+                                : `${Math.round(Number(t.trafficLimitBytes) / 1024 / 1024 / 1024)} GB трафика`}
                             </li>
                           ) : (
                             <li className="flex items-center gap-2">

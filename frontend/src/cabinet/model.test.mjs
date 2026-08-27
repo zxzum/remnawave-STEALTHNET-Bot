@@ -60,7 +60,7 @@ test("preserves tariff description whitespace for cabinet rendering", () => {
 test("maps local squad limits as whitelist traffic and best choice", () => {
   const [group] = mapTariffGroups([{ id: "g1", name: "VPN", emoji: "🚀", tariffs: [{
     id: "t1", name: "Whitelist", description: null, durationDays: 30, price: 300,
-    currency: "rub", trafficLimitBytes: 53687091200, trafficLimitMode: "LOCAL_SQUAD",
+    currency: "rub", trafficLimitBytes: null, localTrafficLimitBytes: "53687091200", trafficLimitMode: "LOCAL_SQUAD",
     meteredSquadUuid: "whitelist", isBestChoice: true, deviceLimit: 3, includedDevices: 3,
     pricePerExtraDevice: 0, maxExtraDevices: 0, deviceDiscountTiers: [], priceOptions: [],
   }] }]);

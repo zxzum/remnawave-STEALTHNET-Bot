@@ -143,7 +143,8 @@ type PublicTariffGroupShape = {
     durationDays: number;
     price: number;
     currency: string;
-    trafficLimitBytes?: number | null;
+    trafficLimitBytes?: number | string | null;
+    localTrafficLimitBytes?: number | string | null;
     trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
     meteredSquadUuid?: string | null;
     isBestChoice?: boolean;
@@ -347,8 +348,12 @@ export function mapTariffGroups(groups: PublicTariffGroupShape[]): TariffGroup[]
       ].filter((option, index, all) => all.findIndex((candidate) => candidate.days === option.days) === index)
         .sort((a, b) => a.days - b.days || a.sortOrder - b.sortOrder)
         .map(({ id, days, price }) => ({ id, days, price }));
-      const trafficGB = tariff.trafficLimitBytes ? tariff.trafficLimitBytes / 1024 ** 3 : null;
-      const whitelistGB = tariff.trafficLimitMode === "LOCAL_SQUAD" ? trafficGB : null;
+      const trafficBytes = finiteNumber(tariff.trafficLimitBytes);
+      const localTrafficBytes = finiteNumber(tariff.localTrafficLimitBytes);
+      const trafficGB = trafficBytes != null && trafficBytes > 0 ? trafficBytes / 1024 ** 3 : null;
+      const whitelistGB = tariff.trafficLimitMode === "LOCAL_SQUAD"
+        ? (localTrafficBytes != null && localTrafficBytes > 0 ? localTrafficBytes / 1024 ** 3 : trafficGB)
+        : null;
       return {
         id: tariff.id,
         name: tariff.name,

@@ -84,7 +84,7 @@ async function fetchSubscriptions(clientId: string) {
       autoRenewEnabled: true,
       expireAt: true,
       extraDevices: true,
-      tariff: { select: { internalSquadUuids: true, trafficLimitBytes: true, trafficResetMode: true, includedDevices: true, durationDays: true } },
+      tariff: { select: { internalSquadUuids: true, trafficLimitBytes: true, localTrafficLimitBytes: true, trafficLimitMode: true, meteredSquadUuid: true, trafficResetMode: true, includedDevices: true, durationDays: true } },
     },
   });
 }
@@ -211,12 +211,19 @@ export async function syncAllSubscriptionsToRemna(clientId: string): Promise<Bul
       continue;
     }
     const tariff = sub.tariff;
+    let activeInternalSquads = tariff.internalSquadUuids;
+    if (tariff.trafficLimitMode === "LOCAL_SQUAD" && tariff.meteredSquadUuid) {
+      const quota = await prisma.squadTrafficQuota.findUnique({ where: { subscriptionId: sub.id }, select: { status: true } });
+      if (quota?.status === "EXHAUSTED") {
+        activeInternalSquads = activeInternalSquads.filter((uuid) => uuid !== tariff.meteredSquadUuid);
+      }
+    }
     const result = await runSingleSubscriptionOperation(sub.id, (uuid) => remnaUpdateUser({
       uuid,
       ...(sub.expireAt ? { expireAt: sub.expireAt.toISOString() } : {}),
       ...remnaTrafficSettings(tariff),
       hwidDeviceLimit: Math.max(1, tariff.includedDevices + sub.extraDevices),
-      activeInternalSquads: tariff.internalSquadUuids,
+      activeInternalSquads,
     }));
     pushItem(report, {
       subscriptionId: sub.id,

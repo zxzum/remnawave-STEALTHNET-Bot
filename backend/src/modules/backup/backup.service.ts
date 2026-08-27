@@ -70,23 +70,48 @@ export async function saveBackupToFile(db: DbConnection): Promise<{ relativePath
   const { mkdir } = await import("node:fs/promises");
   await mkdir(dirPath, { recursive: true });
 
-  await new Promise<void>((resolve, reject) => {
-    const env = { ...process.env, PGPASSWORD: db.password };
-    const proc = spawn(
-      "pg_dump",
-      ["-h", db.host, "-p", String(db.port), "-U", db.user, "-d", db.database, "-F", "p", "--no-owner", "--no-acl", "--clean", "--if-exists"],
-      { env }
-    );
-    const out = createWriteStream(fullPath);
-    proc.stdout?.pipe(out);
-    proc.stderr?.on("data", (chunk) => console.error("[pg_dump]", chunk.toString()));
-    proc.on("error", reject);
-    out.on("finish", () => resolve());
-    out.on("error", reject);
-    proc.on("close", (code) => {
-      if (code !== 0) reject(new Error(`pg_dump exited with code ${code}`));
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const env = { ...process.env, PGPASSWORD: db.password };
+      const proc = spawn(
+        "pg_dump",
+        ["-h", db.host, "-p", String(db.port), "-U", db.user, "-d", db.database, "-F", "p", "--no-owner", "--no-acl", "--clean", "--if-exists"],
+        { env }
+      );
+      const out = createWriteStream(fullPath);
+      let outputFinished = false;
+      let processClosed = false;
+      let exitCode: number | null = null;
+      let settled = false;
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
+      const finish = () => {
+        if (settled || !outputFinished || !processClosed) return;
+        if (exitCode !== 0) return fail(new Error(`pg_dump exited with code ${exitCode}`));
+        settled = true;
+        resolve();
+      };
+      proc.stdout?.pipe(out);
+      proc.stderr?.on("data", (chunk) => console.error("[pg_dump]", chunk.toString()));
+      proc.on("error", fail);
+      out.on("finish", () => {
+        outputFinished = true;
+        finish();
+      });
+      out.on("error", fail);
+      proc.on("close", (code) => {
+        exitCode = code;
+        processClosed = true;
+        finish();
+      });
     });
-  });
+  } catch (error) {
+    await rm(fullPath, { force: true }).catch(() => {});
+    throw error;
+  }
 
   return { relativePath, filename, fullPath };
 }

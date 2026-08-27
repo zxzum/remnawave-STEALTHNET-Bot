@@ -1735,6 +1735,16 @@ clientRouter.patch("/auto-renew", async (req, res) => {
     }
   }
 
+  if (body.data.enabled === true && updates.autoRenewTariffId) {
+    const autoRenewTariff = await prisma.tariff.findUnique({
+      where: { id: updates.autoRenewTariffId },
+      select: { archivedAt: true },
+    });
+    if (autoRenewTariff?.archivedAt) {
+      return res.status(409).json({ message: "Архивированный тариф нельзя включить на автопродление", code: "TARIFF_ARCHIVED" });
+    }
+  }
+
   if (Object.keys(updates).length === 0) {
     const current = await prisma.client.findUnique({ where: { id: client.id }, select: { id: true, email: true, telegramId: true, telegramUsername: true, preferredLang: true, preferredCurrency: true, balance: true, referralCode: true, remnawaveUuid: true, trialUsed: true, isBlocked: true, autoRenewEnabled: true, autoRenewTariffId: true, autoRenewPromoCode: true, createdAt: true, onboardingCompleted: true, passwordHash: true } });
     return res.json(current ? toClientShape(current) : { message: "Не найдено" });
@@ -1753,9 +1763,16 @@ clientRouter.patch("/auto-renew", async (req, res) => {
         giftStatus: null,
         OR: [{ tariffId: { not: null } }, { autoRenewTariffId: { not: null } }],
       },
-      select: { id: true, tariffId: true, autoRenewTariffId: true },
+      select: {
+        id: true,
+        tariffId: true,
+        autoRenewTariffId: true,
+        tariff: { select: { archivedAt: true } },
+        autoRenewTariff: { select: { archivedAt: true } },
+      },
     });
     for (const s of subsToEnable) {
+      if (s.tariff?.archivedAt || s.autoRenewTariff?.archivedAt) continue;
       await prisma.subscription.update({
         where: { id: s.id },
         data: { autoRenewEnabled: true, ...(s.autoRenewTariffId ? {} : { autoRenewTariffId: s.tariffId }) },
@@ -2638,7 +2655,9 @@ clientRouter.post("/trials/:id/activate", async (req, res) => {
     }
 
     // Источник параметров — тариф триала или standalone-конфигурация.
-    const trialTrafficLimit = trial.trafficLimitBytes ?? trial.tariff?.trafficLimitBytes ?? null;
+    const trialTrafficLimit = trial.trafficLimitBytes
+      ?? (trial.trafficLimitMode === "LOCAL_SQUAD" ? trial.tariff?.localTrafficLimitBytes : trial.tariff?.trafficLimitBytes)
+      ?? null;
     let trialSquads: string[] = trial.tariff?.internalSquadUuids ?? [];
     if (!trial.tariffId) {
       try {
@@ -3691,19 +3710,22 @@ clientRouter.post("/subscription/:type/:id/auto-renew", async (req, res) => {
   // единая логика для root и secondary — обе живут в Subscription.
   // type=root → находим primary (subscriptionIndex=0), type=secondary → по id.
   const sub = subType === "root"
-    ? await prisma.subscription.findUnique({
+      ? await prisma.subscription.findUnique({
         where: { ownerId_subscriptionIndex: { ownerId: clientId, subscriptionIndex: 0 } },
-        select: { id: true, ownerId: true, giftedToClientId: true, tariffId: true },
+        select: { id: true, ownerId: true, giftedToClientId: true, tariffId: true, tariff: { select: { archivedAt: true } } },
       })
-    : await prisma.subscription.findUnique({
+      : await prisma.subscription.findUnique({
         where: { id: subId },
-        select: { id: true, ownerId: true, giftedToClientId: true, tariffId: true },
+        select: { id: true, ownerId: true, giftedToClientId: true, tariffId: true, tariff: { select: { archivedAt: true } } },
       });
   if (!sub || (sub.ownerId !== clientId && sub.giftedToClientId !== clientId)) {
     return res.status(404).json({ message: "Подписка не найдена" });
   }
   if (enabled && !sub.tariffId) {
     return res.status(400).json({ message: "К подписке не привязан тариф — автосписание невозможно" });
+  }
+  if (enabled && sub.tariff?.archivedAt) {
+    return res.status(409).json({ message: "Архивированный тариф нельзя включить на автопродление", code: "TARIFF_ARCHIVED" });
   }
 
   // Если включаем — подтягиваем последний оплаченный тариф/опцию/устройства для удобства.
@@ -3722,6 +3744,15 @@ clientRouter.post("/subscription/:type/:id/auto-renew", async (req, res) => {
       updates.autoRenewExtraDevices = lastPaid.deviceCount ?? 0;
     } else if (sub.tariffId) {
       updates.autoRenewTariffId = sub.tariffId;
+    }
+  }
+  if (enabled && updates.autoRenewTariffId) {
+    const autoRenewTariff = await prisma.tariff.findUnique({
+      where: { id: updates.autoRenewTariffId },
+      select: { archivedAt: true },
+    });
+    if (autoRenewTariff?.archivedAt) {
+      return res.status(409).json({ message: "Архивированный тариф нельзя включить на автопродление", code: "TARIFF_ARCHIVED" });
     }
   }
   await prisma.subscription.update({ where: { id: sub.id }, data: updates });

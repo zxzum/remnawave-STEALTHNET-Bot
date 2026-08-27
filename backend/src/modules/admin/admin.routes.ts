@@ -887,7 +887,7 @@ adminRouter.delete("/tariff-categories/:id", async (req, res) => {
   const idParse = tariffCategoryIdSchema.safeParse({ id: req.params.id });
   if (!idParse.success) return res.status(400).json({ message: "Invalid id" });
   const tariffs = await prisma.tariff.count({ where: { categoryId: idParse.data.id } });
-  if (tariffs > 0) return res.status(409).json({ message: "Сначала переместите или архивируйте тарифы категории" });
+  if (tariffs > 0) return res.status(409).json({ message: "Сначала переместите или удалите тарифы категории" });
   await createCriticalDatabaseBackup();
   await prisma.tariffCategory.delete({ where: { id: idParse.data.id } });
   return res.json({ success: true });
@@ -920,7 +920,7 @@ const trafficPolicySchema = z.object({
   if (value.trafficLimitMode === "LOCAL_SQUAD" && value.localTrafficLimitBytes == null) {
     ctx.addIssue({ code: "custom", path: ["localTrafficLimitBytes"], message: "Укажите локальный лимит squad" });
   }
-  if (value.trafficLimitBytes != null && value.localTrafficLimitBytes != null
+  if (value.trafficLimitBytes != null && value.trafficLimitBytes > 0 && value.localTrafficLimitBytes != null
     && value.trafficLimitBytes < value.localTrafficLimitBytes) {
     ctx.addIssue({ code: "custom", path: ["trafficLimitBytes"], message: "Лимит Remnawave должен быть не меньше локального" });
   }
@@ -1051,7 +1051,7 @@ adminRouter.post("/tariffs", async (req, res) => {
         : null,
       trafficResetMode: body.data.trafficResetMode ?? "no_reset",
       trafficLimitMode: body.data.trafficLimitMode ?? "REMNAWAVE",
-      meteredSquadUuid: body.data.meteredSquadUuid ?? null,
+      meteredSquadUuid: body.data.trafficLimitMode === "LOCAL_SQUAD" ? body.data.meteredSquadUuid ?? null : null,
       deviceLimit: body.data.deviceLimit ?? null,
       includedDevices: body.data.includedDevices ?? 1,
       pricePerExtraDevice: body.data.pricePerExtraDevice ?? 0,
@@ -1121,7 +1121,7 @@ adminRouter.patch("/tariffs/:id", async (req, res) => {
   if (body.data.localTrafficLimitBytes !== undefined) data.localTrafficLimitBytes = body.data.localTrafficLimitBytes != null ? BigInt(body.data.localTrafficLimitBytes) : null;
   if (body.data.trafficLimitMode !== undefined) data.trafficLimitMode = body.data.trafficLimitMode;
   if (body.data.meteredSquadUuid !== undefined) data.meteredSquadUuid = body.data.meteredSquadUuid;
-  if (body.data.trafficLimitMode === "REMNAWAVE") {
+  if (policy.data.trafficLimitMode === "REMNAWAVE") {
     data.localTrafficLimitBytes = null;
     data.meteredSquadUuid = null;
   }
@@ -2810,6 +2810,7 @@ async function buildAdminSubscriptionConversionPolicy(
     include: adminConversionTariffInclude,
   });
   if (!target) throw new AdminConversionError(404, "Тариф не найден", "TARGET_TARIFF_NOT_FOUND");
+  if (target.archivedAt) throw new AdminConversionError(409, "Тариф архивирован и недоступен для выдачи", "TARIFF_ARCHIVED");
 
   let option: { id?: string; durationDays: number; price: number } | undefined;
   if (input.priceOptionId) {
@@ -2899,6 +2900,7 @@ async function applyAdminSubscriptionConversion(
       id: target.id,
       durationDays: policy.targetDays,
       trafficLimitBytes: options.trafficLimitBytes ?? target.trafficLimitBytes,
+      localTrafficLimitBytes: target.localTrafficLimitBytes,
       trafficLimitMode: target.trafficLimitMode,
       meteredSquadUuid: target.meteredSquadUuid,
       deviceLimit: target.deviceLimit,
@@ -3014,6 +3016,7 @@ adminRouter.post("/clients/:id/grant-tariff", async (req, res) => {
     include: { priceOptions: { orderBy: [{ sortOrder: "asc" }, { durationDays: "asc" }] } },
   });
   if (!tariff) return res.status(404).json({ message: "Тариф не найден" });
+  if (tariff.archivedAt) return res.status(409).json({ message: "Тариф архивирован и недоступен для выдачи", code: "TARIFF_ARCHIVED" });
 
   // Выбираем опцию: явный priceOptionId → найти и проверить; иначе — опция с минимальной ценой
   // (или fallback на legacy tariff.durationDays + tariff.price если опций нет).
@@ -3050,6 +3053,19 @@ adminRouter.post("/clients/:id/grant-tariff", async (req, res) => {
     }
   }
 
+  const hasTariffLimit = tariff.trafficLimitBytes != null && Number(tariff.trafficLimitBytes) > 0;
+  const effectiveTrafficLimit: bigint | null =
+    hasTariffLimit && trafficLimitOverride !== undefined && trafficLimitOverride !== null
+      ? BigInt(trafficLimitOverride)
+      : tariff.trafficLimitBytes;
+  const localTrafficLimit = tariff.trafficLimitMode === "LOCAL_SQUAD"
+    ? tariff.localTrafficLimitBytes
+    : null;
+  if (effectiveTrafficLimit != null && effectiveTrafficLimit > 0n
+    && localTrafficLimit != null && effectiveTrafficLimit < localTrafficLimit) {
+    return res.status(400).json({ ok: false, message: "Лимит Remnawave должен быть не меньше локального" });
+  }
+
   let paymentId: string | null = null;
   if (createPaymentRecord) {
     const orderId = `admin-grant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -3079,10 +3095,7 @@ adminRouter.post("/clients/:id/grant-tariff", async (req, res) => {
   if (conversionPolicy) {
     const result = await applyAdminSubscriptionConversion(req, conversionPolicy, {
       extraDevices: effectiveExtras,
-      trafficLimitBytes: tariff.trafficLimitBytes != null && Number(tariff.trafficLimitBytes) > 0
-        && trafficLimitOverride !== undefined && trafficLimitOverride !== null
-        ? BigInt(trafficLimitOverride)
-        : tariff.trafficLimitBytes,
+      trafficLimitBytes: effectiveTrafficLimit,
       note,
     });
     if (!result.ok) {
@@ -3118,12 +3131,6 @@ adminRouter.post("/clients/:id/grant-tariff", async (req, res) => {
   // Fallback без активного источника: админская выдача = НОВАЯ подписка клиенту (НЕ подарок).
   // можно переопределить trafficLimitBytes (только если у тарифа не безлимит).
   // Применяется ТОЛЬКО для лимитных тарифов: если у тарифа уже безлимит — override игнорируем.
-  const hasTariffLimit = tariff.trafficLimitBytes != null && Number(tariff.trafficLimitBytes) > 0;
-  const effectiveTrafficLimit: bigint | null =
-    hasTariffLimit && trafficLimitOverride !== undefined && trafficLimitOverride !== null
-      ? BigInt(trafficLimitOverride)
-      : tariff.trafficLimitBytes;
-
   let entitlement;
   try {
     entitlement = validateTrafficEntitlement({
@@ -3131,7 +3138,7 @@ adminRouter.post("/clients/:id/grant-tariff", async (req, res) => {
       mode: tariff.trafficLimitMode,
       internalSquadUuids: tariff.internalSquadUuids,
       meteredSquadUuid: tariff.meteredSquadUuid,
-      trafficLimitBytes: effectiveTrafficLimit,
+      trafficLimitBytes: tariff.trafficLimitMode === "LOCAL_SQUAD" ? localTrafficLimit : effectiveTrafficLimit,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Некорректная политика трафика тарифа";
@@ -3154,11 +3161,14 @@ adminRouter.post("/clients/:id/grant-tariff", async (req, res) => {
     name: tariff.name,
     price: selectedOption?.price ?? tariff.price,
     durationDays: effectiveDurationDays,
-    trafficLimitBytes: entitlement.mode === "LOCAL_SQUAD" ? 0n : effectiveTrafficLimit,
+    trafficLimitBytes: effectiveTrafficLimit,
+    localTrafficLimitBytes: tariff.localTrafficLimitBytes,
     deviceLimit: tariff.deviceLimit,
     includedDevices: tariff.includedDevices,
     internalSquadUuids: tariff.internalSquadUuids,
     trafficResetMode: tariff.trafficResetMode ?? undefined,
+    trafficLimitMode: tariff.trafficLimitMode,
+    meteredSquadUuid: tariff.meteredSquadUuid,
   }, { skipConfigCheck: true, extraDevices: effectiveExtras, purchasedAsGift: false });
 
   if (!subResult.ok) {

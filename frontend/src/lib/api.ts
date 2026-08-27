@@ -5471,8 +5471,11 @@ export type PublicTariff = {
   durationDays: number;
   price: number;
   currency: string;
-  trafficLimitBytes: number | null;
+  trafficLimitBytes: number | string | null;
+  localTrafficLimitBytes?: number | string | null;
   trafficResetMode?: string;
+  trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
+  meteredSquadUuid?: string | null;
   deviceLimit: number | null;
   includedDevices: number;
   pricePerExtraDevice: number;
