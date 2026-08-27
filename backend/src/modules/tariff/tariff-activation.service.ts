@@ -200,6 +200,7 @@ export function trialAllowsTariff(trial: TrialConversionPolicy, targetTariffId: 
 type TrafficAwareTariff = {
   id?: string;
   trafficLimitBytes: bigint | null;
+  localTrafficLimitBytes?: bigint | null;
   internalSquadUuids: string[];
   trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
   meteredSquadUuid?: string | null;
@@ -215,6 +216,7 @@ async function resolveTrafficEntitlementInput(tariff: TrafficAwareTariff): Promi
         trafficLimitMode: true,
         meteredSquadUuid: true,
         trafficLimitBytes: true,
+        localTrafficLimitBytes: true,
         internalSquadUuids: true,
       },
     }) ?? tariff;
@@ -224,8 +226,20 @@ async function resolveTrafficEntitlementInput(tariff: TrafficAwareTariff): Promi
     mode: source.trafficLimitMode ?? "REMNAWAVE",
     internalSquadUuids: source.internalSquadUuids,
     meteredSquadUuid: source.meteredSquadUuid ?? null,
-    trafficLimitBytes: source.trafficLimitBytes,
+    trafficLimitBytes: source.trafficLimitMode === "LOCAL_SQUAD"
+      ? (source.localTrafficLimitBytes === undefined ? source.trafficLimitBytes : source.localTrafficLimitBytes)
+      : null,
   });
+}
+
+function remnaLimitForTariff(tariff: TrafficAwareTariff): number {
+  // Standalone trial LOCAL_SQUAD не имеет отдельного localTrafficLimitBytes и сохраняет legacy-поведение.
+  if (tariff.trafficLimitMode === "LOCAL_SQUAD" && tariff.localTrafficLimitBytes === undefined) return 0;
+  return tariff.trafficLimitBytes != null ? Number(tariff.trafficLimitBytes) : 0;
+}
+
+function usesLegacyLocalTraffic(tariff: TrafficAwareTariff) {
+  return tariff.trafficLimitMode === "LOCAL_SQUAD" && tariff.localTrafficLimitBytes === undefined;
 }
 
 /**
@@ -498,6 +512,7 @@ export async function activateTariffForClient(
     id?: string;
     durationDays: number;
     trafficLimitBytes: bigint | null;
+    localTrafficLimitBytes?: bigint | null;
     deviceLimit: number | null;
     includedDevices?: number;
     pricePerExtraDevice?: number;
@@ -542,15 +557,15 @@ export async function activateTariffForClient(
   const effectivePrice = unitPrice + extrasTotal;
   const newPricePerDay = effectiveDays > 0 ? effectivePrice / effectiveDays : 0;
 
-  const trafficLimitBytes = entitlement.mode === "LOCAL_SQUAD"
-    ? 0
-    : tariff.trafficLimitBytes != null ? Number(tariff.trafficLimitBytes) : 0;
+  const trafficLimitBytes = remnaLimitForTariff(tariff);
   // HWID лимит = включённые + докупленные. Legacy deviceLimit используется только если
   // фронт/вебхук не сообщил extras (старые ивенты, customBuild).
   const totalDevices = includedDevices + effectiveExtras;
   const hwidDeviceLimit = extraDevices != null ? totalDevices : (tariff.deviceLimit ?? totalDevices);
   const resetMode: TrafficResetMode = (tariff.trafficResetMode as TrafficResetMode) || "no_reset";
-  const trafficLimitStrategy = entitlement.mode === "LOCAL_SQUAD" ? "NO_RESET" : remnaStrategy(resetMode);
+  const trafficLimitStrategy = trafficLimitBytes === 0 && tariff.trafficLimitMode === "LOCAL_SQUAD" && tariff.localTrafficLimitBytes === undefined
+    ? "NO_RESET"
+    : remnaStrategy(resetMode);
 
   // Загружаем сохранённое состояние клиента для конвертации.
   const dbClient = await prisma.client.findUnique({
@@ -616,7 +631,7 @@ export async function activateTariffForClient(
     });
     // T-traffic-expired-fix : used сбрасываем по resetUsed независимо от
     // hadActiveSub — иначе у истёкших carry_over лимит рос (90+остаток), а счётчик used не обнулялся.
-    if (entitlement.mode !== "LOCAL_SQUAD" && traffic.resetUsed) {
+    if (traffic.resetUsed && !usesLegacyLocalTraffic(tariff)) {
       await remnaResetUserTraffic(workingUuid);
     }
     const finalTrafficLimitBytes = traffic.finalLimitBytes;
@@ -706,7 +721,7 @@ export async function activateTariffForClient(
       hadActiveSub: currentExpireAt !== null,
     });
     // T-traffic-expired-fix : used сбрасываем по resetUsed, не завися от истечения.
-    if (entitlement.mode !== "LOCAL_SQUAD" && traffic2.resetUsed) {
+    if (traffic2.resetUsed && !usesLegacyLocalTraffic(tariff)) {
       await remnaResetUserTraffic(existingUuid);
     }
     await remnaUpdateUser({ uuid: existingUuid, expireAt, trafficLimitBytes: traffic2.finalLimitBytes, trafficLimitStrategy, hwidDeviceLimit, activeInternalSquads });
@@ -854,6 +869,7 @@ export async function extendSecondarySubscription(
     /** One-shot free days granted on a client's first paid purchase. */
     firstPaidTrialBonusDays?: number;
     trafficLimitBytes: bigint | null;
+    localTrafficLimitBytes?: bigint | null;
     deviceLimit: number | null;
     includedDevices?: number;
     pricePerExtraDevice?: number;
@@ -954,13 +970,13 @@ export async function extendSecondarySubscription(
   const effectiveExtras = keptExtras + newExtras;
   const effectiveExtrasMonthly = Math.round((keptExtrasMonthly + newExtrasMonthly) * 100) / 100;
 
-  const trafficLimitBytes = entitlement.mode === "LOCAL_SQUAD"
-    ? 0
-    : tariff.trafficLimitBytes != null ? Number(tariff.trafficLimitBytes) : 0;
+  const trafficLimitBytes = remnaLimitForTariff(tariff);
   const totalDevices = includedDevices + effectiveExtras;
   const hwidDeviceLimit = totalDevices;
   const resetMode: TrafficResetMode = (tariff.trafficResetMode as TrafficResetMode) || "no_reset";
-  const trafficLimitStrategy = entitlement.mode === "LOCAL_SQUAD" ? "NO_RESET" : remnaStrategy(resetMode);
+  const trafficLimitStrategy = trafficLimitBytes === 0 && tariff.trafficLimitMode === "LOCAL_SQUAD" && tariff.localTrafficLimitBytes === undefined
+    ? "NO_RESET"
+    : remnaStrategy(resetMode);
 
   const currentExpireAt = extractCurrentExpireAt(userRes.data);
   const currentSquads = extractCurrentSquads(userRes.data);
@@ -1042,7 +1058,7 @@ export async function extendSecondarySubscription(
       });
   // T-traffic-expired-fix : used сбрасываем по resetUsed, не завися от истечения
   // (доп./триальные подписки тоже должны переносить остаток после истечения).
-  if (entitlement.mode !== "LOCAL_SQUAD" && traffic.resetUsed) {
+  if (traffic.resetUsed && !usesLegacyLocalTraffic(tariff)) {
     if (dependencies.resetUserTraffic) await dependencies.resetUserTraffic(sec.remnawaveUuid);
     else await remnaResetUserTraffic(sec.remnawaveUuid);
   }
@@ -1509,14 +1525,14 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string, tx: Prisma.T
       name: tariff.name,
       price: selectedOption?.price ?? tariff.price,
       durationDays: (selectedOption?.durationDays ?? tariff.durationDays) + firstPaidTrialBonusDays,
-      trafficLimitBytes: entitlement.mode === "LOCAL_SQUAD" ? 0n : tariff.trafficLimitBytes,
+      trafficLimitBytes: tariff.trafficLimitBytes,
       deviceLimit: tariff.deviceLimit,
       includedDevices: tariff.includedDevices,
       pricePerExtraDevice: tariff.pricePerExtraDevice,
       maxExtraDevices: tariff.maxExtraDevices,
       deviceDiscountTiers: tariff.deviceDiscountTiers,
       internalSquadUuids: tariff.internalSquadUuids,
-      trafficResetMode: entitlement.mode === "LOCAL_SQUAD" ? "no_reset" : tariff.trafficResetMode ?? undefined,
+      trafficResetMode: tariff.trafficResetMode ?? undefined,
     }, { extraDevices: payment.deviceCount ?? 0, purchasedAsGift: isGiftPurchase, skipConfigCheck: true });
     if (result.ok) {
       await applyTrafficEntitlement(result.data.subscriptionId, entitlement, "NEW_PURCHASE");

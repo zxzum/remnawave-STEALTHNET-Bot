@@ -91,6 +91,27 @@ export async function saveBackupToFile(db: DbConnection): Promise<{ relativePath
   return { relativePath, filename, fullPath };
 }
 
+/** Критические массовые операции не стартуют без проверенного полного дампа БД. */
+export async function createCriticalDatabaseBackup() {
+  const url = process.env.DATABASE_URL;
+  const db = url ? parseDatabaseUrl(url) : null;
+  if (!db) throw new Error("Нельзя выполнить критическую операцию: DATABASE_URL не задан или некорректен");
+  const backup = await saveBackupToFile(db);
+  if ((await stat(backup.fullPath)).size === 0) throw new Error("Нельзя выполнить критическую операцию: создан пустой бэкап БД");
+  return backup;
+}
+
+/** Снимок внешнего состояния Remnawave рядом с SQL-дампом для ручного rollback. */
+export async function saveCriticalSnapshot(label: string, data: unknown): Promise<string> {
+  const safeLabel = label.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 80) || "snapshot";
+  const dir = path.join(BACKUPS_DIR, "critical-snapshots");
+  await (await import("node:fs/promises")).mkdir(dir, { recursive: true });
+  const filename = `${new Date().toISOString().replace(/[:.]/g, "-")}-${safeLabel}.json`;
+  const fullPath = path.join(dir, filename);
+  await writeFile(fullPath, JSON.stringify(data, (_key, value) => typeof value === "bigint" ? value.toString() : value, 2), "utf8");
+  return fullPath;
+}
+
 export interface BackupItem {
   path: string;
   filename: string;

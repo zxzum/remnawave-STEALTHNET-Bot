@@ -117,6 +117,8 @@ import {
 } from "../squad-traffic/traffic-entitlement.service.js";
 import { logAdmin } from "../audit/audit.service.js";
 import { registerBackupRoutes } from "../backup/backup.routes.js";
+import { createCriticalDatabaseBackup } from "../backup/backup.service.js";
+import { syncTariffSubscribers } from "../tariff/tariff-subscriber-sync.service.js";
 import { invalidateBrandCache } from "../branding/spa-html.js";
 import { getBroadcastRecipientsCount, startBroadcastJob, getBroadcastJob, cancelBroadcastJob, listBroadcastHistory, getBroadcastHistoryItem, sendDirectTelegramMessage, sendDirectEmail, startListSendJob, getListSendJob } from "../broadcast/broadcast.service.js";
 import { applyDevicesToSubscription, removeAllExtraDevicesForSub } from "../subscription/extras.helper.js";
@@ -719,6 +721,7 @@ function tariffToJson(t: {
   durationDays: number;
   internalSquadUuids: string[];
   trafficLimitBytes: bigint | null;
+  localTrafficLimitBytes: bigint | null;
   trafficResetMode: string;
   trafficLimitMode: "REMNAWAVE" | "LOCAL_SQUAD";
   meteredSquadUuid: string | null;
@@ -735,6 +738,7 @@ function tariffToJson(t: {
   locations?: string | null; // T11+T12 (11.05.2026)
   menuEmoji?: string | null; // T16 (12.05.2026) — эмодзи в главном меню бота
   purchaseCooldownDays?: number | null; // T-cooldown (13.05.2026) — кулдаун покупки тарифа в днях
+  archivedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
   priceOptions?: { id: string; durationDays: number; price: number; sortOrder: number }[];
@@ -747,6 +751,7 @@ function tariffToJson(t: {
     durationDays: t.durationDays,
     internalSquadUuids: t.internalSquadUuids,
     trafficLimitBytes: t.trafficLimitBytes != null ? t.trafficLimitBytes.toString() : null,
+    localTrafficLimitBytes: t.localTrafficLimitBytes != null ? t.localTrafficLimitBytes.toString() : null,
     trafficResetMode: t.trafficResetMode,
     trafficLimitMode: t.trafficLimitMode,
     meteredSquadUuid: t.meteredSquadUuid,
@@ -768,6 +773,7 @@ function tariffToJson(t: {
     menuEmoji: t.menuEmoji ?? null,
     // T-cooldown (13.05.2026) — кулдаун покупки тарифа в днях (null = без ограничения).
     purchaseCooldownDays: t.purchaseCooldownDays ?? null,
+    archivedAt: t.archivedAt?.toISOString() ?? null,
     priceOptions: (t.priceOptions ?? []).map((o) => ({
       id: o.id,
       durationDays: o.durationDays,
@@ -880,6 +886,9 @@ adminRouter.patch("/tariff-categories/:id", async (req, res) => {
 adminRouter.delete("/tariff-categories/:id", async (req, res) => {
   const idParse = tariffCategoryIdSchema.safeParse({ id: req.params.id });
   if (!idParse.success) return res.status(400).json({ message: "Invalid id" });
+  const tariffs = await prisma.tariff.count({ where: { categoryId: idParse.data.id } });
+  if (tariffs > 0) return res.status(409).json({ message: "Сначала переместите или архивируйте тарифы категории" });
+  await createCriticalDatabaseBackup();
   await prisma.tariffCategory.delete({ where: { id: idParse.data.id } });
   return res.json({ success: true });
 });
@@ -902,10 +911,18 @@ const trafficPolicySchema = z.object({
   internalSquadUuids: z.array(z.string().uuid()).min(1),
   meteredSquadUuid: z.string().uuid().nullable(),
   trafficLimitBytes: z.number().int().nonnegative().nullable(),
+  localTrafficLimitBytes: z.number().int().positive().nullable(),
 }).superRefine((value, ctx) => {
   if (value.trafficLimitMode === "LOCAL_SQUAD"
     && (!value.meteredSquadUuid || !value.internalSquadUuids.includes(value.meteredSquadUuid))) {
     ctx.addIssue({ code: "custom", path: ["meteredSquadUuid"], message: "Выберите учитываемый squad из назначенных" });
+  }
+  if (value.trafficLimitMode === "LOCAL_SQUAD" && value.localTrafficLimitBytes == null) {
+    ctx.addIssue({ code: "custom", path: ["localTrafficLimitBytes"], message: "Укажите локальный лимит squad" });
+  }
+  if (value.trafficLimitBytes != null && value.localTrafficLimitBytes != null
+    && value.trafficLimitBytes < value.localTrafficLimitBytes) {
+    ctx.addIssue({ code: "custom", path: ["trafficLimitBytes"], message: "Лимит Remnawave должен быть не меньше локального" });
   }
 });
 function validateTrafficPolicy(value: {
@@ -913,8 +930,14 @@ function validateTrafficPolicy(value: {
   internalSquadUuids: string[];
   meteredSquadUuid: string | null;
   trafficLimitBytes: number | null;
+  localTrafficLimitBytes?: number | null;
 }) {
-  return trafficPolicySchema.safeParse(value);
+  return trafficPolicySchema.safeParse({
+    ...value,
+    localTrafficLimitBytes: value.localTrafficLimitBytes === undefined && value.trafficLimitMode === "LOCAL_SQUAD"
+      ? value.trafficLimitBytes
+      : value.localTrafficLimitBytes ?? null,
+  });
 }
 const createTariffSchema = z.object({
   categoryId: z.string().min(1),
@@ -923,6 +946,7 @@ const createTariffSchema = z.object({
   durationDays: z.number().int().min(1).max(3650).optional(), // legacy: будет проигнорирован если priceOptions заданы
   internalSquadUuids: z.array(z.string().uuid()).min(1),
   trafficLimitBytes: z.number().int().nonnegative().nullable().optional(),
+  localTrafficLimitBytes: z.number().int().positive().nullable().optional(),
   trafficLimitMode: z.enum(["REMNAWAVE", "LOCAL_SQUAD"]).optional(),
   meteredSquadUuid: z.string().uuid().nullable().optional(),
   trafficResetMode: z.enum(TRAFFIC_RESET_MODES).optional(),
@@ -950,15 +974,18 @@ const createTariffSchema = z.object({
     internalSquadUuids: value.internalSquadUuids,
     meteredSquadUuid: value.meteredSquadUuid ?? null,
     trafficLimitBytes: value.trafficLimitBytes ?? null,
+    localTrafficLimitBytes: value.localTrafficLimitBytes ?? null,
   });
   if (!parsed.success) for (const issue of parsed.error.issues) ctx.addIssue(issue);
 });
 const updateTariffSchema = z.object({
+  categoryId: z.string().min(1).optional(),
   name: z.string().min(1).max(255).optional(),
   description: z.string().max(5000).nullable().optional(),
   durationDays: z.number().int().min(1).max(3650).optional(),
   internalSquadUuids: z.array(z.string().uuid()).optional(),
   trafficLimitBytes: z.number().int().nonnegative().nullable().optional(),
+  localTrafficLimitBytes: z.number().int().positive().nullable().optional(),
   trafficLimitMode: z.enum(["REMNAWAVE", "LOCAL_SQUAD"]).optional(),
   meteredSquadUuid: z.string().uuid().nullable().optional(),
   trafficResetMode: z.enum(TRAFFIC_RESET_MODES).optional(),
@@ -1019,6 +1046,9 @@ adminRouter.post("/tariffs", async (req, res) => {
       durationDays: legacyDays,
       internalSquadUuids: body.data.internalSquadUuids,
       trafficLimitBytes: body.data.trafficLimitBytes != null ? BigInt(body.data.trafficLimitBytes) : null,
+      localTrafficLimitBytes: body.data.trafficLimitMode === "LOCAL_SQUAD" && body.data.localTrafficLimitBytes != null
+        ? BigInt(body.data.localTrafficLimitBytes)
+        : null,
       trafficResetMode: body.data.trafficResetMode ?? "no_reset",
       trafficLimitMode: body.data.trafficLimitMode ?? "REMNAWAVE",
       meteredSquadUuid: body.data.meteredSquadUuid ?? null,
@@ -1069,22 +1099,32 @@ adminRouter.patch("/tariffs/:id", async (req, res) => {
   if (!idParse.success) return res.status(400).json({ message: "Invalid id" });
   const body = updateTariffSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ message: "Неверные данные", errors: body.error.flatten() });
-  const currentTariff = await prisma.tariff.findUnique({ where: { id: idParse.data.id }, select: { categoryId: true, internalSquadUuids: true, trafficLimitBytes: true, trafficLimitMode: true, meteredSquadUuid: true } });
+  const currentTariff = await prisma.tariff.findUnique({ where: { id: idParse.data.id }, select: {
+    categoryId: true, internalSquadUuids: true, trafficLimitBytes: true, localTrafficLimitBytes: true,
+    trafficLimitMode: true, meteredSquadUuid: true, trafficResetMode: true, includedDevices: true, isBestChoice: true,
+  } });
   if (!currentTariff) return res.status(404).json({ message: "Тариф не найден" });
   const policy = validateTrafficPolicy({
     trafficLimitMode: body.data.trafficLimitMode ?? currentTariff.trafficLimitMode,
     internalSquadUuids: body.data.internalSquadUuids ?? currentTariff.internalSquadUuids,
     meteredSquadUuid: body.data.meteredSquadUuid !== undefined ? body.data.meteredSquadUuid : currentTariff.meteredSquadUuid,
     trafficLimitBytes: body.data.trafficLimitBytes !== undefined ? body.data.trafficLimitBytes : currentTariff.trafficLimitBytes != null ? Number(currentTariff.trafficLimitBytes) : null,
+    localTrafficLimitBytes: body.data.localTrafficLimitBytes !== undefined ? body.data.localTrafficLimitBytes : currentTariff.localTrafficLimitBytes != null ? Number(currentTariff.localTrafficLimitBytes) : null,
   });
   if (!policy.success) return res.status(400).json({ message: "Неверные данные", errors: policy.error.flatten() });
-  const data: { name?: string; description?: string | null; durationDays?: number; internalSquadUuids?: string[]; trafficLimitBytes?: bigint | null; trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD"; meteredSquadUuid?: string | null; trafficResetMode?: string; deviceLimit?: number | null; includedDevices?: number; pricePerExtraDevice?: number; maxExtraDevices?: number; deviceDiscountTiers?: { minExtraDevices: number; discountPercent: number }[]; price?: number; currency?: string; sortOrder?: number; isBestChoice?: boolean; lavatopOfferId?: string | null; locations?: string | null; menuEmoji?: string | null; purchaseCooldownDays?: number | null } = {};
+  const data: { categoryId?: string; name?: string; description?: string | null; durationDays?: number; internalSquadUuids?: string[]; trafficLimitBytes?: bigint | null; localTrafficLimitBytes?: bigint | null; trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD"; meteredSquadUuid?: string | null; trafficResetMode?: string; deviceLimit?: number | null; includedDevices?: number; pricePerExtraDevice?: number; maxExtraDevices?: number; deviceDiscountTiers?: { minExtraDevices: number; discountPercent: number }[]; price?: number; currency?: string; sortOrder?: number; isBestChoice?: boolean; lavatopOfferId?: string | null; locations?: string | null; menuEmoji?: string | null; purchaseCooldownDays?: number | null } = {};
+  if (body.data.categoryId !== undefined) data.categoryId = body.data.categoryId;
   if (body.data.name != null) data.name = body.data.name;
   if (body.data.description !== undefined) data.description = body.data.description ?? null;
   if (body.data.internalSquadUuids != null) data.internalSquadUuids = body.data.internalSquadUuids;
   if (body.data.trafficLimitBytes !== undefined) data.trafficLimitBytes = body.data.trafficLimitBytes != null ? BigInt(body.data.trafficLimitBytes) : null;
+  if (body.data.localTrafficLimitBytes !== undefined) data.localTrafficLimitBytes = body.data.localTrafficLimitBytes != null ? BigInt(body.data.localTrafficLimitBytes) : null;
   if (body.data.trafficLimitMode !== undefined) data.trafficLimitMode = body.data.trafficLimitMode;
   if (body.data.meteredSquadUuid !== undefined) data.meteredSquadUuid = body.data.meteredSquadUuid;
+  if (body.data.trafficLimitMode === "REMNAWAVE") {
+    data.localTrafficLimitBytes = null;
+    data.meteredSquadUuid = null;
+  }
   if (body.data.trafficResetMode !== undefined) data.trafficResetMode = body.data.trafficResetMode;
   if (body.data.deviceLimit !== undefined) data.deviceLimit = body.data.deviceLimit ?? null;
   if (body.data.includedDevices !== undefined) data.includedDevices = body.data.includedDevices;
@@ -1116,10 +1156,18 @@ adminRouter.patch("/tariffs/:id", async (req, res) => {
     if (body.data.price !== undefined) data.price = body.data.price;
   }
 
+  const targetCategoryId = body.data.categoryId ?? currentTariff.categoryId;
+  if (body.data.categoryId && !await prisma.tariffCategory.findUnique({ where: { id: body.data.categoryId }, select: { id: true } })) {
+    return res.status(400).json({ message: "Категория не найдена" });
+  }
+  const syncFields = ["internalSquadUuids", "trafficLimitBytes", "localTrafficLimitBytes", "trafficLimitMode", "meteredSquadUuid", "trafficResetMode", "includedDevices", "deviceLimit"] as const;
+  const needsSubscriberSync = syncFields.some((field) => Object.prototype.hasOwnProperty.call(body.data, field));
+  if (needsSubscriberSync || targetCategoryId !== currentTariff.categoryId) await createCriticalDatabaseBackup();
+
   const updated = await prisma.$transaction(async (tx) => {
-    if (body.data.isBestChoice) {
+    if (body.data.isBestChoice ?? currentTariff.isBestChoice) {
       await tx.tariff.updateMany({
-        where: { categoryId: currentTariff.categoryId, id: { not: idParse.data.id } },
+        where: { categoryId: targetCategoryId, id: { not: idParse.data.id } },
         data: { isBestChoice: false },
       });
     }
@@ -1141,26 +1189,58 @@ adminRouter.patch("/tariffs/:id", async (req, res) => {
       data,
       include: { priceOptions: { orderBy: [{ sortOrder: "asc" }, { durationDays: "asc" }] } },
     });
-    if (updatedTariff.trafficLimitMode === "LOCAL_SQUAD"
-      && (body.data.trafficLimitBytes !== undefined || body.data.trafficLimitMode !== undefined)) {
-      await tx.squadTrafficQuota.updateMany({
-        where: {
-          tariffIdAtPeriodStart: updatedTariff.id,
-          subscription: { trialId: null },
-        },
-        data: { baseLimitBytes: updatedTariff.trafficLimitBytes ?? 0n },
-      });
-    }
     return updatedTariff;
   });
-  return res.json(tariffToJson(updated));
+  const subscriberSync = needsSubscriberSync
+    ? await syncTariffSubscribers(updated.id, { internalSquadUuids: currentTariff.internalSquadUuids })
+    : undefined;
+  return res.json({ ...tariffToJson(updated), ...(subscriberSync ? { subscriberSync } : {}) });
 });
 
 adminRouter.delete("/tariffs/:id", async (req, res) => {
   const idParse = tariffIdSchema.safeParse({ id: req.params.id });
   if (!idParse.success) return res.status(400).json({ message: "Invalid id" });
+  const tariff = await prisma.tariff.findUnique({
+    where: { id: idParse.data.id },
+    select: { _count: { select: {
+      payments: true, subscriptions: true, autoRenewSubscriptions: true, trials: true,
+      currentTariffClients: true, autoRenewClients: true,
+    } } },
+  });
+  if (!tariff) return res.status(404).json({ message: "Тариф не найден" });
+  if (Object.values(tariff._count).some((count) => count > 0)) {
+    return res.status(409).json({ message: "Тариф используется. Архивируйте его вместо удаления" });
+  }
+  await createCriticalDatabaseBackup();
   await prisma.tariff.delete({ where: { id: idParse.data.id } });
   return res.json({ success: true });
+});
+
+const archiveTariffSchema = z.object({ archived: z.boolean() });
+adminRouter.patch("/tariffs/:id/archive", async (req, res) => {
+  const idParse = tariffIdSchema.safeParse({ id: req.params.id });
+  const body = archiveTariffSchema.safeParse(req.body);
+  if (!idParse.success || !body.success) return res.status(400).json({ message: "Неверные данные" });
+  if (!await prisma.tariff.findUnique({ where: { id: idParse.data.id }, select: { id: true } })) {
+    return res.status(404).json({ message: "Тариф не найден" });
+  }
+  await createCriticalDatabaseBackup();
+  const tariff = await prisma.$transaction(async (tx) => {
+    const updated = await tx.tariff.update({
+      where: { id: idParse.data.id },
+      data: { archivedAt: body.data.archived ? new Date() : null },
+      include: { priceOptions: { orderBy: [{ sortOrder: "asc" }, { durationDays: "asc" }] } },
+    });
+    if (body.data.archived) {
+      await tx.subscription.updateMany({
+        where: { OR: [{ tariffId: updated.id }, { autoRenewTariffId: updated.id }] },
+        data: { autoRenewEnabled: false },
+      });
+      await tx.client.updateMany({ where: { autoRenewTariffId: updated.id }, data: { autoRenewEnabled: false } });
+    }
+    return updated;
+  });
+  return res.json(tariffToJson(tariff));
 });
 
 // ─── CRUD для Trial-пресетов ──────────────────

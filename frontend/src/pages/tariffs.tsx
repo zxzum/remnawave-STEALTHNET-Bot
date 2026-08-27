@@ -28,6 +28,8 @@ import {
   X,
   TrendingDown,
   FileSpreadsheet,
+  Archive,
+  ArchiveRestore,
 } from "lucide-react";
 import { TariffCsvDialog } from "@/components/tariff-csv-dialog";
 import {
@@ -132,6 +134,7 @@ function SortableCategoryCard({
   onAddTariff,
   onEditTariff,
   onDeleteTariff,
+  onArchiveTariff,
   onTariffDragEnd,
   formatPrice,
   formatTraffic,
@@ -142,6 +145,7 @@ function SortableCategoryCard({
   onAddTariff: () => void;
   onEditTariff: (t: TariffRecord) => void;
   onDeleteTariff: (id: string) => void;
+  onArchiveTariff: (t: TariffRecord) => void;
   onTariffDragEnd: (event: DragEndEvent) => void;
   formatPrice: (amount: number, currency: string) => string;
   formatTraffic: (bytes: string | null) => string;
@@ -229,6 +233,7 @@ function SortableCategoryCard({
                     tariff={t}
                     onEdit={() => onEditTariff(t)}
                     onDelete={() => onDeleteTariff(t.id)}
+                    onArchive={() => onArchiveTariff(t)}
                     formatPrice={formatPrice}
                     formatTraffic={formatTraffic}
                   />
@@ -246,12 +251,14 @@ function SortableTariffRow({
   tariff: t,
   onEdit,
   onDelete,
+  onArchive,
   formatPrice,
   formatTraffic,
 }: {
   tariff: TariffRecord;
   onEdit: () => void;
   onDelete: () => void;
+  onArchive: () => void;
   formatPrice: (amount: number, currency: string) => string;
   formatTraffic: (bytes: string | null) => string;
 }) {
@@ -268,7 +275,8 @@ function SortableTariffRow({
       style={style}
       className={cn(
         "flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-foreground/[0.03] dark:bg-white/[0.02] backdrop-blur-md px-4 py-3 hover:border-white/20 hover:-translate-y-px transition-[border-color,transform]",
-        isDragging && "opacity-90 shadow-lg z-10"
+        isDragging && "opacity-90 shadow-lg z-10",
+        t.archivedAt && "opacity-60"
       )}
     >
       <div className="flex items-center gap-3 flex-wrap min-w-0 flex-1">
@@ -285,6 +293,7 @@ function SortableTariffRow({
           <CreditCard className="h-4 w-4 text-primary" />
         </div>
         <span className="font-semibold truncate">{t.name}</span>
+        {t.archivedAt && <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500">Архив</span>}
         {t.description?.trim() ? (
           <span className="text-muted-foreground text-xs max-w-[200px] truncate" title={t.description}>
             {t.description}
@@ -300,8 +309,9 @@ function SortableTariffRow({
           сквадов: {t.internalSquadUuids.length}
         </span>
         <span className="inline-flex items-center rounded-full bg-blue-500/10 text-blue-500 dark:text-blue-400 border border-blue-500/20 px-2 py-0.5 text-[10px] font-medium">
-          {formatTraffic(t.trafficLimitBytes)}
+          Remnawave: {formatTraffic(t.trafficLimitBytes)}
         </span>
+        {t.trafficLimitMode === "LOCAL_SQUAD" && <span className="inline-flex items-center rounded-full bg-cyan-500/10 text-cyan-500 border border-cyan-500/20 px-2 py-0.5 text-[10px] font-medium">Локально: {formatTraffic(t.localTrafficLimitBytes)}</span>}
         {t.trafficResetMode && t.trafficResetMode !== "no_reset" && (
           <span className="inline-flex items-center rounded-full bg-amber-500/10 text-amber-500 dark:text-amber-400 border border-amber-500/20 px-2 py-0.5 text-[10px] font-medium">
             {t.trafficResetMode === "carry_over" ? "перенос остатка" : t.trafficResetMode === "on_purchase" ? "сброс при покупке" : t.trafficResetMode === "monthly" ? "сброс ежемесячно" : t.trafficResetMode === "monthly_rolling" ? "скользящий месяц" : ""}
@@ -314,6 +324,9 @@ function SortableTariffRow({
         )}
       </div>
       <div className="flex items-center gap-1 shrink-0">
+        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={onArchive} title={t.archivedAt ? "Вернуть из архива" : "Архивировать"}>
+          {t.archivedAt ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
+        </Button>
         <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={onEdit} title="Редактировать">
           <Pencil className="h-3.5 w-3.5" />
         </Button>
@@ -791,6 +804,18 @@ export function TariffsPage() {
     }
   };
 
+  const handleArchiveTariff = async (tariff: TariffRecord) => {
+    if (!token || !confirm(tariff.archivedAt
+      ? "Вернуть тариф в продажу? Автопродление останется выключенным у прежних подписок."
+      : "Архивировать тариф? Покупка и автопродление отключатся, действующие подписки сохранятся.")) return;
+    try {
+      await api.setTariffArchived(token, tariff.id, !tariff.archivedAt);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка архивации");
+    }
+  };
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
@@ -964,6 +989,7 @@ export function TariffsPage() {
                     onAddTariff={() => setTariffModal({ kind: "add", categoryId: cat.id })}
                     onEditTariff={(t) => setTariffModal({ kind: "edit", category: cat, tariff: t })}
                     onDeleteTariff={handleDeleteTariff}
+                    onArchiveTariff={handleArchiveTariff}
                     onTariffDragEnd={(e) => handleTariffDragEnd(e, cat)}
                     formatPrice={formatPrice}
                     formatTraffic={formatTraffic}
@@ -995,6 +1021,7 @@ export function TariffsPage() {
         <TariffModal
           token={token}
           squads={squads}
+          categories={categories}
           modal={tariffModal}
           onClose={() => setTariffModal(null)}
           onSaved={() => {
@@ -1143,6 +1170,7 @@ function CategoryModal({
 function TariffModal({
   token,
   squads,
+  categories,
   modal,
   onClose,
   onSaved,
@@ -1151,6 +1179,7 @@ function TariffModal({
 }: {
   token: string | null;
   squads: SquadOption[];
+  categories: TariffCategoryWithTariffs[];
   modal: { kind: "add"; categoryId: string } | { kind: "edit"; category: TariffCategoryWithTariffs; tariff: TariffRecord };
   onClose: () => void;
   onSaved: () => void;
@@ -1159,7 +1188,8 @@ function TariffModal({
 }) {
   const isEdit = modal.kind === "edit";
   const tariff = isEdit ? modal.tariff : null;
-  const categoryId = isEdit ? modal.category.id : modal.categoryId;
+  const initialCategoryId = isEdit ? modal.category.id : modal.categoryId;
+  const [categoryId, setCategoryId] = useState(initialCategoryId);
 
   const buildInitialPriceOptions = (t: TariffRecord | null): PriceOptionDraft[] => {
     if (t && Array.isArray(t.priceOptions) && t.priceOptions.length > 0) {
@@ -1189,6 +1219,9 @@ function TariffModal({
   const [selectedSquadUuids, setSelectedSquadUuids] = useState<string[]>(tariff?.internalSquadUuids ?? []);
   const [trafficGb, setTrafficGb] = useState<string>(
     tariff?.trafficLimitBytes != null ? String((Number(tariff.trafficLimitBytes) / BYTES_PER_GB).toFixed(2)) : ""
+  );
+  const [localTrafficGb, setLocalTrafficGb] = useState<string>(
+    tariff?.localTrafficLimitBytes != null ? String((Number(tariff.localTrafficLimitBytes) / BYTES_PER_GB).toFixed(2)) : ""
   );
   // для НОВЫХ тарифов дефолт «carry_over» (перенос остатка).
   // Существующие тарифы сохраняют свой режим.
@@ -1227,6 +1260,8 @@ function TariffModal({
       setPriceOptions(buildInitialPriceOptions(tariff));
       setSelectedSquadUuids(tariff.internalSquadUuids);
       setTrafficGb(tariff.trafficLimitBytes != null ? String((Number(tariff.trafficLimitBytes) / BYTES_PER_GB).toFixed(2)) : "");
+      setLocalTrafficGb(tariff.localTrafficLimitBytes != null ? String((Number(tariff.localTrafficLimitBytes) / BYTES_PER_GB).toFixed(2)) : "");
+      setCategoryId(tariff.categoryId);
       setTrafficResetMode(tariff.trafficResetMode ?? "no_reset");
       setTrafficLimitMode(tariff.trafficLimitMode ?? "REMNAWAVE");
       setMeteredSquadUuid(tariff.meteredSquadUuid ?? "");
@@ -1256,6 +1291,8 @@ function TariffModal({
       setPriceOptions([{ uid: makeDraftUid(), days: 30, price: "0" }]);
       setSelectedSquadUuids([]);
       setTrafficGb("");
+      setLocalTrafficGb("");
+      setCategoryId(modal.kind === "add" ? modal.categoryId : initialCategoryId);
       setTrafficResetMode("no_reset");
       setTrafficLimitMode("REMNAWAVE");
       setMeteredSquadUuid("");
@@ -1413,6 +1450,18 @@ function TariffModal({
 
     const trafficLimitBytes =
       trafficGb.trim() !== "" ? Math.round(parseFloat(trafficGb) * BYTES_PER_GB) : null;
+    const localTrafficLimitBytes = trafficLimitMode === "LOCAL_SQUAD" && localTrafficGb.trim() !== ""
+      ? Math.round(parseFloat(localTrafficGb) * BYTES_PER_GB)
+      : null;
+    if ((trafficLimitBytes != null && (!Number.isFinite(trafficLimitBytes) || trafficLimitBytes < 0))
+      || (trafficLimitMode === "LOCAL_SQUAD" && (localTrafficLimitBytes == null || !Number.isFinite(localTrafficLimitBytes) || localTrafficLimitBytes <= 0))) {
+      setValidationError("Проверьте лимиты трафика");
+      return;
+    }
+    if (trafficLimitBytes != null && localTrafficLimitBytes != null && trafficLimitBytes < localTrafficLimitBytes) {
+      setValidationError("Лимит Remnawave должен быть не меньше локального");
+      return;
+    }
     if (trafficLimitMode === "LOCAL_SQUAD" && !selectedSquadUuids.includes(meteredSquadUuid)) {
       setValidationError("Выберите учитываемый squad из назначенных");
       return;
@@ -1455,13 +1504,15 @@ function TariffModal({
     try {
       if (isEdit && tariff) {
         const payload: UpdateTariffPayload = {
+          categoryId,
           name: name.trim(),
           description: description.trim() || null,
           internalSquadUuids: selectedSquadUuids,
           trafficLimitBytes: trafficLimitBytes ?? null,
+          localTrafficLimitBytes,
           trafficLimitMode,
           meteredSquadUuid: trafficLimitMode === "LOCAL_SQUAD" ? meteredSquadUuid : null,
-          ...(trafficLimitMode === "REMNAWAVE" ? { trafficResetMode } : {}),
+          trafficResetMode,
           deviceLimit: deviceLimitNum ?? null,
           includedDevices,
           pricePerExtraDevice: effectivePricePerExtra,
@@ -1481,7 +1532,10 @@ function TariffModal({
           })(),
           priceOptions: normalized,
         };
-        await api.updateTariff(token, tariff.id, payload);
+        const result = await api.updateTariff(token, tariff.id, payload);
+        if (result.subscriberSync?.failed) {
+          alert(`Синхронизация: ${result.subscriberSync.synced}/${result.subscriberSync.total}. Ошибок: ${result.subscriberSync.failed}. Повторите сохранение после проверки Remnawave.`);
+        }
       } else {
         const payload: CreateTariffPayload = {
           categoryId,
@@ -1489,9 +1543,10 @@ function TariffModal({
           description: description.trim() || null,
           internalSquadUuids: selectedSquadUuids,
           trafficLimitBytes: trafficLimitBytes ?? null,
+          localTrafficLimitBytes,
           trafficLimitMode,
           meteredSquadUuid: trafficLimitMode === "LOCAL_SQUAD" ? meteredSquadUuid : null,
-          ...(trafficLimitMode === "REMNAWAVE" ? { trafficResetMode } : {}),
+          trafficResetMode,
           deviceLimit: deviceLimitNum ?? null,
           includedDevices,
           pricePerExtraDevice: effectivePricePerExtra,
@@ -1534,6 +1589,13 @@ function TariffModal({
           <DialogDescription className="sr-only">Форма тарифа</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
+          <div className="grid gap-1.5">
+            <Label htmlFor="tariff-category" className="text-xs text-muted-foreground">Категория</Label>
+            <select id="tariff-category" value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className={selectCls} required>
+              {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+            </select>
+            {isEdit && categoryId !== initialCategoryId && <p className="text-[11px] text-amber-500">Тариф переместится без смены ID. Подписки и платежи сохранятся.</p>}
+          </div>
           <div className="grid gap-1.5 grid-cols-[1fr_auto]">
             <div className="grid gap-1.5">
               <Label htmlFor="tariff-name" className="text-xs text-muted-foreground">Название</Label>
@@ -1805,18 +1867,7 @@ function TariffModal({
             )}
           </div>
           <div className="grid gap-1.5">
-            <Label className="text-xs">Режим лимита трафика</Label>
-            <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Режим лимита трафика">
-              {(["REMNAWAVE", "LOCAL_SQUAD"] as const).map((mode) => (
-                <label key={mode} className="flex cursor-pointer items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs">
-                  <input type="radio" name="traffic-limit-mode" value={mode} checked={trafficLimitMode === mode} onChange={() => setTrafficLimitMode(mode)} />
-                  {mode === "REMNAWAVE" ? "Лимит Remnawave" : "Локальный лимит выбранного squad"}
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="tariff-traffic" className="text-xs text-muted-foreground">Лимит трафика (ГБ)</Label>
+            <Label htmlFor="tariff-traffic" className="text-xs text-muted-foreground">Глобальный лимит Remnawave (ГБ)</Label>
             <Input
               id="tariff-traffic"
               type="number"
@@ -1829,38 +1880,39 @@ function TariffModal({
             />
             <p className="text-[11px] text-muted-foreground/80">1 ГБ = 1024³ байт (ГиБ). В Remna передаётся лимит в байтах.</p>
           </div>
-          {trafficLimitMode === "LOCAL_SQUAD" && (
           <div className="grid gap-1.5">
-            <Label htmlFor="tariff-metered-squad" className="text-xs text-muted-foreground">Учитываемый squad</Label>
-            <select id="tariff-metered-squad" value={meteredSquadUuid} onChange={(e) => setMeteredSquadUuid(e.target.value)} className={selectCls}>
-              <option value="">Выберите squad</option>
-              {selectedSquadsList.map((s) => <option key={s.uuid} value={s.uuid}>{s.name || s.uuid}</option>)}
-            </select>
-            <p className="text-[11px] text-muted-foreground/80">Ежемесячно от даты покупки.</p>
-          </div>
-          )}
-          {trafficLimitMode === "REMNAWAVE" && <div className="grid gap-1.5">
-            <Label htmlFor="tariff-reset-mode" className="text-xs text-muted-foreground">Сброс трафика</Label>
-            <select
-              id="tariff-reset-mode"
-              value={trafficResetMode}
-              onChange={(e) => setTrafficResetMode(e.target.value)}
-              className={selectCls}
-            >
+            <Label htmlFor="tariff-reset-mode" className="text-xs text-muted-foreground">Сброс глобального трафика</Label>
+            <select id="tariff-reset-mode" value={trafficResetMode} onChange={(e) => setTrafficResetMode(e.target.value)} className={selectCls}>
               <option value="carry_over">Перенос остатка трафика</option>
               <option value="no_reset">Рост трафика без сброса</option>
               <option value="on_purchase">Сброс при покупке тарифа</option>
               <option value="monthly">Ежемесячный сброс</option>
               <option value="monthly_rolling">Скользящий месяц</option>
             </select>
-            <p className="text-[11px] text-muted-foreground/80">
-              {trafficResetMode === "carry_over" && "Остаток трафика переносится на новый период. Пример: было 90 ГБ, использовано 40 → докупил 90 → станет 0 из 140 ГБ. Счётчик использованного обнуляется."}
-              {trafficResetMode === "no_reset" && "Лимит накапливается, счётчик использованного НЕ сбрасывается. Пример: было 90 ГБ, использовано 40 → докупил 90 → станет 40 из 180 ГБ."}
-              {trafficResetMode === "on_purchase" && "Трафик обнуляется при каждой покупке/продлении тарифа."}
-              {trafficResetMode === "monthly" && "Трафик обнуляется каждый месяц (Remna MONTH). Например: 10 ГБ/мес на 3 месяца."}
-              {trafficResetMode === "monthly_rolling" && "Трафик сбрасывается через 30 дней от последнего сброса (Remna MONTH_ROLLING)."}
-            </p>
-          </div>}
+          </div>
+          <button
+            type="button"
+            onClick={() => setTrafficLimitMode(trafficLimitMode === "LOCAL_SQUAD" ? "REMNAWAVE" : "LOCAL_SQUAD")}
+            className={cn("w-full rounded-xl border p-3 text-left text-sm", trafficLimitMode === "LOCAL_SQUAD" ? "border-cyan-500/40 bg-cyan-500/10" : "border-white/10 bg-foreground/[0.03]")}
+          >
+            Локальный лимит squad: {trafficLimitMode === "LOCAL_SQUAD" ? "включён" : "выключен"}
+          </button>
+          {trafficLimitMode === "LOCAL_SQUAD" && (
+            <div className="grid gap-3 rounded-xl border border-cyan-500/20 p-3">
+              <div className="grid gap-1.5">
+                <Label htmlFor="tariff-local-traffic" className="text-xs text-muted-foreground">Локальный лимит squad (ГБ)</Label>
+                <Input id="tariff-local-traffic" type="number" min={0.1} step={0.1} value={localTrafficGb} onChange={(e) => setLocalTrafficGb(e.target.value)} className={inputCls} required />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="tariff-metered-squad" className="text-xs text-muted-foreground">Учитываемый squad</Label>
+                <select id="tariff-metered-squad" value={meteredSquadUuid} onChange={(e) => setMeteredSquadUuid(e.target.value)} className={selectCls} required>
+                  <option value="">Выберите squad</option>
+                  {selectedSquadsList.map((s) => <option key={s.uuid} value={s.uuid}>{s.name || s.uuid}</option>)}
+                </select>
+                <p className="text-[11px] text-muted-foreground/80">Глобальный лимит пустой = безлимитный. Иначе он должен быть не меньше локального.</p>
+              </div>
+            </div>
+          )}
           <DeviceSection
             includedDevices={includedDevices}
             setIncludedDevices={setIncludedDevices}

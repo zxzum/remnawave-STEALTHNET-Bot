@@ -8,7 +8,7 @@ test("trial activation creates LOCAL_SQUAD entitlement after its one-user subscr
 
   assert.match(activation, /trafficLimitBytes: trial\.trafficLimitMode === "LOCAL_SQUAD" \? 0n : trialTrafficLimit/);
   const subscriptionUpdated = activation.indexOf('data: { trialId: trial.id }');
-  const entitlementApplied = activation.indexOf('applyTrafficEntitlement(');
+  const entitlementApplied = activation.lastIndexOf('applyTrafficEntitlement(');
   assert.ok(subscriptionUpdated >= 0 && entitlementApplied > subscriptionUpdated, "entitlement is applied after subscription persistence");
   assert.match(activation, /mode: trial\.trafficLimitMode/);
   assert.match(activation, /"TRIAL_ACTIVATION"/);

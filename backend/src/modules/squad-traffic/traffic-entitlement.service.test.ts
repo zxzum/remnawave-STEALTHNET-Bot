@@ -169,7 +169,7 @@ const local = {
   trafficLimitBytes: 100n,
 };
 
-test("new LOCAL_SQUAD purchase creates a zero-used quota and updates its one owning Remnawave user", async () => {
+test("new LOCAL_SQUAD purchase creates a zero-used local quota without changing global Remnawave policy", async () => {
   const now = new Date("2026-07-19T12:00:00.000Z");
   const { dependencies, state } = memoryDependencies({ now });
 
@@ -177,11 +177,7 @@ test("new LOCAL_SQUAD purchase creates a zero-used quota and updates its one own
 
   assert.equal(state.quota?.usedBytes, 0n);
   assert.equal(state.quota?.periodStartedAt.toISOString(), now.toISOString());
-  assert.deepEqual(state.remnaWrites, [{
-    uuid: "owning-uuid",
-    trafficLimitBytes: 0,
-    trafficLimitStrategy: "NO_RESET",
-  }]);
+  assert.deepEqual(state.remnaWrites, []);
   assert.deepEqual(state.checkpoints, [{
     subscriptionId: "sub-1",
     squadUuid: "squad-local",

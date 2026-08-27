@@ -5,9 +5,6 @@ type TrafficPolicy = {
 };
 
 export function remnaTrafficSettings(tariff: TrafficPolicy) {
-  if (tariff.trafficLimitMode === "LOCAL_SQUAD") {
-    return { trafficLimitBytes: 0, trafficLimitStrategy: "NO_RESET" };
-  }
   return {
     trafficLimitBytes: tariff.trafficLimitBytes == null ? 0 : Number(tariff.trafficLimitBytes),
     trafficLimitStrategy: tariff.trafficResetMode === "monthly"

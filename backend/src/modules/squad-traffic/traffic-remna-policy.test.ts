@@ -3,14 +3,14 @@ import test from "node:test";
 
 import { remnaTrafficSettings } from "./traffic-remna-policy.js";
 
-test("uses an unlimited Remnawave limit for a locally metered squad", () => {
+test("keeps global Remnawave limit alongside locally metered squad", () => {
   assert.deepEqual(
     remnaTrafficSettings({
       trafficLimitBytes: 322_122_547n,
       trafficLimitMode: "LOCAL_SQUAD",
       trafficResetMode: "monthly",
     }),
-    { trafficLimitBytes: 0, trafficLimitStrategy: "NO_RESET" },
+    { trafficLimitBytes: 322_122_547, trafficLimitStrategy: "MONTH" },
   );
 });
 

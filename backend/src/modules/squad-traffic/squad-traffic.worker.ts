@@ -18,7 +18,7 @@ type BrokerResult = Awaited<ReturnType<typeof brokerTrafficUsage>>;
 type AccountingResult = Awaited<ReturnType<typeof accountTrafficBatch>>;
 
 export type SquadTrafficWorkerDependencies = {
-  listActiveQuotas: () => Promise<Array<{ subscriptionId: string; meteredSquadUuid: string | null; remnawaveUsername: string | null }>>;
+  listActiveQuotas: () => Promise<Array<{ subscriptionId: string; meteredSquadUuid: string | null; remnawaveUsername: string | null; status?: string }>>;
   rollover: (subscriptionId: string) => Promise<unknown>;
   broker: (quotas: Array<{ subscriptionId: string; meteredSquadUuid: string | null; remnawaveUsername: string | null }>, days: Parameters<typeof brokerTrafficUsage>[1]) => Promise<BrokerResult>;
   account: (samples: Parameters<typeof accountTrafficBatch>[0], now: Date) => Promise<AccountingResult>;
@@ -38,8 +38,8 @@ function utcDays(now: Date) {
 
 const productionDependencies: SquadTrafficWorkerDependencies = {
   listActiveQuotas: () => prisma.squadTrafficQuota.findMany({
-    where: { status: "ACTIVE" },
-    select: { subscriptionId: true, meteredSquadUuid: true, subscription: { select: { remnawaveUsername: true } } },
+    where: { status: { in: ["ACTIVE", "EXHAUSTED"] } },
+    select: { subscriptionId: true, meteredSquadUuid: true, status: true, subscription: { select: { remnawaveUsername: true } } },
   }).then((rows) => rows.map((row) => ({ ...row, remnawaveUsername: row.subscription.remnawaveUsername }))),
   rollover: (subscriptionId) => rolloverTrafficQuota(subscriptionId),
   broker: brokerTrafficUsage,
@@ -85,8 +85,12 @@ export async function runSquadTrafficAccounting(
   let enforced = 0;
   const observeOnly = options.observeOnly ?? !(await dependencies.isEnforcementEnabled());
   try {
-    const quotas = await dependencies.listActiveQuotas();
-    for (const quota of quotas) await dependencies.rollover(quota.subscriptionId);
+    const candidates = await dependencies.listActiveQuotas();
+    const quotas = [];
+    for (const quota of candidates) {
+      const rolled = await dependencies.rollover(quota.subscriptionId) as { status?: string } | null | undefined;
+      if ((rolled?.status ?? quota.status ?? "ACTIVE") === "ACTIVE") quotas.push(quota);
+    }
     const broker = await dependencies.broker(quotas, utcDays(startedAt));
     lastSquadDiagnostics = [...broker.squadDiagnostics.values()].map((item) => ({
       squadUuid: item.squadUuid,

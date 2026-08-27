@@ -4437,6 +4437,7 @@ clientRouter.post("/payments/balance", async (req, res) => {
     include: { priceOptions: { orderBy: [{ sortOrder: "asc" }, { durationDays: "asc" }] } },
   });
   if (!tariff) return res.status(400).json({ message: "Тариф не найден" });
+  if (tariff.archivedAt) return res.status(409).json({ message: "Тариф архивирован и недоступен для покупки", code: "TARIFF_ARCHIVED" });
 
   // кулдаун ПРОДЛЕНИЯ существующей подписки.
   // Применяется только при продлении (extendsSecondarySubId) — новые покупки этого тарифа
@@ -8243,6 +8244,7 @@ function tariffToJson(
     durationDays: number;
     internalSquadUuids: string[];
     trafficLimitBytes: bigint | null;
+    localTrafficLimitBytes?: bigint | null;
     trafficResetMode?: string;
     trafficLimitMode: "REMNAWAVE" | "LOCAL_SQUAD";
     meteredSquadUuid: string | null;
@@ -8266,6 +8268,7 @@ function tariffToJson(
     description: t.description ?? null,
     durationDays: t.durationDays,
     trafficLimitBytes: t.trafficLimitBytes != null ? t.trafficLimitBytes.toString() : null,
+    localTrafficLimitBytes: t.localTrafficLimitBytes != null ? t.localTrafficLimitBytes.toString() : null,
     trafficResetMode: t.trafficResetMode ?? "no_reset",
     trafficLimitMode: t.trafficLimitMode,
     meteredSquadUuid: t.meteredSquadUuid,
@@ -8299,6 +8302,7 @@ publicConfigRouter.get("/tariffs", async (req, res) => {
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       include: {
         tariffs: {
+          where: { archivedAt: null },
           orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
           include: {
             priceOptions: { orderBy: [{ sortOrder: "asc" }, { durationDays: "asc" }] },
@@ -8307,7 +8311,7 @@ publicConfigRouter.get("/tariffs", async (req, res) => {
       },
     });
     return res.json({
-      items: list.map((c) => {
+      items: list.filter((c) => c.tariffs.length > 0).map((c) => {
         const emoji = (c.emojiKey && categoryEmojis[c.emojiKey]) ? categoryEmojis[c.emojiKey] : "";
         return {
           id: c.id,

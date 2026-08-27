@@ -503,6 +503,7 @@ model Tariff {
   durationDays         Int              @map("duration_days")
   internalSquadUuids   String[]         @map("internal_squad_uuids")
   trafficLimitBytes    BigInt?          @map("traffic_limit_bytes")
+  localTrafficLimitBytes BigInt?        @map("local_traffic_limit_bytes")
   trafficResetMode     String           @default("no_reset") @map("traffic_reset_mode")
   trafficLimitMode     TrafficLimitMode @default(REMNAWAVE) @map("traffic_limit_mode")
   meteredSquadUuid     String?          @map("metered_squad_uuid")
@@ -536,6 +537,7 @@ model Tariff {
   /// не чаще раз в N дней. Используется для дорогих/безлимитных тарифов чтобы избежать
   /// злоупотреблений (например, Unblock-безлимит → раз в 10 дней).
   purchaseCooldownDays Int?             @map("purchase_cooldown_days")
+  archivedAt           DateTime?        @map("archived_at")
   createdAt            DateTime         @default(now()) @map("created_at")
   updatedAt            DateTime         @updatedAt @map("updated_at")
 
@@ -551,6 +553,7 @@ model Tariff {
   trials                 Trial[]
 
   @@index([categoryId])
+  @@index([archivedAt])
   @@map("tariffs")
 }
 

@@ -2134,12 +2134,16 @@ export const api = {
     return request("/admin/tariffs", { method: "POST", body: JSON.stringify(data), token });
   },
 
-  async updateTariff(token: string, id: string, data: UpdateTariffPayload): Promise<TariffRecord> {
+  async updateTariff(token: string, id: string, data: UpdateTariffPayload): Promise<TariffRecord & { subscriberSync?: { total: number; synced: number; failed: number; errors: string[] } }> {
     return request(`/admin/tariffs/${id}`, { method: "PATCH", body: JSON.stringify(data), token });
   },
 
   async deleteTariff(token: string, id: string): Promise<{ success: boolean }> {
     return request(`/admin/tariffs/${id}`, { method: "DELETE", token });
+  },
+
+  async setTariffArchived(token: string, id: string, archived: boolean): Promise<TariffRecord> {
+    return request(`/admin/tariffs/${id}/archive`, { method: "PATCH", body: JSON.stringify({ archived }), token });
   },
 
   // ─── Trial-пресеты ───
@@ -5103,6 +5107,7 @@ export interface TariffRecord {
   durationDays: number;
   internalSquadUuids: string[];
   trafficLimitBytes: string | null;
+  localTrafficLimitBytes: string | null;
   trafficResetMode: string;
   trafficLimitMode: "REMNAWAVE" | "LOCAL_SQUAD";
   meteredSquadUuid: string | null;
@@ -5122,6 +5127,7 @@ export interface TariffRecord {
   menuEmoji?: string | null;
   /** T-cooldown (13.05.2026) — кулдаун покупки тарифа в днях (null/0 = без ограничения). */
   purchaseCooldownDays?: number | null;
+  archivedAt?: string | null;
   priceOptions: TariffPriceOption[];
   createdAt: string;
   updatedAt: string;
@@ -5293,6 +5299,7 @@ export type CreateTariffPayload = {
   durationDays?: number;
   internalSquadUuids: string[];
   trafficLimitBytes?: number | null;
+  localTrafficLimitBytes?: number | null;
   trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
   meteredSquadUuid?: string | null;
   trafficResetMode?: string;
@@ -5316,11 +5323,13 @@ export type CreateTariffPayload = {
 };
 
 export type UpdateTariffPayload = {
+  categoryId?: string;
   name?: string;
   description?: string | null;
   durationDays?: number;
   internalSquadUuids?: string[];
   trafficLimitBytes?: number | null;
+  localTrafficLimitBytes?: number | null;
   trafficLimitMode?: "REMNAWAVE" | "LOCAL_SQUAD";
   meteredSquadUuid?: string | null;
   trafficResetMode?: string;

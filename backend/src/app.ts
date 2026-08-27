@@ -400,6 +400,9 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
   if (code === "TARIFF_RESTRICTED") {
     return res.status(403).json({ message: err.message || "Покупка этого тарифа ограничена", code: "TARIFF_RESTRICTED" });
   }
+  if (code === "TARIFF_ARCHIVED") {
+    return res.status(409).json({ message: err.message || "Тариф архивирован", code: "TARIFF_ARCHIVED" });
+  }
   console.error(err);
   res.status(500).json({ message: "Internal server error" });
 });

@@ -38,8 +38,8 @@ test("extend validates payment client ownership before every Remnawave call", as
 
 test("payment activation validates its explicit target before trial conversion logic", async () => {
   const source = await readFile(new URL("./tariff-activation.service.ts", import.meta.url), "utf8");
-  const start = source.indexOf("export async function activateTariffByPaymentId");
-  const end = source.indexOf("function getExtendsSecondarySubId", start);
+  const start = source.indexOf("async function activateTariffByPaymentIdUnlocked");
+  const end = source.indexOf("export async function activateTariffByPaymentId", start);
   const body = source.slice(start, end);
   const branch = body.indexOf("if (extendsSecondaryId)");
   const guard = body.indexOf("subscriptionBelongsToClient", branch);

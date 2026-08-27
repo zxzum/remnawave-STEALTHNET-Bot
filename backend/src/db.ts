@@ -19,10 +19,18 @@ if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = basePrisma;
 export async function createPayment(args: Prisma.PaymentCreateArgs) {
   const data = args.data as Prisma.PaymentUncheckedCreateInput;
   if (data.tariffId && typeof data.clientId === "string") {
-    const cl = await basePrisma.client.findUnique({
-      where: { id: data.clientId },
-      select: { restrictedTariffIds: true, tariffRestrictionReason: true },
-    });
+    const [cl, tariff] = await Promise.all([
+      basePrisma.client.findUnique({
+        where: { id: data.clientId },
+        select: { restrictedTariffIds: true, tariffRestrictionReason: true },
+      }),
+      basePrisma.tariff.findUnique({ where: { id: String(data.tariffId) }, select: { archivedAt: true } }),
+    ]);
+    if (tariff?.archivedAt) {
+      const err = new Error("Тариф архивирован и недоступен для покупки") as Error & { code?: string };
+      err.code = "TARIFF_ARCHIVED";
+      throw err;
+    }
     if (cl?.restrictedTariffIds) {
       let ids: string[] = [];
       try {

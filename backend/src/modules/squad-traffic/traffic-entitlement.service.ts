@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "../../db.js";
 import { remnaUpdateUser } from "../remna/remna.client.js";
 import { effectiveLimitBytes, nextMonthlyBoundary } from "./traffic-period.js";
+import { restoreMeteredSquad } from "./traffic-enforcement.service.js";
 
 export type TrafficEntitlementInput = {
   tariffId: string | null;
@@ -17,11 +18,13 @@ export type TrafficEntitlementReason = "NEW_PURCHASE" | "RENEWAL" | "TARIFF_CHAN
 export type TrafficEntitlementDependencies = {
   prisma: typeof prisma;
   updateRemnaUser: typeof remnaUpdateUser;
+  restoreMeteredSquad?: typeof restoreMeteredSquad;
 };
 
 const defaultDependencies: TrafficEntitlementDependencies = {
   prisma,
   updateRemnaUser: remnaUpdateUser,
+  restoreMeteredSquad,
 };
 
 export function validateTrafficEntitlement(input: TrafficEntitlementInput): TrafficEntitlementInput {
@@ -54,6 +57,7 @@ async function rolloverInTransaction(
   tx: Prisma.TransactionClient,
   quota: {
     id: string;
+    status: string;
     tariffIdAtPeriodStart: string | null;
     baseLimitBytes: bigint;
     periodEndsAt: Date;
@@ -120,16 +124,6 @@ export async function applyTrafficEntitlement(
     select: { id: true, remnawaveUuid: true, expireAt: true },
   });
   if (!subscription) throw new Error("Подписка не найдена");
-
-  if (input.mode === "LOCAL_SQUAD") {
-    if (!subscription.remnawaveUuid) throw new Error("Подписка не привязана к Remnawave");
-    const update = await dependencies.updateRemnaUser({
-      uuid: subscription.remnawaveUuid,
-      trafficLimitBytes: 0,
-      trafficLimitStrategy: "NO_RESET",
-    });
-    if (update.error) throw new Error(update.error);
-  }
 
   return dependencies.prisma.$transaction(async (tx) => {
     const current = await tx.squadTrafficQuota.findUnique({
@@ -234,13 +228,18 @@ export async function rolloverTrafficQuota(
   now: Date = new Date(),
   dependencies: TrafficEntitlementDependencies = defaultDependencies,
 ) {
-  return dependencies.prisma.$transaction(async (tx) => {
+  let rolledOver = false;
+  const quota = await dependencies.prisma.$transaction(async (tx) => {
     const quota = await tx.squadTrafficQuota.findUnique({
       where: { subscriptionId },
       include: { grants: true, subscription: { select: { expireAt: true } } },
     });
+    if (quota && quota.periodEndsAt.getTime() <= now.getTime()
+      && quota.subscription.expireAt && quota.subscription.expireAt.getTime() > now.getTime()) rolledOver = true;
     return quota ? rolloverInTransaction(tx, quota, now) : null;
   });
+  if (rolledOver && quota?.status === "ACTIVE") await dependencies.restoreMeteredSquad?.(subscriptionId);
+  return quota;
 }
 
 export async function grantTrafficBytes(

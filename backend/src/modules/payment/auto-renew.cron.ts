@@ -149,6 +149,10 @@ export async function processAutoRenewals() {
 
   for (const client of clients) {
     if (!client.remnawaveUuid || !client.autoRenewTariff) continue;
+    if (client.autoRenewTariff.archivedAt) {
+      await prisma.client.update({ where: { id: client.id }, data: { autoRenewEnabled: false } });
+      continue;
+    }
 
     // Canonical Subscription[0] owns renewal whenever it exists. This also
     // respects a per-subscription autoRenewEnabled=false toggle.
@@ -746,6 +750,10 @@ async function processSecondaryAutoRenewals(multiSubscriptionsEnabled: boolean):
     }
     if (!tariffForRenewal) {
       console.warn(`[auto-renew/sec] sub ${sec.id}: autoRenewEnabled, но тариф не найден (tariffId и autoRenewTariffId пусты либо тарифы удалены) — пропуск.`);
+      continue;
+    }
+    if (tariffForRenewal.archivedAt) {
+      await prisma.subscription.update({ where: { id: sec.id }, data: { autoRenewEnabled: false } });
       continue;
     }
     try {
