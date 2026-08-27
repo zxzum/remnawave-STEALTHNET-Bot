@@ -40,6 +40,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getRemnaUserIdentifier } from "@/lib/remna-user";
+import { formatTariffOptionLabel } from "@/lib/tariff-label";
 
 const STRATEGY_LABELS: Record<string, string> = {
   NO_RESET: "Без сброса",
@@ -543,7 +544,7 @@ export function SubscriptionRemnaPanel({ subscription, token, remnaSquads, tarif
                   disabled={conversionBusy}
                 >
                   <option value="">Выберите целевой тариф</option>
-                  {tariffs.map((tariff) => <option key={tariff.id} value={tariff.id}>{tariff.name}</option>)}
+                  {tariffs.map((tariff) => <option key={tariff.id} value={tariff.id}>{formatTariffOptionLabel(tariff)}</option>)}
                 </select>
                 {(() => {
                   const tariff = tariffs.find((item) => item.id === conversionTariffId);

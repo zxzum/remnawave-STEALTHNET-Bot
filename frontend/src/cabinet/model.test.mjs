@@ -7,12 +7,14 @@ import {
   groupDevicesBySubscription,
   mapSubscription,
   mapTariffGroups,
+  canBuyTrafficOption,
   quoteTariff,
   resolveOptionalNav,
   resolvePaymentUrl,
   isExpiredTrial,
   shouldOfferTelegramLink,
 } from "./model.ts";
+import { formatTariffOptionLabel } from "../lib/tariff-label.ts";
 
 test("prefers Crypto Bot Mini App URL only inside Telegram", () => {
   const urls = {
@@ -112,6 +114,24 @@ test("offers Telegram linking only to authenticated unlinked clients", () => {
 test("shows overflow only for enabled optional services", () => {
   assert.deepEqual(resolveOptionalNav({ showProxyEnabled: true }), ["proxy"]);
   assert.deepEqual(resolveOptionalNav({}), []);
+});
+
+test("shows traffic packages only for limits they can extend", () => {
+  const dual = { trafficLimitGB: 100, whitelistGB: 50, trafficLimitMode: "LOCAL_SQUAD" };
+  const localOnly = { trafficLimitGB: null, whitelistGB: 50, trafficLimitMode: "LOCAL_SQUAD" };
+  const localUnlimited = { trafficLimitGB: null, whitelistGB: null, trafficLimitMode: "LOCAL_SQUAD" };
+  const remnawaveOnly = { trafficLimitGB: 100, whitelistGB: null, trafficLimitMode: "REMNAWAVE" };
+  assert.equal(canBuyTrafficOption({ trafficMode: "REMNAWAVE" }, dual), true);
+  assert.equal(canBuyTrafficOption({ trafficMode: "LOCAL_SQUAD" }, dual), true);
+  assert.equal(canBuyTrafficOption({ trafficMode: "REMNAWAVE" }, localOnly), false);
+  assert.equal(canBuyTrafficOption({ trafficMode: "LOCAL_SQUAD" }, localUnlimited), true);
+  assert.equal(canBuyTrafficOption({ trafficMode: "LOCAL_SQUAD" }, remnawaveOnly), false);
+  assert.equal(canBuyTrafficOption({ trafficMode: "ANY" }, null), true);
+});
+
+test("marks archived tariffs in selection labels", () => {
+  assert.equal(formatTariffOptionLabel({ name: "Обычный ВПН", archivedAt: null }), "Обычный ВПН");
+  assert.equal(formatTariffOptionLabel({ name: "Обычный ВПН", archivedAt: "2026-08-01T00:00:00.000Z" }), "Обычный ВПН (архив)");
 });
 
 test("maps the authenticated client without inventing identity data", () => {

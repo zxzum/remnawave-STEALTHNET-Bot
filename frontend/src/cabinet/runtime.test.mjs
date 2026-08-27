@@ -231,6 +231,15 @@ test("optional client services use new cabinet screens and production APIs", asy
   ]) assert.match(services, new RegExp(`api\\.${call}`));
 });
 
+test("extra options keep payment methods behind one compact checkout action", async () => {
+  const services = await readFile(new URL("./pages/Services.tsx", import.meta.url), "utf8");
+  const tariffs = await readFile(new URL("./pages/Tariffs.tsx", import.meta.url), "utf8");
+  assert.match(services, /function OptionPaymentDialog/);
+  assert.match(services, /Перейти к оплате/);
+  assert.doesNotMatch(services, /\(config\?\.plategaMethods \?\? \[\]\)\.map/);
+  assert.match(tariffs, /config\?\.sellOptions\?\.some/);
+});
+
 test("keys tolerate empty application configuration", async () => {
   const keys = await readFile(new URL("./pages/Keys.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(keys, /clientApps\[0\]\.steps/);

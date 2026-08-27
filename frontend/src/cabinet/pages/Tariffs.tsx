@@ -800,7 +800,7 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
 /* ---------------- Страница ---------------- */
 
 export default function Tariffs() {
-  const { tariffGroups } = useApp();
+  const { config, tariffGroups } = useApp();
   const [selected, setSelected] = useState<TariffPlan | null>(null);
   const firstGroupId = tariffGroups[0]?.id;
   const [openGroups, setOpenGroups] = useState<string[]>([]);
@@ -843,7 +843,7 @@ export default function Tariffs() {
         ))}
       </Accordion.Root>
 
-      <ExtraOptions trafficOnly />
+      {config?.sellOptions?.some((option) => option.kind === "traffic") && <ExtraOptions trafficOnly />}
 
       <PlanDialog plan={selected} open={selected !== null} onOpenChange={(v) => !v && setSelected(null)} />
     </div>

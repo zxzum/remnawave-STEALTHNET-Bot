@@ -27,13 +27,22 @@ type ExtraOptionApplicationPlan = {
 };
 
 type ExtraOptionPayload =
-  | { kind: "traffic"; trafficBytes: number }
+  | { kind: "traffic"; trafficBytes: number; trafficMode?: TrafficOptionMode }
   | { kind: "devices"; deviceCount: number }
   | { kind: "servers"; squadUuid: string; trafficBytes?: number };
 
 export type TrafficOptionPurchaseCheck =
   | { ok: true; subscriptionId: string }
   | { ok: false; status: number; message: string };
+
+export function trafficOptionUsesLocalQuota(
+  mode: TrafficOptionMode | undefined,
+  subscription: { tariff?: { trafficLimitMode?: string | null } | null; trafficQuota?: unknown },
+): boolean {
+  if (mode === "LOCAL_SQUAD") return true;
+  if (mode === "REMNAWAVE") return false;
+  return subscription.tariff?.trafficLimitMode === "LOCAL_SQUAD" || Boolean(subscription.trafficQuota);
+}
 
 /** Validates the target quota and the monthly per-subscription purchase cap. */
 export async function validateTrafficOptionPurchase(
@@ -56,27 +65,22 @@ export async function validateTrafficOptionPurchase(
     select: {
       id: true,
       remnawaveUuid: true,
-      tariff: { select: { trafficLimitMode: true } },
+      tariff: { select: { trafficLimitMode: true, trafficLimitBytes: true } },
       trafficQuota: { select: { id: true } },
     },
   });
   if (!subscription?.remnawaveUuid) return { ok: false, status: 400, message: "Подписка для опции не найдена" };
 
-  const targetMode: TrafficOptionMode = subscription.tariff?.trafficLimitMode === "LOCAL_SQUAD" || subscription.trafficQuota
-    ? "LOCAL_SQUAD"
-    : "REMNAWAVE";
-  if (targetMode === "LOCAL_SQUAD" && !subscription.trafficQuota) {
-    return { ok: false, status: 409, message: "Для подписки не настроен учёт трафика белых списков" };
-  }
   const productMode = product.trafficMode ?? "ANY";
-  if (productMode !== "ANY" && productMode !== targetMode) {
-    return {
-      ok: false,
-      status: 409,
-      message: productMode === "LOCAL_SQUAD"
-        ? "Этот пакет предназначен только для подписок с трафиком белых списков"
-        : "Этот пакет предназначен только для обычных VPN-подписок",
-    };
+  const hasGlobalLimit = typeof subscription.tariff?.trafficLimitBytes === "bigint"
+    ? subscription.tariff.trafficLimitBytes > 0n
+    : Number(subscription.tariff?.trafficLimitBytes ?? 0) > 0;
+  const hasLocalQuota = Boolean(subscription.trafficQuota);
+  if (productMode === "REMNAWAVE" && !hasGlobalLimit) {
+    return { ok: false, status: 409, message: "Для подписки не настроен глобальный лимит Remnawave" };
+  }
+  if (trafficOptionUsesLocalQuota(productMode, subscription) && !hasLocalQuota) {
+    return { ok: false, status: 409, message: "Для подписки не настроен учёт трафика белых списков" };
   }
 
   const now = new Date();
@@ -107,7 +111,10 @@ function parseMetadataExtraOption(metadata: string | null): ExtraOptionPayload |
     if (!extra || typeof extra !== "object") return null;
     const kind = extra.kind as string;
     if (kind === "traffic" && typeof extra.trafficBytes === "number" && extra.trafficBytes > 0) {
-      return { kind: "traffic", trafficBytes: extra.trafficBytes };
+      const trafficMode = extra.trafficMode === "LOCAL_SQUAD" || extra.trafficMode === "REMNAWAVE" || extra.trafficMode === "ANY"
+        ? extra.trafficMode
+        : undefined;
+      return { kind: "traffic", trafficBytes: extra.trafficBytes, ...(trafficMode ? { trafficMode } : {}) };
     }
     if (kind === "devices" && typeof extra.deviceCount === "number" && extra.deviceCount > 0) {
       return { kind: "devices", deviceCount: extra.deviceCount };
@@ -299,8 +306,7 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
     const local: Record<string, number> = {};
     let remote: Record<string, unknown>;
     let trafficGrantBytes: number | undefined;
-    if (claimed.option.kind === "traffic"
-      && (claimed.subscription.tariff?.trafficLimitMode === "LOCAL_SQUAD" || claimed.subscription.trafficQuota)) {
+    if (claimed.option.kind === "traffic" && trafficOptionUsesLocalQuota(claimed.option.trafficMode, claimed.subscription)) {
       const restored = await restoreMeteredSquad(claimed.subscription.id).catch((error) => ({
         ok: false,
         changed: false,

@@ -1,16 +1,17 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
+import * as Dialog from "@radix-ui/react-dialog";
 import {
   Box, CalendarDays, Copy, CreditCard, Gift, Headphones, KeyRound,
   Layers3, MessageCircle, Network, PackagePlus, Send, Server, ShieldCheck,
-  Smartphone, Ticket, Wallet, Wifi, Zap,
+  Smartphone, Ticket, Wallet, Wifi, Zap, X,
   Loader2,
 } from "lucide-react";
 import { useClientAuth } from "@/contexts/client-auth";
 import { api, type PublicSellOption, type TicketMessageDto } from "@/lib/api";
 import { preparePaymentRedirect } from "@/lib/open-payment-url";
-import { resolvePaymentUrl } from "../model";
+import { canBuyTrafficOption, resolvePaymentUrl } from "../model";
 import { useApp } from "../store/AppContext";
 import { cn } from "../lib/cn";
 
@@ -34,13 +35,17 @@ type PurchasePayload = {
   customBuild?: { days: number; devices: number; trafficGb?: number };
 };
 
-function CheckoutActions({
+function OptionPaymentDialog({
+  open,
+  onOpenChange,
   amount,
   currency,
   payload,
   balancePay,
   description,
 }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   amount: number;
   currency: string;
   payload: PurchasePayload;
@@ -52,6 +57,7 @@ function CheckoutActions({
   const navigate = useNavigate();
   const location = useLocation();
   const [loading, setLoading] = useState(false);
+  const plategaMethods = config?.plategaMethods ?? [];
 
   const finishBalance = async () => {
     if (!state.token) return;
@@ -59,6 +65,7 @@ function CheckoutActions({
     try {
       const result = await balancePay();
       toast({ title: result.message, variant: "success" });
+      onOpenChange(false);
       void Promise.all([refreshProfile(), reload()]).catch(() => undefined);
     } catch (cause) {
       toast({ title: "Оплата не прошла", description: cause instanceof Error ? cause.message : undefined, variant: "error" });
@@ -84,12 +91,43 @@ function CheckoutActions({
     }
   };
 
-  return <div className="mt-4 flex flex-col gap-2">
-    <button disabled={loading || user.balance < amount} onClick={finishBalance} className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-orange-500 to-orange-600 p-3.5 text-sm font-bold text-white disabled:opacity-40">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wallet className="h-4 w-4" />}<span className="flex-1 text-left">{loading ? "Оплата…" : "С баланса"}</span><span>{money(user.balance, currency)}</span></button>
-    {(config?.plategaMethods ?? []).map((method) => <button key={method.id} disabled={loading || !state.token} onClick={() => external("Platega", () => api.clientCreatePlategaPayment(state.token!, { ...payload, paymentMethod: method.id, description }))} className="btn-primary px-4 py-3 text-sm">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />} {loading ? "Оплата…" : `Platega · ${method.label}`}</button>)}
-    {config?.cryptopayEnabled && <button disabled={loading || !state.token} onClick={() => external("Crypto Bot", () => api.cryptopayCreatePayment(state.token!, payload))} className="btn-ghost px-4 py-3 text-sm">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />} {loading ? "Оплата…" : "Crypto Bot"}</button>}
-    {config?.rollypayEnabled && currency.toUpperCase() === "RUB" && <button disabled={loading || !state.token} onClick={() => external("RollyPay", () => api.rollypayCreatePayment(state.token!, { ...payload, currency }))} className="btn-ghost px-4 py-3 text-sm">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />} {loading ? "Оплата…" : "RollyPay"}</button>}
-  </div>;
+  return <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Portal>
+      <Dialog.Overlay className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" />
+      <Dialog.Content className="fixed top-1/2 left-1/2 z-50 w-[min(92vw,30rem)] -translate-x-1/2 -translate-y-1/2 rounded-3xl border border-white/10 bg-slate-950 p-5 shadow-2xl focus:outline-none">
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1"><Dialog.Title className="text-lg font-extrabold">Выберите способ оплаты</Dialog.Title><Dialog.Description className="mt-1 text-sm text-fog-500">{description} · {money(amount, currency)}</Dialog.Description></div>
+          <Dialog.Close asChild><button type="button" aria-label="Закрыть" className="rounded-xl p-2 text-fog-400 hover:bg-white/8 hover:text-white"><X className="h-4 w-4" /></button></Dialog.Close>
+        </div>
+        <div className="mt-5 flex flex-col gap-2">
+          {user.balance > 0 && <button disabled={loading || user.balance < amount} onClick={finishBalance} className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-orange-500 to-orange-600 p-3.5 text-sm font-bold text-white disabled:opacity-40">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wallet className="h-4 w-4" />}<span className="flex-1 text-left">{loading ? "Оплата…" : "С баланса"}</span><span>{money(user.balance, currency)}</span></button>}
+          {plategaMethods.map((method) => <button key={method.id} disabled={loading || !state.token} onClick={() => external("Platega", () => api.clientCreatePlategaPayment(state.token!, { ...payload, paymentMethod: method.id, description }))} className="btn-primary px-4 py-3 text-sm">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />} {loading ? "Оплата…" : `Platega · ${method.label}`}</button>)}
+          {config?.cryptopayEnabled && <button disabled={loading || !state.token} onClick={() => external("Crypto Bot", () => api.cryptopayCreatePayment(state.token!, payload))} className="btn-ghost px-4 py-3 text-sm">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />} {loading ? "Оплата…" : "Crypto Bot"}</button>}
+          {config?.rollypayEnabled && currency.toUpperCase() === "RUB" && <button disabled={loading || !state.token} onClick={() => external("RollyPay", () => api.rollypayCreatePayment(state.token!, { ...payload, currency }))} className="btn-ghost px-4 py-3 text-sm">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />} {loading ? "Оплата…" : "RollyPay"}</button>}
+        </div>
+      </Dialog.Content>
+    </Dialog.Portal>
+  </Dialog.Root>;
+}
+
+function CheckoutActions({
+  amount,
+  currency,
+  payload,
+  balancePay,
+  description,
+}: {
+  amount: number;
+  currency: string;
+  payload: PurchasePayload;
+  balancePay: () => Promise<{ message: string }>;
+  description: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return <>
+    <button type="button" onClick={() => setOpen(true)} className="btn-primary mt-3 w-full justify-center px-4 py-3 text-sm">Перейти к оплате · {money(amount, currency)}</button>
+    <OptionPaymentDialog open={open} onOpenChange={setOpen} amount={amount} currency={currency} payload={payload} balancePay={balancePay} description={description} />
+  </>;
 }
 
 function optionDescription(option: PublicSellOption) {
@@ -105,13 +143,12 @@ export function ExtraOptions({ trafficOnly = false }: { trafficOnly?: boolean } 
   const targetSubscription = subscriptions.find((item) => item.id === target) ?? subscriptions[0];
   const options = (config?.sellOptions ?? []).filter((option) => {
     if (trafficOnly && option.kind !== "traffic") return false;
-    if (option.kind !== "traffic" || !option.trafficMode || option.trafficMode === "ANY") return true;
-    return option.trafficMode === targetSubscription?.trafficLimitMode;
+    return option.kind !== "traffic" || canBuyTrafficOption(option, targetSubscription);
   });
   useEffect(() => { if (!subscriptions.some((item) => item.id === target)) setTarget(subscriptions[0]?.id ?? ""); }, [subscriptions, target]);
   return <div className="flex flex-col gap-5"><PageTitle icon={PackagePlus} title={trafficOnly ? "Докупить трафик" : "Дополнительные опции"} subtitle={trafficOnly ? "Пакеты трафика для выбранной подписки." : "Трафик, устройства и серверы для выбранной подписки."} />
     {subscriptions.length > 1 && <select value={target} onChange={(event) => setTarget(event.target.value)} className="input-glass"><option value="">Выберите подписку</option>{subscriptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{options.map((option) => <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} key={`${option.kind}:${option.id}`} className="glass rounded-4xl p-5"><div className="icon-tile h-11 w-11 rounded-xl">{option.kind === "traffic" ? <Wifi className="h-5 w-5" /> : option.kind === "devices" ? <Smartphone className="h-5 w-5" /> : <Server className="h-5 w-5" />}</div><h2 className="mt-4 text-lg font-extrabold">{option.name}</h2><p className="mt-1 text-sm text-fog-500">{optionDescription(option)}</p><p className="mt-4 text-2xl font-extrabold">{money(option.price, option.currency)}</p><CheckoutActions amount={option.price} currency={option.currency} description={option.name} payload={{ extraOption: { kind: option.kind, productId: option.id, targetSubscriptionId: target || undefined } }} balancePay={() => api.clientPayOptionByBalance(state.token!, { extraOption: { kind: option.kind, productId: option.id }, targetSubscriptionId: target || undefined })} /></motion.section>)}</div>
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{options.map((option) => <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} key={`${option.kind}:${option.id}`} className="glass-inset rounded-2xl p-4"><div className="flex items-center gap-3"><div className="icon-tile h-10 w-10 shrink-0 rounded-xl">{option.kind === "traffic" ? <Wifi className="h-4 w-4" /> : option.kind === "devices" ? <Smartphone className="h-4 w-4" /> : <Server className="h-4 w-4" />}</div><div className="min-w-0 flex-1"><h2 className="truncate text-base font-extrabold">{option.name}</h2><p className="mt-0.5 text-xs text-fog-500">{optionDescription(option)}</p></div><p className="shrink-0 text-lg font-extrabold">{money(option.price, option.currency)}</p></div><CheckoutActions amount={option.price} currency={option.currency} description={option.name} payload={{ extraOption: { kind: option.kind, productId: option.id, targetSubscriptionId: target || undefined } }} balancePay={() => api.clientPayOptionByBalance(state.token!, { extraOption: { kind: option.kind, productId: option.id }, targetSubscriptionId: target || undefined })} /></motion.section>)}</div>
     {config && options.length === 0 && <div className="glass rounded-4xl p-7 text-center text-fog-500">Дополнительные опции сейчас не продаются.</div>}
   </div>;
 }

@@ -209,7 +209,14 @@ test("balance refund eligibility stops exactly at durable PENDING", () => {
   assert.equal(service.canRefundExtraOptionFailure({ ok: true, outcome: "QUEUED" }), false);
 });
 
-test("traffic package validation enforces the subscription mode and monthly cap", async () => {
+test("traffic option mode selects local quota only when requested or legacy-compatible", () => {
+  assert.equal(service.trafficOptionUsesLocalQuota("LOCAL_SQUAD", { tariff: { trafficLimitMode: "REMNAWAVE" } }), true);
+  assert.equal(service.trafficOptionUsesLocalQuota("REMNAWAVE", { tariff: { trafficLimitMode: "LOCAL_SQUAD" }, trafficQuota: {} }), false);
+  assert.equal(service.trafficOptionUsesLocalQuota("ANY", { tariff: { trafficLimitMode: "LOCAL_SQUAD" } }), true);
+  assert.equal(service.trafficOptionUsesLocalQuota(undefined, { trafficQuota: {} }), true);
+});
+
+test("traffic package validation checks each requested limit and monthly cap", async () => {
   const subscriptionDelegate = prisma.subscription as unknown as Record<string, unknown>;
   const paymentDelegate = prisma.payment as unknown as Record<string, unknown>;
   const originalFindFirst = subscriptionDelegate.findFirst;
@@ -217,17 +224,40 @@ test("traffic package validation enforces the subscription mode and monthly cap"
   subscriptionDelegate.findFirst = async () => ({
     id: "sub-1",
     remnawaveUuid: "uuid-1",
-    tariff: { trafficLimitMode: "LOCAL_SQUAD" },
+    tariff: { trafficLimitMode: "LOCAL_SQUAD", trafficLimitBytes: 1000n },
     trafficQuota: { id: "quota-1" },
   });
   paymentDelegate.findMany = async () => [];
   try {
-    const wrongMode = await service.validateTrafficOptionPurchase("client-1", "sub-1", { trafficGb: 50, trafficMode: "REMNAWAVE" });
-    assert.equal(wrongMode.ok, false);
-    if (!wrongMode.ok) assert.equal(wrongMode.status, 409);
+    const remnawave = await service.validateTrafficOptionPurchase("client-1", "sub-1", { trafficGb: 50, trafficMode: "REMNAWAVE" });
+    assert.deepEqual(remnawave, { ok: true, subscriptionId: "sub-1" });
 
     const allowed = await service.validateTrafficOptionPurchase("client-1", "sub-1", { trafficGb: 50, trafficMode: "LOCAL_SQUAD" });
     assert.deepEqual(allowed, { ok: true, subscriptionId: "sub-1" });
+
+    subscriptionDelegate.findFirst = async () => ({
+      id: "sub-1",
+      remnawaveUuid: "uuid-1",
+      tariff: { trafficLimitMode: "REMNAWAVE", trafficLimitBytes: null },
+      trafficQuota: null,
+    });
+    const incompatible = await service.validateTrafficOptionPurchase("client-1", "sub-1", { trafficGb: 50, trafficMode: "REMNAWAVE" });
+    assert.equal(incompatible.ok, false);
+    if (!incompatible.ok) assert.equal(incompatible.status, 409);
+    subscriptionDelegate.findFirst = async () => ({
+      id: "sub-1",
+      remnawaveUuid: "uuid-1",
+      tariff: { trafficLimitMode: "LOCAL_SQUAD", trafficLimitBytes: null },
+      trafficQuota: null,
+    });
+    const brokenLegacyLocal = await service.validateTrafficOptionPurchase("client-1", "sub-1", { trafficGb: 50, trafficMode: "ANY" });
+    assert.equal(brokenLegacyLocal.ok, false);
+    subscriptionDelegate.findFirst = async () => ({
+      id: "sub-1",
+      remnawaveUuid: "uuid-1",
+      tariff: { trafficLimitMode: "LOCAL_SQUAD", trafficLimitBytes: 1000n },
+      trafficQuota: { id: "quota-1" },
+    });
 
     paymentDelegate.findMany = async () => [{
       subscriptionId: "sub-1",

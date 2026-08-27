@@ -387,6 +387,17 @@ export function quoteTariff(plan: TariffPlan, days: number, extraDevices: number
   return { base, extras, total: Math.round((base + extras) * 100) / 100, discountPercent };
 }
 
+export function canBuyTrafficOption(
+  option: { trafficMode?: "LOCAL_SQUAD" | "REMNAWAVE" | "ANY" },
+  subscription: Pick<CabinetSubscription, "trafficLimitGB" | "whitelistGB" | "trafficLimitMode"> | null | undefined,
+): boolean {
+  const mode = option.trafficMode ?? "ANY";
+  if (mode === "ANY") return true;
+  if (!subscription) return false;
+  if (mode === "REMNAWAVE") return subscription.trafficLimitGB !== null && subscription.trafficLimitGB > 0;
+  return subscription.trafficLimitMode === "LOCAL_SQUAD" || subscription.whitelistGB !== null;
+}
+
 export function resolvePaymentUrl(urls: PaymentUrls, inTelegram: boolean): string | null {
   const candidates = [inTelegram ? urls.miniAppPayUrl : urls.webAppPayUrl, urls.paymentUrl, urls.payUrl, urls.webAppPayUrl];
   for (const candidate of candidates) {
