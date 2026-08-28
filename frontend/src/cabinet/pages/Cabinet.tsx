@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Gift, KeyRound, ShoppingBag, Smartphone, ChevronRight, Monitor, Send, Package, PackagePlus, RefreshCw } from "lucide-react";
+import { Gift, KeyRound, ShoppingBag, Smartphone, ChevronRight, Monitor, Send, Package, Gauge, Zap, Layers } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import { useClientAuth } from "@/contexts/client-auth";
 import { TrialsPickerDialog } from "@/components/cabinet/trials-picker-dialog";
@@ -380,35 +380,36 @@ export default function Cabinet() {
             transition={{ delay: 0.3, duration: 0.4 }}
           >
             <h3 className="text-base font-extrabold">Быстрые действия</h3>
+            {/* Лестница акцентов из референса: primary → secondary → outline → ghost, контент по центру */}
             <div className="mt-4 flex flex-col gap-2.5">
               <Link
                 to="/cabinet/tariffs"
                 onClick={(event) => { if (renewalPlan) { event.preventDefault(); setRenewOpen(true); } }}
-                className={cn(buttonVariants({ size: "lg" }), "w-full justify-start")}
+                className={cn(buttonVariants({ variant: "primary", size: "lg" }), "w-full")}
               >
-                <RefreshCw />
+                <Zap />
                 Продлить подписку
               </Link>
               {config?.sellOptions?.some((option) => option.kind === "traffic") && (
-                <Link to="/cabinet/tariffs#traffic" className={cn(buttonVariants({ variant: "secondary", size: "md" }), "w-full justify-start")}>
-                  <PackagePlus />
+                <Link to="/cabinet/tariffs#traffic" className={cn(buttonVariants({ variant: "secondary", size: "md" }), "w-full")}>
+                  <Gauge />
                   Докупить трафик
                 </Link>
               )}
-              <Link to={`/cabinet/subscribe?sub=${main.id}`} className={cn(buttonVariants({ variant: "secondary", size: "md" }), "w-full justify-start")}>
+              <Link to={`/cabinet/subscribe?sub=${main.id}`} className={cn(buttonVariants({ variant: "outline", size: "md" }), "w-full")}>
                 <KeyRound />
                 Открыть ключи доступа
               </Link>
+              <Link to="/cabinet/tariffs" className={cn(buttonVariants({ variant: "ghost", size: "md" }), "w-full")}>
+                <Layers />
+                Все тарифы
+              </Link>
               {availableTrials.length > 0 && (
-                <Link to="/cabinet/dashboard?trial=1" className={cn(buttonVariants({ variant: "secondary", size: "md" }), "w-full justify-start")}>
+                <Link to="/cabinet/dashboard?trial=1" className={cn(buttonVariants({ variant: "link", size: "md" }), "w-full")}>
                   <Gift />
                   Активировать пробный период
                 </Link>
               )}
-              <Link to="/cabinet/tariffs" className={cn(buttonVariants({ variant: "secondary", size: "md" }), "w-full justify-start")}>
-                <ShoppingBag />
-                Все тарифы
-              </Link>
             </div>
           </motion.section>
 

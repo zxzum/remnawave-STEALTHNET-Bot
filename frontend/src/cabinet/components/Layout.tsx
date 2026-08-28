@@ -94,12 +94,14 @@ function Sidebar() {
             >
               {({ isActive }) => (
                 <>
-                  {isActive && (
-                    <motion.span
-                      layoutId="nav-pill"
-                      className="absolute left-0 h-6 w-1 rounded-full bg-accent-400 shadow-[0_0_12px_2px_rgba(109,155,255,0.7)]"
-                    />
-                  )}
+                  {/* Плашка статична у каждого пункта — без layoutId, чтобы не летала между ссылками */}
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "absolute left-0 h-6 w-1 rounded-full bg-accent-400 shadow-[0_0_12px_2px_rgba(109,155,255,0.7)] transition-opacity duration-200",
+                      isActive ? "opacity-100" : "opacity-0",
+                    )}
+                  />
                   <Icon className="h-[18px] w-[18px]" strokeWidth={2.2} />
                   {label}
                 </>
@@ -142,12 +144,14 @@ function Sidebar() {
         >
           {({ isActive }) => (
             <>
-              {isActive && (
-                <motion.span
-                  layoutId="nav-pill"
-                  className="absolute left-0 h-6 w-1 rounded-full bg-accent-400 shadow-[0_0_12px_2px_rgba(109,155,255,0.7)]"
-                />
-              )}
+              {/* Та же статичная плашка: проявляется только прозрачностью, без полёта */}
+              <span
+                aria-hidden
+                className={cn(
+                  "absolute left-0 h-6 w-1 rounded-full bg-accent-400 shadow-[0_0_12px_2px_rgba(109,155,255,0.7)] transition-opacity duration-200",
+                  isActive ? "opacity-100" : "opacity-0",
+                )}
+              />
               <UserRound className="h-[18px] w-[18px]" strokeWidth={2.2} />
               Профиль
             </>
