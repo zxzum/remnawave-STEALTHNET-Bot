@@ -311,3 +311,14 @@ body.cabinet-ui-active .bottom-nav-glass {
     animation: none;
   }
 }
+
+/* Все интерактивные элементы — pointer (требование «живого» интерфейса) */
+body.cabinet-ui-active button:not(:disabled),
+body.cabinet-ui-active [role="button"]:not(:disabled),
+body.cabinet-ui-active a,
+body.cabinet-ui-active select,
+body.cabinet-ui-active label:has(> input:not(:disabled)),
+body.cabinet-ui-active summary,
+body.cabinet-ui-active [data-radix-collection-item] {
+  cursor: pointer;
+}
