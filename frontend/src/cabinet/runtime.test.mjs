@@ -256,6 +256,8 @@ test("keeps traffic purchase inline and preserves the approved payment hierarchy
   const paymentMethods = await readFile(new URL("./components/PaymentMethods.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(app, /<Route\s+path="traffic"/);
   assert.match(tariffs, /<ExtraOptions trafficOnly \/>/);
+  assert.match(tariffs, /window\.location\.hash === "#traffic"/);
+  assert.match(tariffs, /getElementById\("traffic"\)\?\.scrollIntoView/);
   assert.match(cabinet, /to="\/cabinet\/tariffs#traffic"/);
   assert.match(cabinet, /className="btn-primary h-14 w-full px-6 text-base"/);
   assert.match(cabinet, /className="btn-ghost h-14 w-full px-6 text-base"/);

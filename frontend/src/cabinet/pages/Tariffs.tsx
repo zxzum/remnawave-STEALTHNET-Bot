@@ -713,6 +713,10 @@ export default function Tariffs() {
     ? [firstGroupId, ...openGroups.filter((id) => id !== firstGroupId)]
     : openGroups;
 
+  useEffect(() => {
+    if (window.location.hash === "#traffic") document.getElementById("traffic")?.scrollIntoView({ block: "start" });
+  }, []);
+
   return (
     <div className="flex flex-col gap-5">
       <div>
