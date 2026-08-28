@@ -223,6 +223,29 @@ test("optional client services use new cabinet screens and production APIs", asy
   ]) assert.match(services, new RegExp(`api\\.${call}`));
 });
 
+test("restores inline traffic purchase without replacing the cabinet layout", async () => {
+  const app = await readFile(new URL("../App.tsx", import.meta.url), "utf8");
+  const cabinet = await readFile(new URL("./pages/Cabinet.tsx", import.meta.url), "utf8");
+  const services = await readFile(new URL("./pages/Services.tsx", import.meta.url), "utf8");
+  const tariffs = await readFile(new URL("./pages/Tariffs.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(app, /<Route\s+path="traffic"/);
+  assert.match(cabinet, /to="\/cabinet\/tariffs#traffic"/);
+  assert.match(services, /activeSubscriptions/);
+  assert.match(services, /canBuyTrafficOption/);
+  assert.match(tariffs, /priceBeforePromo/);
+  assert.match(tariffs, /window\.location\.hash === "#traffic"/);
+  assert.match(tariffs, /<ExtraOptions trafficOnly \/>/);
+});
+
+test("keeps archived tariffs separate while preserving the existing admin row", async () => {
+  const tariffs = await readFile(new URL("../pages/tariffs.tsx", import.meta.url), "utf8");
+  assert.match(tariffs, /splitTariffsByArchive/);
+  assert.match(tariffs, /activeCategories/);
+  assert.match(tariffs, /archivedCategories/);
+  assert.match(tariffs, /Архив тарифов/);
+  assert.match(tariffs, /h-8 w-8 rounded-lg/);
+});
+
 test("keys tolerate empty application configuration", async () => {
   const keys = await readFile(new URL("./pages/Keys.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(keys, /clientApps\[0\]\.steps/);

@@ -29,7 +29,7 @@ import {
 } from "lucide-react";
 import { cn } from "../lib/cn";
 import { useApp } from "../store/AppContext";
-import { quoteTariff, resolvePaymentUrl, type TariffPlan } from "../model";
+import { groupPlategaMethods, quoteTariff, resolvePaymentUrl, type TariffPlan } from "../model";
 import { preparePaymentRedirect } from "@/lib/open-payment-url";
 import { ExtraOptions } from "./Services";
 
@@ -260,11 +260,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
   const payCryptoBot = () => state.token && openPayment("Crypto Bot", () => api.cryptopayCreatePayment(state.token!, purchasePayload));
   const payRollyPay = () => state.token && openPayment("RollyPay", () => api.rollypayCreatePayment(state.token!, purchasePayload));
   const plategaMethods = config?.plategaMethods ?? [];
-  const sbpMethod = plategaMethods.find((method) => /сбп|sbp|qr/i.test(method.label));
-  const cardMethod = plategaMethods.find((method) => /карт|card/i.test(method.label));
-  const cryptoMethod = plategaMethods.find((method) => /крип|crypto/i.test(method.label));
-  const namedMethodIds = new Set([sbpMethod?.id, cardMethod?.id, cryptoMethod?.id]);
-  const otherPlategaMethods = plategaMethods.filter((method) => !namedMethodIds.has(method.id));
+  const { sbp: sbpMethod, card: cardMethod, crypto: cryptoMethod, other: otherPlategaMethods } = groupPlategaMethods(plategaMethods);
 
   return (
     <Dialog.Root
@@ -394,7 +390,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                       </div>
                       <div className="mt-1.5 flex justify-between text-sm">
                         <span className="text-fog-500">Тариф ({totalDevices} устр)</span>
-                        <span className="font-bold">{formatMoney(basePrice, plan.currency)}</span>
+                        <span className="font-bold">{formatMoney(priceBeforePromo, plan.currency)}</span>
                       </div>
                       {conversion?.willConvert && conversion.convertedDays !== undefined && (
                         <div className="mt-1.5 flex justify-between text-sm">
@@ -406,7 +402,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                       <div className="flex items-baseline justify-between">
                         <span className="font-bold">К оплате</span>
                         <span className="bg-gradient-to-r from-violet-glow to-accent-400 bg-clip-text text-3xl font-extrabold text-transparent">
-                          {formatMoney(basePrice, plan.currency)}
+                          {formatMoney(price, plan.currency)}
                         </span>
                       </div>
                     </div>
@@ -436,7 +432,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                       onClick={() => setStep("checkout")}
                       className="btn-primary mt-5 w-full px-6 py-4 text-base disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      Перейти к оплате · {formatMoney(basePrice, plan.currency)}
+                      Перейти к оплате · {formatMoney(priceBeforePromo, plan.currency)}
                     </button>
                   </div>
                 </motion.div>
@@ -800,13 +796,17 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
 /* ---------------- Страница ---------------- */
 
 export default function Tariffs() {
-  const { tariffGroups } = useApp();
+  const { config, tariffGroups } = useApp();
   const [selected, setSelected] = useState<TariffPlan | null>(null);
   const firstGroupId = tariffGroups[0]?.id;
   const [openGroups, setOpenGroups] = useState<string[]>([]);
   const visibleGroups = firstGroupId
     ? [firstGroupId, ...openGroups.filter((id) => id !== firstGroupId)]
     : openGroups;
+
+  useEffect(() => {
+    if (window.location.hash === "#traffic") document.getElementById("traffic")?.scrollIntoView({ block: "start" });
+  }, []);
 
   return (
     <div className="flex flex-col gap-5">
@@ -843,7 +843,11 @@ export default function Tariffs() {
         ))}
       </Accordion.Root>
 
-      <ExtraOptions trafficOnly />
+      {config?.sellOptions?.some((option) => option.kind === "traffic") && (
+        <section id="traffic" className="scroll-mt-5">
+          <ExtraOptions trafficOnly />
+        </section>
+      )}
 
       <PlanDialog plan={selected} open={selected !== null} onOpenChange={(v) => !v && setSelected(null)} />
     </div>

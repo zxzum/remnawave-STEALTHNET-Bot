@@ -7,12 +7,17 @@ import {
   groupDevicesBySubscription,
   mapSubscription,
   mapTariffGroups,
+  canBuyTrafficOption,
+  groupPlategaMethods,
+  trafficOptionLabel,
+  trafficOptionUnitPrice,
   quoteTariff,
   resolveOptionalNav,
   resolvePaymentUrl,
   isExpiredTrial,
   shouldOfferTelegramLink,
 } from "./model.ts";
+import { formatTariffOptionLabel, splitTariffsByArchive } from "../lib/tariff-label.ts";
 
 test("prefers Crypto Bot Mini App URL only inside Telegram", () => {
   const urls = {
@@ -112,6 +117,54 @@ test("offers Telegram linking only to authenticated unlinked clients", () => {
 test("shows overflow only for enabled optional services", () => {
   assert.deepEqual(resolveOptionalNav({ showProxyEnabled: true }), ["proxy"]);
   assert.deepEqual(resolveOptionalNav({}), []);
+});
+
+test("shows traffic packages only for limits they can extend", () => {
+  const dual = { trafficLimitGB: 100, whitelistGB: 50, trafficLimitMode: "LOCAL_SQUAD" };
+  const localOnly = { trafficLimitGB: null, whitelistGB: 50, trafficLimitMode: "LOCAL_SQUAD" };
+  const localUnlimited = { trafficLimitGB: null, whitelistGB: null, trafficLimitMode: "LOCAL_SQUAD" };
+  const remnawaveOnly = { trafficLimitGB: 100, whitelistGB: null, trafficLimitMode: "REMNAWAVE" };
+  assert.equal(canBuyTrafficOption({ trafficMode: "REMNAWAVE" }, dual), true);
+  assert.equal(canBuyTrafficOption({ trafficMode: "LOCAL_SQUAD" }, dual), true);
+  assert.equal(canBuyTrafficOption({ trafficMode: "REMNAWAVE" }, localOnly), false);
+  assert.equal(canBuyTrafficOption({ trafficMode: "LOCAL_SQUAD" }, localUnlimited), true);
+  assert.equal(canBuyTrafficOption({ trafficMode: "LOCAL_SQUAD" }, remnawaveOnly), false);
+  assert.equal(canBuyTrafficOption({ trafficMode: "ANY" }, null), true);
+});
+
+test("groups payment methods without duplicating a method", () => {
+  const methods = [
+    { id: 1, label: "СБП" },
+    { id: 2, label: "Карты РФ" },
+    { id: 3, label: "Криптовалюта" },
+    { id: 4, label: "Другой способ" },
+  ];
+  const grouped = groupPlategaMethods(methods);
+  assert.equal(grouped.sbp?.id, 1);
+  assert.equal(grouped.card?.id, 2);
+  assert.equal(grouped.crypto?.id, 3);
+  assert.deepEqual(grouped.other, [methods[3]]);
+});
+
+test("explains traffic package scope and unit price", () => {
+  assert.equal(trafficOptionLabel("LOCAL_SQUAD"), "Белые списки");
+  assert.equal(trafficOptionLabel("REMNAWAVE"), "Обычный интернет");
+  assert.equal(trafficOptionLabel("ANY"), "Для любой подписки");
+  assert.equal(trafficOptionUnitPrice(100, 50), 0.5);
+});
+
+test("splits archived tariffs into a separate admin section", () => {
+  const active = { id: "active", name: "Активный", archivedAt: null };
+  const archived = { id: "archived", name: "Старый", archivedAt: "2026-08-01T00:00:00.000Z" };
+  assert.deepEqual(splitTariffsByArchive([active, archived]), {
+    active: [active],
+    archived: [archived],
+  });
+});
+
+test("marks archived tariffs in selection labels", () => {
+  assert.equal(formatTariffOptionLabel({ name: "Обычный ВПН", archivedAt: null }), "Обычный ВПН");
+  assert.equal(formatTariffOptionLabel({ name: "Обычный ВПН", archivedAt: "2026-08-01T00:00:00.000Z" }), "Обычный ВПН (архив)");
 });
 
 test("maps the authenticated client without inventing identity data", () => {

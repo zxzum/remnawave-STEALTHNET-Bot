@@ -19,6 +19,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { fmtMsk, fmtMskShort, fmtMskDate } from "@/lib/datetime";
+import { formatTariffOptionLabel } from "@/lib/tariff-label";
 import {
   Search,
   RefreshCw,
@@ -1259,7 +1260,7 @@ export function AdminSecondarySubscriptionsPage() {
                       <option value="" disabled className="bg-background text-muted-foreground">Выберите тариф</option>
                       {createTariffs.map((t) => (
                         <option key={t.id} value={t.id} className="bg-background text-foreground py-2">
-                          {t.name} ({t.durationDays}д · {t.price} {t.currency})
+                          {formatTariffOptionLabel(t)} ({t.durationDays}д · {t.price} {t.currency})
                         </option>
                       ))}
                     </select>

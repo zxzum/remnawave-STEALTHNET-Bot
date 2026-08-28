@@ -57,6 +57,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { splitTariffsByArchive } from "@/lib/tariff-label";
 
 const BYTES_PER_GB = 1024 * 1024 * 1024;
 
@@ -755,6 +756,7 @@ export function TariffsPage() {
     | { kind: "edit"; category: TariffCategoryWithTariffs; tariff: TariffRecord }
     | null
   >(null);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const load = async () => {
@@ -820,13 +822,28 @@ export function TariffsPage() {
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
 
-  const handleCategoryDragEnd = async (event: DragEndEvent) => {
+  const activeCategories = categories.flatMap((category) => {
+    const tariffs = splitTariffsByArchive(category.tariffs).active;
+    return tariffs.length > 0 || category.tariffs.length === 0 ? [{ ...category, tariffs }] : [];
+  });
+  const archivedCategories = categories
+    .map((category) => ({ ...category, tariffs: splitTariffsByArchive(category.tariffs).archived }))
+    .filter((category) => category.tariffs.length > 0);
+  const archivedCount = archivedCategories.reduce((total, category) => total + category.tariffs.length, 0);
+
+  const handleCategoryDragEnd = async (event: DragEndEvent, visibleCategories = activeCategories) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const oldIndex = categories.findIndex((c) => c.id === active.id);
-    const newIndex = categories.findIndex((c) => c.id === over.id);
+    const oldIndex = visibleCategories.findIndex((c) => c.id === active.id);
+    const newIndex = visibleCategories.findIndex((c) => c.id === over.id);
     if (oldIndex === -1 || newIndex === -1) return;
-    const reordered = arrayMove(categories, oldIndex, newIndex);
+    const reorderedVisible = arrayMove(visibleCategories, oldIndex, newIndex);
+    const visibleIds = new Set(visibleCategories.map((category) => category.id));
+    const categoriesById = new Map(categories.map((category) => [category.id, category]));
+    let visibleIndex = 0;
+    const reordered = categories.map((category) => visibleIds.has(category.id)
+      ? categoriesById.get(reorderedVisible[visibleIndex++].id) ?? category
+      : category);
     setCategories(reordered);
     if (!token) return;
     try {
@@ -854,7 +871,9 @@ export function TariffsPage() {
     const reordered = arrayMove(tariffs, oldIndex, newIndex);
     setCategories((prev) =>
       prev.map((c) =>
-        c.id === category.id ? { ...c, tariffs: reordered } : c
+        c.id === category.id
+          ? { ...c, tariffs: [...reordered, ...splitTariffsByArchive(c.tariffs).archived] }
+          : c
       )
     );
     if (!token) return;
@@ -951,31 +970,31 @@ export function TariffsPage() {
         </Card>
       )}
 
-      {categories.length === 0 && !loading ? (
+      {activeCategories.length === 0 && !loading ? (
         <Card className="bg-background/60 backdrop-blur-3xl border-white/10 rounded-[2rem] py-12 shadow-xl flex flex-col items-center text-center">
           <div className="h-16 w-16 rounded-full bg-white/5 flex items-center justify-center mb-3 border border-white/10">
             <Layers className="h-8 w-8 text-muted-foreground" />
           </div>
           <p className="text-muted-foreground mb-4 max-w-md px-6">
-            Нет категорий. Создайте категорию тарифов, затем добавьте в неё тарифы (1–360 дней, сквады, лимиты).
+            {archivedCategories.length > 0 ? "Все тарифы сейчас в архиве. Верните нужный тариф в продажу ниже." : "Нет категорий. Создайте категорию тарифов, затем добавьте в неё тарифы (1–360 дней, сквады, лимиты)."}
           </p>
           <Button onClick={() => setCategoryModal("add")} className="gap-1.5 rounded-xl">
             <Plus className="h-4 w-4" />
             Создать категорию
           </Button>
         </Card>
-      ) : (
+      ) : activeCategories.length > 0 ? (
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
           onDragEnd={handleCategoryDragEnd}
         >
           <SortableContext
-            items={categories.map((c) => c.id)}
+            items={activeCategories.map((c) => c.id)}
             strategy={verticalListSortingStrategy}
           >
             <div className="space-y-4">
-              {categories.map((cat, idx) => (
+              {activeCategories.map((cat, idx) => (
                 <motion.div
                   key={cat.id}
                   initial={{ opacity: 0, y: 8 }}
@@ -999,6 +1018,66 @@ export function TariffsPage() {
             </div>
           </SortableContext>
         </DndContext>
+      ) : null}
+
+      {archivedCategories.length > 0 && (
+        <Card className="bg-background/60 backdrop-blur-3xl border-amber-500/20 rounded-[2rem] shadow-xl overflow-hidden">
+          <button
+            type="button"
+            aria-expanded={archiveOpen}
+            onClick={() => setArchiveOpen((open) => !open)}
+            className="flex w-full items-center gap-3 px-5 py-4 text-left transition-colors hover:bg-foreground/[0.02]"
+          >
+            <div className="h-9 w-9 shrink-0 rounded-2xl bg-gradient-to-br from-amber-500/20 to-amber-500/5 border border-amber-500/20 flex items-center justify-center shadow-inner text-amber-500">
+              <Archive className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="font-bold">Архив тарифов</p>
+              <p className="mt-1 text-xs text-muted-foreground">{archivedCount} {archivedCount === 1 ? "тариф скрыт" : "тарифов скрыто"} от клиентов</p>
+            </div>
+            <ChevronDown className={cn("h-5 w-5 shrink-0 text-muted-foreground transition-transform", archiveOpen && "rotate-180")} />
+          </button>
+          {archiveOpen && (
+            <div className="space-y-4 border-t border-white/5 p-4">
+              {archivedCategories.map((category) => {
+                const originalCategory = categories.find((item) => item.id === category.id) ?? category;
+                return (
+                  <div key={category.id} className="rounded-2xl border border-white/10 bg-foreground/[0.02] p-3">
+                    <div className="mb-3 flex items-center gap-2 px-1">
+                      <FolderOpen className="h-4 w-4 text-amber-500" />
+                      <span className="font-semibold">{category.name}</span>
+                      <span className="text-xs text-muted-foreground">({category.tariffs.length})</span>
+                      <Button size="sm" variant="outline" className="ml-auto gap-1.5 rounded-xl" onClick={() => setTariffModal({ kind: "add", categoryId: category.id })}>
+                        <Plus className="h-3.5 w-3.5" /> Тариф
+                      </Button>
+                    </div>
+                    <div className="space-y-2">
+                      {category.tariffs.map((tariff) => (
+                        <div key={tariff.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-foreground/[0.03] px-4 py-3">
+                          <div className="min-w-0 flex-1">
+                            <p className="font-semibold">{tariff.name}</p>
+                            {tariff.description?.trim() && <p className="mt-1 text-xs text-muted-foreground">{tariff.description}</p>}
+                            <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                              <span className="rounded-full border border-white/10 px-2 py-0.5">{tariff.durationDays} дн.</span>
+                              <span className="font-semibold text-emerald-500 dark:text-emerald-400">{formatPrice(tariff.price ?? 0, tariff.currency ?? "usd")}</span>
+                              <span className="rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5">Remnawave: {formatTraffic(tariff.trafficLimitBytes)}</span>
+                              {tariff.trafficLimitMode === "LOCAL_SQUAD" && <span className="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5">Локально: {formatTraffic(tariff.localTrafficLimitBytes)}</span>}
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1">
+                            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={() => handleArchiveTariff(tariff)} title="Вернуть в продажу" aria-label="Вернуть в продажу"><ArchiveRestore className="h-3.5 w-3.5" /></Button>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={() => setTariffModal({ kind: "edit", category: originalCategory, tariff })} title="Редактировать" aria-label="Редактировать"><Pencil className="h-3.5 w-3.5" /></Button>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-red-500 dark:text-red-400 hover:bg-red-500/10" onClick={() => handleDeleteTariff(tariff.id)} title="Удалить" aria-label="Удалить"><Trash2 className="h-3.5 w-3.5" /></Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
       )}
 
       {/* Модалка категории */}
