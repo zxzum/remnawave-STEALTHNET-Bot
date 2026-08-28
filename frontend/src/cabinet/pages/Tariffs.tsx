@@ -2,14 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import * as Accordion from "@radix-ui/react-accordion";
-import * as Dialog from "@radix-ui/react-dialog";
-import * as Checkbox from "@radix-ui/react-checkbox";
 import { useClientAuth } from "@/contexts/client-auth";
 import { api, type PublicConfig, type TariffConversionPreview } from "@/lib/api";
+import { Modal, ModalDescription, ModalTitle } from "../components/ui/modal";
+import { OptionCard } from "../components/ui/option-card";
+import { Stepper } from "../components/ui/stepper";
+import { Checkbox } from "../components/ui/checkbox";
+import { Button } from "../components/ui/button";
+import { prefetchConversionPreview, prefetchPublicConfig } from "../components/ui/prefetch";
 import {
   Box,
   ChevronDown,
-  X,
   CalendarDays,
   Wifi,
   Signal,
@@ -22,7 +25,6 @@ import {
   Wallet,
   Loader2,
   Zap,
-  Sparkles,
   Flame,
   QrCode,
   Bitcoin,
@@ -70,7 +72,8 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
   const [selectedTrialId, setSelectedTrialId] = useState<string | null>(null);
   const [pendingPaymentId, setPendingPaymentId] = useState<string | null>(null);
 
-  useEffect(() => { if (open) void api.getPublicConfig().then(setConfig).catch(() => undefined); }, [open]);
+  // Методы оплаты греются через кэш prefetch — повторные открытия мгновенные
+  useEffect(() => { if (open) void prefetchPublicConfig().then(setConfig).catch(() => undefined); }, [open]);
   useEffect(() => {
     if (plan?.durationOptions.length) setDays(plan.durationOptions[0].days);
   }, [plan]);
@@ -94,7 +97,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
     }
     let current = true;
     setKeepExistingExtras(true);
-    void api.clientTariffConversionPreview(state.token, {
+    void prefetchConversionPreview(state.token, {
       tariffId: plan.id,
       priceOptionId: selectedOptionId ?? undefined,
     }).then((preview) => {
@@ -263,474 +266,418 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
   const { sbp: sbpMethod, card: cardMethod, crypto: cryptoMethod, other: otherPlategaMethods } = groupPlategaMethods(plategaMethods);
 
   return (
-    <Dialog.Root
+    <Modal
       open={open}
       onOpenChange={(v) => {
         onOpenChange(v);
         if (!v) reset();
       }}
+      className="max-w-lg"
     >
-      <Dialog.Portal>
-        <Dialog.Overlay asChild>
+      <AnimatePresence mode="wait" initial={false}>
+        {step === "config" ? (
           <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="fixed inset-0 z-50 bg-ink-950/70 backdrop-blur-md"
-          />
-        </Dialog.Overlay>
-        <Dialog.Content asChild>
-          <motion.div
-            initial={{ opacity: 0, y: 60, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ type: "spring", stiffness: 300, damping: 30 }}
-            className="glass-strong fixed inset-x-3 bottom-3 z-50 mx-auto flex max-h-[92dvh] max-w-lg flex-col overflow-hidden rounded-4xl sm:inset-x-0 sm:top-1/2 sm:bottom-auto sm:-translate-y-1/2"
+            key="config"
+            initial={{ opacity: 0, x: -24 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -24 }}
+            transition={{ duration: 0.22 }}
+            className="flex min-h-0 flex-col"
           >
-            <AnimatePresence mode="wait" initial={false}>
-              {step === "config" ? (
-                <motion.div
-                  key="config"
-                  initial={{ opacity: 0, x: -24 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -24 }}
-                  transition={{ duration: 0.22 }}
-                  className="flex min-h-0 flex-col"
-                >
-                  {/* header */}
-                  <div className="flex items-start gap-4 p-6 pb-4">
-                    <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl border border-violet-glow/30 bg-violet-glow/12 text-violet-glow">
-                      <Box className="h-6 w-6" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <Dialog.Title className="text-2xl font-extrabold tracking-tight">{plan.name}</Dialog.Title>
-                      <Dialog.Description className="mt-0.5 whitespace-pre-wrap text-xs leading-relaxed text-fog-500">
-                        {plan.emojiLine}
-                      </Dialog.Description>
-                    </div>
-                    <Dialog.Close className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-fog-500 transition-colors hover:bg-white/8 hover:text-white">
-                      <X className="h-5 w-5" />
-                    </Dialog.Close>
-                  </div>
+            {/* header — крестик встроен в Modal */}
+            <div className="flex items-start gap-4 p-6 pb-4">
+              <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl border border-violet-glow/30 bg-violet-glow/12 text-violet-glow">
+                <Box className="h-6 w-6" />
+              </div>
+              <div className="min-w-0 flex-1 pr-10">
+                <ModalTitle className="text-2xl font-extrabold tracking-tight">{plan.name}</ModalTitle>
+                <ModalDescription className="mt-0.5 whitespace-pre-wrap text-xs leading-relaxed text-fog-500">
+                  {plan.emojiLine}
+                </ModalDescription>
+              </div>
+            </div>
 
-                  <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-6 pb-6">
-                    {/* duration */}
-                    <p className="mb-3 flex items-center gap-2 text-xs font-bold tracking-wider text-fog-500 uppercase">
-                      <CalendarDays className="h-3.5 w-3.5" /> Длительность
-                    </p>
-                    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-                      {plan.durationOptions.map((d) => {
-                        const p = durationPrice(plan, d.days, extra);
-                        const selected = days === d.days;
-                        return (
-                          <button
-                            key={d.days}
-                            onClick={() => setDays(d.days)}
-                            className={cn(
-                              "relative rounded-2xl border p-3 text-center transition-all duration-200",
-                              selected
-                                ? "border-accent-400/60 bg-accent-500/15 shadow-neon-blue"
-                                : "border-white/8 bg-white/3 hover:border-white/20",
-                            )}
-                          >
-                            <p className="text-sm font-extrabold">{d.days} дней</p>
-                            <p className="mt-0.5 text-sm font-bold text-fog-300">{formatMoney(p, plan.currency)}</p>
-                            <p className="text-[10px] text-fog-600">{formatMoney(p / d.days, plan.currency)}/день</p>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {/* devices */}
-                    <div className="mt-6 mb-3 flex items-center justify-between">
-                      <p className="flex items-center gap-2 text-xs font-bold tracking-wider text-fog-500 uppercase">
-                        <Smartphone className="h-3.5 w-3.5" /> Доп. устройства
-                      </p>
-                      <span className="text-xs text-fog-500">В тарифе: {plan.baseDevices}</span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2.5">
-                      {Array.from({ length: plan.maxExtraDevices + 1 }, (_, extraCount) => extraCount).map((extraCount) => {
-                        const selected = extra === extraCount;
-                        const extraQuote = quoteTariff(plan, days, extraCount);
-                        const bestValue = extraQuote.discountPercent > 0;
-                        return (
-                          <button
-                            key={extraCount}
-                            onClick={() => setExtra(extraCount)}
-                            className={cn(
-                              "relative rounded-2xl border p-3 text-center transition-all duration-200",
-                              selected
-                                ? "border-violet-glow/60 bg-violet-glow/12 shadow-[0_0_24px_-6px_rgba(176,124,255,0.6)]"
-                                : "border-white/8 bg-white/3 hover:border-white/20",
-                            )}
-                          >
-                            {bestValue && (
-                              <span className="absolute -top-2 -right-1 flex items-center gap-0.5 rounded-full bg-violet-glow px-1.5 py-0.5 text-[9px] font-extrabold text-ink-950">
-                                <Sparkles className="h-2.5 w-2.5" />
-                              </span>
-                            )}
-                            <p className="flex items-center justify-center gap-1 text-sm font-extrabold">
-                              <Smartphone className="h-3.5 w-3.5 text-fog-500" />
-                              {extraCount === 0 ? "Без доп." : `+${extraCount}`}
-                            </p>
-                            <p className="mt-0.5 text-sm font-bold text-fog-300">
-                              +{formatMoney(extraQuote.extras, plan.currency)}
-                            </p>
-                            <p className={cn("text-[10px]", bestValue ? "font-bold text-violet-glow" : "text-fog-600")}>
-                              {bestValue ? `скидка ${extraQuote.discountPercent}%` : `${plan.baseDevices + extraCount} устр.`}
-                            </p>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {/* summary */}
-                    <div className="glass-inset mt-6 rounded-2xl p-4">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-fog-500">Длительность</span>
-                        <span className="font-bold">{days} дней</span>
-                      </div>
-                      <div className="mt-1.5 flex justify-between text-sm">
-                        <span className="text-fog-500">Тариф ({totalDevices} устр)</span>
-                        <span className="font-bold">{formatMoney(priceBeforePromo, plan.currency)}</span>
-                      </div>
-                      {conversion?.willConvert && conversion.convertedDays !== undefined && (
-                        <div className="mt-1.5 flex justify-between text-sm">
-                          <span className="text-fog-500">Добавится конвертацией</span>
-                          <span className="font-bold text-amber-glow">+{conversion.convertedDays} дн.</span>
-                        </div>
-                      )}
-                      <div className="my-3 h-px bg-white/8" />
-                      <div className="flex items-baseline justify-between">
-                        <span className="font-bold">К оплате</span>
-                        <span className="bg-gradient-to-r from-violet-glow to-accent-400 bg-clip-text text-3xl font-extrabold text-transparent">
-                          {formatMoney(price, plan.currency)}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* agreement */}
-                    <label className="mt-4 flex cursor-pointer items-start gap-3 text-xs leading-relaxed text-fog-500">
-                      <Checkbox.Root
-                        checked={agreed}
-                        onCheckedChange={(v) => setAgreed(v === true)}
-                        className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md border border-white/15 bg-white/5 transition-colors data-[state=checked]:border-violet-glow data-[state=checked]:bg-violet-glow data-[state=checked]:text-ink-950"
-                      >
-                        <Checkbox.Indicator>
-                          <Check className="h-3.5 w-3.5" strokeWidth={3.5} />
-                        </Checkbox.Indicator>
-                      </Checkbox.Root>
-                      <span>
-                        Нажимая кнопку «К оплате», я подтверждаю, что ознакомился и согласен с условиями
-                        <span className="mt-1 flex flex-col gap-0.5">
-                          <span className="font-semibold text-fog-300 underline">Публичной оферты</span>
-                          <span className="font-semibold text-fog-300 underline">и Политикой обработки данных</span>
-                        </span>
-                      </span>
-                    </label>
-
-                    <button
-                      disabled={!agreed}
-                      onClick={() => setStep("checkout")}
-                      className="btn-primary mt-5 w-full px-6 py-4 text-base disabled:cursor-not-allowed disabled:opacity-40"
+            <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+              {/* duration */}
+              <p className="mb-2 text-xs font-semibold text-fog-500">Длительность</p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {plan.durationOptions.map((d) => {
+                  const p = durationPrice(plan, d.days, extra);
+                  // В API у опций нет процента скидки — считаем её от цены/день первой (базовой) опции
+                  const baseOption = plan.durationOptions[0];
+                  const discount = Math.round((1 - (d.price / d.days) / (baseOption.price / baseOption.days)) * 100);
+                  return (
+                    <OptionCard
+                      key={d.days}
+                      selected={days === d.days}
+                      badge={discount >= 5 ? `−${discount}%` : undefined}
+                      onClick={() => setDays(d.days)}
                     >
-                      Перейти к оплате · {formatMoney(priceBeforePromo, plan.currency)}
-                    </button>
+                      <p className="text-sm font-extrabold">{d.days} дней</p>
+                      <p className="mt-0.5 text-xs font-bold text-fog-300">{formatMoney(p, plan.currency)}</p>
+                      <p className="text-[10px] text-fog-600">{formatMoney(p / d.days, plan.currency)}/день</p>
+                    </OptionCard>
+                  );
+                })}
+              </div>
+
+              {/* devices */}
+              <div className="mt-4 mb-2 flex items-baseline justify-between">
+                <p className="text-xs font-semibold text-fog-500">Доп. устройства</p>
+                <span className="text-xs text-fog-600">+{formatMoney(plan.pricePerExtraDevice, plan.currency)}/мес за устройство</span>
+              </div>
+              <Stepper
+                label="Дополнительные устройства"
+                value={extra}
+                max={plan.maxExtraDevices}
+                onChange={setExtra}
+                hint={
+                  quote.discountPercent > 0
+                    ? <span className="font-bold text-mint-400">скидка {quote.discountPercent}%</span>
+                    : <span>{totalDevices} устр. всего</span>
+                }
+              />
+
+              {/* summary */}
+              <div className="glass-inset mt-6 rounded-2xl p-4">
+                <div className="flex justify-between text-sm">
+                  <span className="text-fog-500">Длительность</span>
+                  <span className="font-bold">{days} дней</span>
+                </div>
+                <div className="mt-1.5 flex justify-between text-sm">
+                  <span className="text-fog-500">Тариф ({totalDevices} устр)</span>
+                  <span className="font-bold">{formatMoney(priceBeforePromo, plan.currency)}</span>
+                </div>
+                {conversion?.willConvert && conversion.convertedDays !== undefined && (
+                  <div className="mt-1.5 flex justify-between text-sm">
+                    <span className="text-fog-500">Добавится конвертацией</span>
+                    <span className="font-bold text-amber-glow">+{conversion.convertedDays} дн.</span>
                   </div>
-                </motion.div>
-              ) : step === "success" ? (
-                <motion.div
-                  key="success"
-                  initial={{ opacity: 0, scale: 0.94 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="p-7 text-center"
-                >
-                  <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-mint-500/15 text-mint-400">
-                    <Check className="h-8 w-8" strokeWidth={3} />
-                  </div>
-                  <Dialog.Title className="mt-5 text-2xl font-extrabold">Оплата прошла</Dialog.Title>
-                  <Dialog.Description className="mt-2 text-sm text-fog-500">
-                    Подписка уже активирована. Если был пробный период, он автоматически конвертирован.
-                  </Dialog.Description>
-                  <button
-                    onClick={() => { onOpenChange(false); navigate("/cabinet/dashboard?payment=success"); }}
-                    className="btn-primary mt-6 w-full px-6 py-4"
-                  >
-                    Перейти к подписке
-                  </button>
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="checkout"
-                  initial={{ opacity: 0, x: 24 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 24 }}
-                  transition={{ duration: 0.22 }}
-                  className="no-scrollbar min-h-0 overflow-y-auto p-6"
-                >
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => setStep("config")}
-                      className="grid h-9 w-9 place-items-center rounded-xl text-fog-400 transition-colors hover:bg-white/8 hover:text-white"
-                    >
-                      <ArrowLeft className="h-5 w-5" />
-                    </button>
-                    <div>
-                      <Dialog.Title className="text-lg font-extrabold">Оплата тарифа</Dialog.Title>
-                      <Dialog.Description className="text-xs text-fog-500">{plan.name}</Dialog.Description>
-                    </div>
-                  </div>
+                )}
+                <div className="my-3 h-px bg-white/8" />
+                <div className="flex items-baseline justify-between">
+                  <span className="font-bold">К оплате</span>
+                  <span className="bg-gradient-to-r from-violet-glow to-accent-400 bg-clip-text text-2xl font-extrabold text-transparent">
+                    {formatMoney(price, plan.currency)}
+                  </span>
+                </div>
+              </div>
 
-                  {/* total */}
-                  <div className="glass-inset mt-5 rounded-3xl p-5">
-                    <p className="text-sm text-fog-500">Итого к оплате</p>
-                    <p className="mt-1 text-4xl font-extrabold tracking-tight">
-                      {formatMoney(price, plan.currency)}
-                      {discountPercent > 0 && (
-                        <span className="ml-2 align-middle text-base font-bold text-mint-400">−{discountPercent}%</span>
-                      )}
-                    </p>
-                    <div className="mt-4 grid grid-cols-2 gap-2.5">
-                      <div className="flex flex-col justify-center rounded-2xl border border-white/8 bg-white/3 p-3">
-                        <p className="text-[10px] font-bold tracking-wider text-fog-600 uppercase">Срок</p>
-                        <p className="mt-1 flex items-center gap-1.5 text-sm font-bold">
-                          <CalendarDays className="h-4 w-4 text-fog-500" /> {days} дн.
-                        </p>
-                      </div>
-                      <div className="flex flex-col justify-center rounded-2xl border border-white/8 bg-white/3 p-3">
-                        <p className="text-[10px] font-bold tracking-wider text-fog-600 uppercase">Трафик</p>
-                        <p className="mt-1 flex items-center gap-1.5 text-sm font-bold">
-                          <Wifi className="h-4 w-4 text-fog-500" /> {plan.traffic}
-                        </p>
-                      </div>
-                      </div>
-                      {conversion?.willConvert && conversion.convertedDays !== undefined && (
-                        <p className="mt-3 text-xs text-fog-500">В обычной покупке к сроку добавится конвертация: <b className="text-amber-glow">+{conversion.convertedDays} дн.</b></p>
-                      )}
-                    {plan.whitelistGB && (
-                      <span className="chip chip-amber chip-fluid mt-2.5">
-                        <Signal className="h-3.5 w-3.5" /> Белые списки: {plan.whitelistGB.toFixed(0)} ГБ / мес
-                      </span>
-                    )}
-                  </div>
+              {/* agreement */}
+              <label className="mt-4 flex cursor-pointer items-start gap-3 text-xs leading-relaxed text-fog-500">
+                <Checkbox checked={agreed} onCheckedChange={(v) => setAgreed(v === true)} className="mt-0.5" />
+                <span>
+                  Нажимая кнопку «К оплате», я подтверждаю, что ознакомился и согласен с условиями
+                  <span className="mt-1 flex flex-col gap-0.5">
+                    <span className="font-semibold text-fog-300 underline">Публичной оферты</span>
+                    <span className="font-semibold text-fog-300 underline">и Политикой обработки данных</span>
+                  </span>
+                </span>
+              </label>
 
-                  {/* renewal notice */}
-                  {ownedSub && (
-                    <div className="mt-4 flex items-start gap-3 rounded-3xl border border-violet-glow/25 bg-violet-glow/8 p-4">
-                      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-violet-glow/15 text-violet-glow">
-                        <RefreshCw className="h-5 w-5" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-bold">Этот тариф у вас уже есть — подписка будет продлена</p>
-                        <p className="mt-1 text-xs leading-relaxed text-fog-500">
-                          Вторая подписка не создастся — дни просто сложатся: остаток {ownedSub.daysLeft} дней + покупка{" "}
-                          {days} дней = <span className="font-bold text-violet-glow">{ownedSub.daysLeft + days} дней</span>.
-                          Устройства и серверы останутся как есть.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {conversion?.willConvert && conversion.mode !== "extend" && (
-                    <div className="mt-4 rounded-3xl border border-amber-glow/25 bg-amber-glow/8 p-4">
-                      <p className="text-sm font-bold">
-                        {conversion.mode === "replace" ? "Текущая подписка будет заменена" : "Остаток подписки будет пересчитан"}
-                      </p>
-                      <p className="mt-1 text-xs leading-relaxed text-fog-500">
-                        {conversion.subscription?.tariffName && <>Текущий тариф: {conversion.subscription.tariffName}. </>}
-                        {conversion.remainingDays !== undefined && <>Остаток: {conversion.remainingDays} дн. </>}
-                        {conversion.convertedDays !== undefined && <>После пересчёта: {conversion.convertedDays} дн. </>}
-                        {conversion.totalDays !== undefined && <>Итого после покупки: <b className="text-amber-glow">{conversion.totalDays} дн.</b></>}
-                      </p>
-                    </div>
-                  )}
-
-                  {conversion?.willConvert && (conversion.extras?.extraDevices ?? 0) > 0 && (
-                    <div className="mt-3 grid grid-cols-2 gap-2.5">
-                      <button
-                        type="button"
-                        onClick={() => setKeepExistingExtras(true)}
-                        className={cn(
-                          "rounded-2xl border p-3 text-left transition-all",
-                          keepExistingExtras ? "border-violet-glow/50 bg-violet-glow/12" : "border-white/8 bg-white/3",
-                        )}
-                      >
-                        <p className="text-xs font-bold">Сохранить устройства</p>
-                        <p className="mt-1 text-[11px] text-fog-500">
-                          {conversion.extras?.keep.totalDevices} устр.
-                          {(conversion.extras?.keep.extraCost ?? 0) > 0 && ` · +${formatMoney(conversion.extras?.keep.extraCost ?? 0, plan.currency)}`}
-                        </p>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setKeepExistingExtras(false)}
-                        className={cn(
-                          "rounded-2xl border p-3 text-left transition-all",
-                          !keepExistingExtras ? "border-accent-400/50 bg-accent-500/12" : "border-white/8 bg-white/3",
-                        )}
-                      >
-                        <p className="text-xs font-bold">Убрать дополнительные</p>
-                        <p className="mt-1 text-[11px] text-fog-500">Останется {conversion.extras?.drop.totalDevices} устр.</p>
-                      </button>
-                    </div>
-                  )}
-
-                  {!conversion?.willConvert && trialConversionCandidates.length > 1 && (
-                    <div className="mt-4 rounded-3xl border border-white/8 bg-white/3 p-4">
-                      <p className="text-sm font-bold">Какую пробную подписку конвертировать</p>
-                      <div className="mt-2 flex flex-col gap-2">
-                        {trialConversionCandidates.map((subscription) => (
-                          <button
-                            type="button"
-                            key={subscription.id}
-                            onClick={() => setSelectedTrialId(subscription.id)}
-                            className={cn(
-                              "rounded-xl border px-3 py-2 text-left text-xs font-semibold transition-all",
-                              (selectedTrialId ?? trialConversionCandidates[0].id) === subscription.id
-                                ? "border-violet-glow/50 bg-violet-glow/12"
-                                : "border-white/8 bg-white/3",
-                            )}
-                          >
-                            {subscription.name} · осталось {subscription.daysLeft} дн.
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* promo */}
-                  <p className="mt-6 mb-2 flex items-center gap-2 text-sm font-bold">
-                    <Tag className="h-4 w-4 text-fog-500" /> Промокод
-                  </p>
-                  <div className="flex gap-2.5">
-                    <input
-                      value={promo}
-                      onChange={(e) => setPromo(e.target.value)}
-                      placeholder="Введите промокод"
-                      className="input-glass flex-1"
-                    />
-                    <button onClick={applyPromo} className="btn-ghost px-5 text-sm">
-                      Применить
-                    </button>
-                  </div>
-
-                  {/* payment methods */}
-                  <p className="mt-6 mb-2 flex items-center gap-2 text-sm font-bold">
-                    <Wallet className="h-4 w-4 text-fog-500" /> Способ оплаты
-                  </p>
-                  <div className="flex flex-col gap-2.5">
-                    {user.balance > 0 && (
-                      <motion.button
-                        whileTap={{ scale: 0.98 }}
-                        disabled={paying}
-                        onClick={payBalance}
-                        className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-orange-500 to-orange-600 p-4 text-left font-bold text-white shadow-[0_0_28px_-8px_rgba(249,115,22,0.7)] transition-filter hover:brightness-110"
-                      >
-                        {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wallet className="h-5 w-5" />}
-                        <span className="flex-1">{paying ? "Оплата…" : "Оплатить с баланса"}</span>
-                        <span className="rounded-lg bg-black/25 px-2.5 py-1 text-sm">
-                          {user.balance.toLocaleString("ru-RU")} ₽
-                        </span>
-                      </motion.button>
-                    )}
-
-                    {/* Platega — основной способ, акцентный блок */}
-                    {plategaMethods.length > 0 && <div className="rounded-3xl border border-accent-400/40 bg-accent-500/8 p-4 shadow-neon-blue">
-                      <div className="mb-3 flex items-center gap-2.5">
-                        <div className="icon-tile h-10 w-10 rounded-xl">
-                          <CreditCard className="h-5 w-5" />
-                        </div>
-                        <div className="flex-1">
-                          <p className="font-bold">Platega</p>
-                          <p className="text-[11px] text-fog-500">Банковские платежи и крипта</p>
-                        </div>
-                        <span className="rounded-full bg-accent-500/20 px-2.5 py-1 text-[10px] font-extrabold tracking-wider text-accent-400 uppercase">
-                          Рекомендуем
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2.5">
-                        {sbpMethod && <motion.button
-                          whileTap={{ scale: 0.96 }}
-                          disabled={paying}
-                          onClick={() => payPlatega(sbpMethod.id)}
-                          className="btn-primary flex-col gap-0.5 rounded-2xl px-3 py-3.5 text-sm"
-                        >
-                          <span className="flex items-center gap-1.5 font-bold">
-                            {paying ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />} {paying ? "Оплата…" : "СБП"}
-                          </span>
-                          <span className="text-[10px] font-medium opacity-75">по QR-коду</span>
-                        </motion.button>}
-                        {cardMethod && <motion.button
-                          whileTap={{ scale: 0.96 }}
-                          disabled={paying}
-                          onClick={() => payPlatega(cardMethod.id)}
-                          className="btn-primary flex-col gap-0.5 rounded-2xl px-3 py-3.5 text-sm"
-                        >
-                          <span className="flex items-center gap-1.5 font-bold">
-                            {paying ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />} {paying ? "Оплата…" : "Карта"}
-                          </span>
-                          <span className="text-[10px] font-medium opacity-75">RUB · любой банк</span>
-                        </motion.button>}
-                      </div>
-                      {cryptoMethod && <button
-                        disabled={paying}
-                        onClick={() => payPlatega(cryptoMethod.id)}
-                        className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-xl py-1.5 text-xs font-semibold text-fog-400 transition-colors hover:text-accent-400"
-                      >
-                        {paying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bitcoin className="h-3.5 w-3.5" />} {paying ? "Оплата…" : "Оплатить криптой через Platega"}
-                      </button>}
-                      {otherPlategaMethods.length > 0 && <div className="mt-2.5 grid grid-cols-1 gap-2">
-                        {otherPlategaMethods.map((method) => (
-                          <button
-                            key={method.id}
-                            disabled={paying}
-                            onClick={() => payPlatega(method.id)}
-                            className="rounded-xl border border-accent-400/20 bg-accent-500/8 px-3 py-2 text-sm font-semibold transition-colors hover:bg-accent-500/15"
-                          >
-                            {paying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} {paying ? "Оплата…" : method.label}
-                          </button>
-                        ))}
-                      </div>}
-                    </div>}
-
-                    {config?.cryptopayEnabled && <button
-                      disabled={paying}
-                      onClick={payCryptoBot}
-                      className="glass group flex items-center gap-3 rounded-2xl p-4 text-left transition-all hover:border-amber-glow/30"
-                    >
-                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-amber-glow/25 bg-amber-glow/10 text-amber-glow">
-                        {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <Zap className="h-5 w-5" />}
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-bold">{paying ? "Оплата…" : "Crypto Bot"}</p>
-                        <p className="text-xs text-fog-500">USDT · TON · BTC</p>
-                      </div>
-                    </button>}
-                    {config?.rollypayEnabled && plan.currency.toUpperCase() === "RUB" && <button
-                      disabled={paying}
-                      onClick={payRollyPay}
-                      className="glass group flex items-center gap-3 rounded-2xl p-4 text-left transition-all hover:border-emerald-400/30"
-                    >
-                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-emerald-400/25 bg-emerald-400/10 text-emerald-300">
-                        {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <CreditCard className="h-5 w-5" />}
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-bold">{paying ? "Оплата…" : "RollyPay"}</p>
-                        <p className="text-xs text-fog-500">Оплата в рублях</p>
-                      </div>
-                    </button>}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+              <Button size="lg" disabled={!agreed} className="mt-4 w-full" onClick={() => setStep("checkout")}>
+                Перейти к оплате · {formatMoney(priceBeforePromo, plan.currency)}
+              </Button>
+            </div>
           </motion.div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+        ) : step === "success" ? (
+          <motion.div
+            key="success"
+            initial={{ opacity: 0, scale: 0.94 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="p-7 text-center"
+          >
+            <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-mint-500/15 text-mint-400">
+              <Check className="h-8 w-8" strokeWidth={3} />
+            </div>
+            <ModalTitle className="mt-5 text-2xl font-extrabold">Оплата прошла</ModalTitle>
+            <ModalDescription className="mt-2 text-sm text-fog-500">
+              Подписка уже активирована. Если был пробный период, он автоматически конвертирован.
+            </ModalDescription>
+            <button
+              onClick={() => { onOpenChange(false); navigate("/cabinet/dashboard?payment=success"); }}
+              className="btn-primary mt-6 w-full px-6 py-4"
+            >
+              Перейти к подписке
+            </button>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="checkout"
+            initial={{ opacity: 0, x: 24 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 24 }}
+            transition={{ duration: 0.22 }}
+            className="no-scrollbar min-h-0 overflow-y-auto p-6"
+          >
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setStep("config")}
+                className="grid h-9 w-9 place-items-center rounded-xl text-fog-400 transition-colors hover:bg-white/8 hover:text-white"
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </button>
+              <div>
+                <ModalTitle className="text-lg font-extrabold">Оплата тарифа</ModalTitle>
+                <ModalDescription className="text-xs text-fog-500">{plan.name}</ModalDescription>
+              </div>
+            </div>
+
+            {/* total */}
+            <div className="glass-inset mt-5 rounded-3xl p-5">
+              <p className="text-sm text-fog-500">Итого к оплате</p>
+              <p className="mt-1 text-4xl font-extrabold tracking-tight">
+                {formatMoney(price, plan.currency)}
+                {discountPercent > 0 && (
+                  <span className="ml-2 align-middle text-base font-bold text-mint-400">−{discountPercent}%</span>
+                )}
+              </p>
+              <div className="mt-4 grid grid-cols-2 gap-2.5">
+                <div className="flex flex-col justify-center rounded-2xl border border-white/8 bg-white/3 p-3">
+                  <p className="text-[10px] font-bold tracking-wider text-fog-600 uppercase">Срок</p>
+                  <p className="mt-1 flex items-center gap-1.5 text-sm font-bold">
+                    <CalendarDays className="h-4 w-4 text-fog-500" /> {days} дн.
+                  </p>
+                </div>
+                <div className="flex flex-col justify-center rounded-2xl border border-white/8 bg-white/3 p-3">
+                  <p className="text-[10px] font-bold tracking-wider text-fog-600 uppercase">Трафик</p>
+                  <p className="mt-1 flex items-center gap-1.5 text-sm font-bold">
+                    <Wifi className="h-4 w-4 text-fog-500" /> {plan.traffic}
+                  </p>
+                </div>
+                </div>
+                {conversion?.willConvert && conversion.convertedDays !== undefined && (
+                  <p className="mt-3 text-xs text-fog-500">В обычной покупке к сроку добавится конвертация: <b className="text-amber-glow">+{conversion.convertedDays} дн.</b></p>
+                )}
+              {plan.whitelistGB && (
+                <span className="chip chip-amber chip-fluid mt-2.5">
+                  <Signal className="h-3.5 w-3.5" /> Белые списки: {plan.whitelistGB.toFixed(0)} ГБ / мес
+                </span>
+              )}
+            </div>
+
+            {/* renewal notice */}
+            {ownedSub && (
+              <div className="mt-4 flex items-start gap-3 rounded-3xl border border-violet-glow/25 bg-violet-glow/8 p-4">
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-violet-glow/15 text-violet-glow">
+                  <RefreshCw className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold">Этот тариф у вас уже есть — подписка будет продлена</p>
+                  <p className="mt-1 text-xs leading-relaxed text-fog-500">
+                    Вторая подписка не создастся — дни просто сложатся: остаток {ownedSub.daysLeft} дней + покупка{" "}
+                    {days} дней = <span className="font-bold text-violet-glow">{ownedSub.daysLeft + days} дней</span>.
+                    Устройства и серверы останутся как есть.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {conversion?.willConvert && conversion.mode !== "extend" && (
+              <div className="mt-4 rounded-3xl border border-amber-glow/25 bg-amber-glow/8 p-4">
+                <p className="text-sm font-bold">
+                  {conversion.mode === "replace" ? "Текущая подписка будет заменена" : "Остаток подписки будет пересчитан"}
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-fog-500">
+                  {conversion.subscription?.tariffName && <>Текущий тариф: {conversion.subscription.tariffName}. </>}
+                  {conversion.remainingDays !== undefined && <>Остаток: {conversion.remainingDays} дн. </>}
+                  {conversion.convertedDays !== undefined && <>После пересчёта: {conversion.convertedDays} дн. </>}
+                  {conversion.totalDays !== undefined && <>Итого после покупки: <b className="text-amber-glow">{conversion.totalDays} дн.</b></>}
+                </p>
+              </div>
+            )}
+
+            {conversion?.willConvert && (conversion.extras?.extraDevices ?? 0) > 0 && (
+              <div className="mt-3 grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setKeepExistingExtras(true)}
+                  className={cn(
+                    "rounded-2xl border p-3 text-left transition-all",
+                    keepExistingExtras ? "border-violet-glow/50 bg-violet-glow/12" : "border-white/8 bg-white/3",
+                  )}
+                >
+                  <p className="text-xs font-bold">Сохранить устройства</p>
+                  <p className="mt-1 text-[11px] text-fog-500">
+                    {conversion.extras?.keep.totalDevices} устр.
+                    {(conversion.extras?.keep.extraCost ?? 0) > 0 && ` · +${formatMoney(conversion.extras?.keep.extraCost ?? 0, plan.currency)}`}
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setKeepExistingExtras(false)}
+                  className={cn(
+                    "rounded-2xl border p-3 text-left transition-all",
+                    !keepExistingExtras ? "border-accent-400/50 bg-accent-500/12" : "border-white/8 bg-white/3",
+                  )}
+                >
+                  <p className="text-xs font-bold">Убрать дополнительные</p>
+                  <p className="mt-1 text-[11px] text-fog-500">Останется {conversion.extras?.drop.totalDevices} устр.</p>
+                </button>
+              </div>
+            )}
+
+            {!conversion?.willConvert && trialConversionCandidates.length > 1 && (
+              <div className="mt-4 rounded-3xl border border-white/8 bg-white/3 p-4">
+                <p className="text-sm font-bold">Какую пробную подписку конвертировать</p>
+                <div className="mt-2 flex flex-col gap-2">
+                  {trialConversionCandidates.map((subscription) => (
+                    <button
+                      type="button"
+                      key={subscription.id}
+                      onClick={() => setSelectedTrialId(subscription.id)}
+                      className={cn(
+                        "rounded-xl border px-3 py-2 text-left text-xs font-semibold transition-all",
+                        (selectedTrialId ?? trialConversionCandidates[0].id) === subscription.id
+                          ? "border-violet-glow/50 bg-violet-glow/12"
+                          : "border-white/8 bg-white/3",
+                      )}
+                    >
+                      {subscription.name} · осталось {subscription.daysLeft} дн.
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* promo */}
+            <p className="mt-6 mb-2 flex items-center gap-2 text-sm font-bold">
+              <Tag className="h-4 w-4 text-fog-500" /> Промокод
+            </p>
+            <div className="flex gap-2.5">
+              <input
+                value={promo}
+                onChange={(e) => setPromo(e.target.value)}
+                placeholder="Введите промокод"
+                className="input-glass flex-1"
+              />
+              <button onClick={applyPromo} className="btn-ghost px-5 text-sm">
+                Применить
+              </button>
+            </div>
+
+            {/* payment methods */}
+            <p className="mt-6 mb-2 flex items-center gap-2 text-sm font-bold">
+              <Wallet className="h-4 w-4 text-fog-500" /> Способ оплаты
+            </p>
+            <div className="flex flex-col gap-2.5">
+              {user.balance > 0 && (
+                <motion.button
+                  whileTap={{ scale: 0.98 }}
+                  disabled={paying}
+                  onClick={payBalance}
+                  className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-orange-500 to-orange-600 p-4 text-left font-bold text-white shadow-[0_0_28px_-8px_rgba(249,115,22,0.7)] transition-filter hover:brightness-110"
+                >
+                  {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wallet className="h-5 w-5" />}
+                  <span className="flex-1">{paying ? "Оплата…" : "Оплатить с баланса"}</span>
+                  <span className="rounded-lg bg-black/25 px-2.5 py-1 text-sm">
+                    {user.balance.toLocaleString("ru-RU")} ₽
+                  </span>
+                </motion.button>
+              )}
+
+              {/* Platega — основной способ, акцентный блок */}
+              {plategaMethods.length > 0 && <div className="rounded-3xl border border-accent-400/40 bg-accent-500/8 p-4 shadow-neon-blue">
+                <div className="mb-3 flex items-center gap-2.5">
+                  <div className="icon-tile h-10 w-10 rounded-xl">
+                    <CreditCard className="h-5 w-5" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-bold">Platega</p>
+                    <p className="text-[11px] text-fog-500">Банковские платежи и крипта</p>
+                  </div>
+                  <span className="rounded-full bg-accent-500/20 px-2.5 py-1 text-[10px] font-extrabold tracking-wider text-accent-400 uppercase">
+                    Рекомендуем
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  {sbpMethod && <motion.button
+                    whileTap={{ scale: 0.96 }}
+                    disabled={paying}
+                    onClick={() => payPlatega(sbpMethod.id)}
+                    className="btn-primary flex-col gap-0.5 rounded-2xl px-3 py-3.5 text-sm"
+                  >
+                    <span className="flex items-center gap-1.5 font-bold">
+                      {paying ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />} {paying ? "Оплата…" : "СБП"}
+                    </span>
+                    <span className="text-[10px] font-medium opacity-75">по QR-коду</span>
+                  </motion.button>}
+                  {cardMethod && <motion.button
+                    whileTap={{ scale: 0.96 }}
+                    disabled={paying}
+                    onClick={() => payPlatega(cardMethod.id)}
+                    className="btn-primary flex-col gap-0.5 rounded-2xl px-3 py-3.5 text-sm"
+                  >
+                    <span className="flex items-center gap-1.5 font-bold">
+                      {paying ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />} {paying ? "Оплата…" : "Карта"}
+                    </span>
+                    <span className="text-[10px] font-medium opacity-75">RUB · любой банк</span>
+                  </motion.button>}
+                </div>
+                {cryptoMethod && <button
+                  disabled={paying}
+                  onClick={() => payPlatega(cryptoMethod.id)}
+                  className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-xl py-1.5 text-xs font-semibold text-fog-400 transition-colors hover:text-accent-400"
+                >
+                  {paying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bitcoin className="h-3.5 w-3.5" />} {paying ? "Оплата…" : "Оплатить криптой через Platega"}
+                </button>}
+                {otherPlategaMethods.length > 0 && <div className="mt-2.5 grid grid-cols-1 gap-2">
+                  {otherPlategaMethods.map((method) => (
+                    <button
+                      key={method.id}
+                      disabled={paying}
+                      onClick={() => payPlatega(method.id)}
+                      className="rounded-xl border border-accent-400/20 bg-accent-500/8 px-3 py-2 text-sm font-semibold transition-colors hover:bg-accent-500/15"
+                    >
+                      {paying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} {paying ? "Оплата…" : method.label}
+                    </button>
+                  ))}
+                </div>}
+              </div>}
+
+              {config?.cryptopayEnabled && <button
+                disabled={paying}
+                onClick={payCryptoBot}
+                className="glass group flex items-center gap-3 rounded-2xl p-4 text-left transition-all hover:border-amber-glow/30"
+              >
+                <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-amber-glow/25 bg-amber-glow/10 text-amber-glow">
+                  {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <Zap className="h-5 w-5" />}
+                </div>
+                <div className="flex-1">
+                  <p className="font-bold">{paying ? "Оплата…" : "Crypto Bot"}</p>
+                  <p className="text-xs text-fog-500">USDT · TON · BTC</p>
+                </div>
+              </button>}
+              {config?.rollypayEnabled && plan.currency.toUpperCase() === "RUB" && <button
+                disabled={paying}
+                onClick={payRollyPay}
+                className="glass group flex items-center gap-3 rounded-2xl p-4 text-left transition-all hover:border-emerald-400/30"
+              >
+                <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-emerald-400/25 bg-emerald-400/10 text-emerald-300">
+                  {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <CreditCard className="h-5 w-5" />}
+                </div>
+                <div className="flex-1">
+                  <p className="font-bold">{paying ? "Оплата…" : "RollyPay"}</p>
+                  <p className="text-xs text-fog-500">Оплата в рублях</p>
+                </div>
+              </button>}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </Modal>
   );
 }
 
 function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; index: number }) {
+  const { state } = useClientAuth();
   const startingOption = plan.durationOptions.reduce((best, option) => option.price < best.price ? option : best, plan.durationOptions[0]);
   const perDay = startingOption.price / startingOption.days;
+  // Прогреваем кэш конвертации ещё до открытия диалога — он открывается с готовыми данными
+  const prefetchConversion = () => {
+    if (!state.token) return;
+    void prefetchConversionPreview(state.token, { tariffId: plan.id, priceOptionId: plan.durationOptions[0]?.id ?? undefined }).catch(() => undefined);
+  };
   return (
     <motion.div
       initial={{ opacity: 0, y: 14 }}
@@ -778,6 +725,7 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
         </p>
         <motion.button
           whileTap={{ scale: 0.96 }}
+          onPointerDown={prefetchConversion}
           onClick={onPay}
           className={cn(
             "mt-3 flex w-full items-center justify-center gap-2 rounded-2xl px-5 py-3.5 text-sm font-bold transition-all",
@@ -807,6 +755,9 @@ export default function Tariffs() {
   useEffect(() => {
     if (window.location.hash === "#traffic") document.getElementById("traffic")?.scrollIntoView({ block: "start" });
   }, []);
+
+  // Прогреваем кэш public-config заранее — диалог тарифа открывается мгновенно
+  useEffect(() => { void prefetchPublicConfig().catch(() => undefined); }, []);
 
   return (
     <div className="flex flex-col gap-5">
