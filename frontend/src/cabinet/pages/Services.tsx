@@ -23,8 +23,8 @@ function money(value: number, currency: string) {
   }
 }
 
-function PageTitle({ icon: Icon, title, subtitle }: { icon: typeof Box; title: string; subtitle: string }) {
-  return <div className="flex items-center gap-4"><div className="icon-tile h-12 w-12 rounded-2xl"><Icon className="h-5 w-5" /></div><div><h1 className="text-3xl font-extrabold tracking-tight">{title}</h1><p className="mt-1 text-sm text-fog-500">{subtitle}</p></div></div>;
+function PageTitle({ icon: Icon, title, subtitle, compact = false }: { icon: typeof Box; title: string; subtitle: string; compact?: boolean }) {
+  return <div className={cn("flex items-center", compact ? "gap-3" : "gap-4")}><div className={cn("icon-tile rounded-2xl", compact ? "h-9 w-9 rounded-xl" : "h-12 w-12")}><Icon className={compact ? "h-4 w-4" : "h-5 w-5"} /></div><div><h1 className={cn("font-extrabold tracking-tight", compact ? "text-2xl" : "text-3xl")}>{title}</h1><p className={cn("text-fog-500", compact ? "mt-0.5 text-xs" : "mt-1 text-sm")}>{subtitle}</p></div></div>;
 }
 
 type PurchasePayload = {
@@ -148,7 +148,7 @@ function CheckoutActions({
 }) {
   const [open, setOpen] = useState(false);
   return <>
-    <button type="button" onClick={() => setOpen(true)} className="btn-primary mt-3 w-full justify-center px-4 py-3 text-sm">Перейти к оплате · {money(amount, currency)}</button>
+    <button type="button" onClick={() => setOpen(true)} className="btn-ghost mt-2.5 min-h-11 w-full justify-center rounded-xl px-3 py-2.5 text-xs">Перейти к оплате · {money(amount, currency)}</button>
     <OptionPaymentDialog open={open} onOpenChange={setOpen} amount={amount} currency={currency} payload={payload} balancePay={balancePay} description={description} />
   </>;
 }
@@ -186,22 +186,22 @@ export function ExtraOptions({ trafficOnly = false }: { trafficOnly?: boolean } 
     : null;
 
   return <div className="flex flex-col gap-5">
-    <PageTitle icon={PackagePlus} title={trafficOnly ? "Докупить трафик" : "Дополнительные опции"} subtitle={trafficOnly ? "Добавьте пакет к уже активной подписке." : "Трафик, устройства и серверы для выбранной подписки."} />
+    <PageTitle compact={trafficOnly} icon={PackagePlus} title={trafficOnly ? "Докупить трафик" : "Дополнительные опции"} subtitle={trafficOnly ? "Пакеты для активной подписки." : "Трафик, устройства и серверы для выбранной подписки."} />
 
     {trafficOnly && (
-      <section className="glass-inset flex flex-col gap-4 rounded-3xl p-4 sm:flex-row sm:items-center sm:justify-between">
+      <section className="glass-inset flex flex-wrap items-center gap-3 rounded-2xl p-3">
         <div className="flex min-w-0 items-start gap-3">
-          <div className="icon-tile h-10 w-10 shrink-0 rounded-xl"><Wifi className="h-4 w-4" /></div>
+          <div className="icon-tile h-9 w-9 shrink-0 rounded-xl"><Wifi className="h-4 w-4" /></div>
           <div className="min-w-0">
             <p className="text-xs text-fog-500">Для подписки</p>
             <p className="truncate font-extrabold">{targetSubscription?.name ?? "Нет активной подписки"}</p>
-            <p className="mt-1 text-xs text-fog-500">{trafficSummary ?? "Сначала выберите тариф"}</p>
+            <p className="text-xs text-fog-500">{trafficSummary ?? "Сначала выберите тариф"}</p>
           </div>
         </div>
         {selectableSubscriptions.length > 1 && (
-          <label className="w-full shrink-0 sm:max-w-xs">
+          <label className="ml-auto w-full shrink-0 sm:w-52">
             <span className="sr-only">Выберите подписку</span>
-            <select aria-label="Выберите подписку" value={target} onChange={(event) => setTarget(event.target.value)} className="input-glass">
+            <select aria-label="Выберите подписку" value={target} onChange={(event) => setTarget(event.target.value)} className="input-glass min-h-11">
               {selectableSubscriptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
           </label>
@@ -209,7 +209,7 @@ export function ExtraOptions({ trafficOnly = false }: { trafficOnly?: boolean } 
       </section>
     )}
 
-    {trafficOnly && targetSubscription && <p className="-mt-2 text-xs leading-relaxed text-fog-500">Пакет добавится к текущему лимиту. Срок подписки и количество устройств не изменятся.</p>}
+    {trafficOnly && targetSubscription && <p className="-mt-2 text-xs leading-relaxed text-fog-500">Пакет добавится к текущему лимиту; срок и устройства не изменятся.</p>}
 
     {!trafficOnly && selectableSubscriptions.length > 1 && (
       <label className="w-full sm:max-w-xs">
@@ -220,21 +220,21 @@ export function ExtraOptions({ trafficOnly = false }: { trafficOnly?: boolean } 
       </label>
     )}
 
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+    <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-3">
       {options.map((option) => {
         const isTraffic = option.kind === "traffic";
         const trafficPrice = isTraffic ? trafficOptionUnitPrice(option.trafficGb, option.price) : 0;
-        return <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} key={`${option.kind}:${option.id}`} className="glass-inset flex flex-col rounded-3xl p-5">
+        return <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} key={`${option.kind}:${option.id}`} className="glass-inset flex flex-col rounded-2xl p-3.5">
           <div className="flex items-start gap-3">
-            <div className="icon-tile h-10 w-10 shrink-0 rounded-xl">{isTraffic ? <Wifi className="h-4 w-4" /> : option.kind === "devices" ? <Smartphone className="h-4 w-4" /> : <Server className="h-4 w-4" />}</div>
+            <div className="icon-tile h-9 w-9 shrink-0 rounded-xl">{isTraffic ? <Wifi className="h-4 w-4" /> : option.kind === "devices" ? <Smartphone className="h-4 w-4" /> : <Server className="h-4 w-4" />}</div>
             <div className="min-w-0 flex-1">
-              <h2 className="text-lg font-extrabold">{isTraffic ? `+${option.trafficGb} ГБ` : option.name}</h2>
-              <p className="mt-1 text-sm text-fog-400">{isTraffic ? trafficOptionLabel(option.trafficMode) : optionDescription(option)}</p>
-              {isTraffic && <p className="mt-1 text-xs text-fog-600">{option.name} · ≈{money(trafficPrice, option.currency)}/ГБ</p>}
+              <h2 className="text-base font-extrabold">{isTraffic ? `+${option.trafficGb} ГБ` : option.name}</h2>
+              <p className="mt-0.5 text-xs text-fog-400">{isTraffic ? trafficOptionLabel(option.trafficMode) : optionDescription(option)}</p>
+              {isTraffic && <p className="mt-0.5 text-[11px] text-fog-600">{option.name} · ≈{money(trafficPrice, option.currency)}/ГБ</p>}
             </div>
-            <div className="shrink-0 text-right"><p className="text-lg font-extrabold">{money(option.price, option.currency)}</p><p className="text-xs text-fog-600">разово</p></div>
+            <div className="shrink-0 text-right"><p className="text-base font-extrabold">{money(option.price, option.currency)}</p><p className="text-[11px] text-fog-600">разово</p></div>
           </div>
-          <div className="mt-auto pt-4">
+          <div className="mt-auto pt-3">
             <CheckoutActions amount={option.price} currency={option.currency} description={option.name} payload={{ extraOption: { kind: option.kind, productId: option.id, targetSubscriptionId: target || undefined } }} balancePay={() => api.clientPayOptionByBalance(state.token!, { extraOption: { kind: option.kind, productId: option.id }, targetSubscriptionId: target || undefined })} />
           </div>
         </motion.section>;

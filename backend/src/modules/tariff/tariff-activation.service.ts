@@ -69,6 +69,25 @@ export function selectCanonicalSubscription<T extends CanonicalSubscriptionCandi
   return eligible[0] ?? null;
 }
 
+/** Primary rows created before the subscription migration can carry a stale daily rate. */
+export function resolvePrimarySubscriptionPricePerDay(input: {
+  subscriptionIndex?: number | null;
+  subscriptionTariffId: string | null;
+  clientTariffId: string | null;
+  subscriptionPricePerDay: number | null;
+  clientPricePerDay: number | null;
+}): number | null {
+  const clientRate = input.subscriptionIndex === 0
+    && input.subscriptionTariffId === input.clientTariffId
+    && input.clientPricePerDay != null
+    && Number.isFinite(input.clientPricePerDay)
+    && input.clientPricePerDay > 0
+    ? input.clientPricePerDay
+    : null;
+  const rate = clientRate ?? input.subscriptionPricePerDay;
+  return rate != null && Number.isFinite(rate) && rate > 0 ? rate : null;
+}
+
 /** Serialize all reads/writes belonging to one client's subscription state. */
 type SubscriptionLockDependencies = {
   transaction?: <R>(callback: (tx: Prisma.TransactionClient) => Promise<R>) => Promise<R>;
@@ -840,11 +859,13 @@ type SubscriptionActivationTarget = {
   extraDevicesMonthlyPrice: number;
   trialId: string | null;
   currentPricePerDay: number | null;
+  subscriptionIndex?: number;
   trial?: TrialConversionPolicy | null;
 };
 
 type ExtendSubscriptionDependencies = {
   findSubscription?: (id: string) => Promise<SubscriptionActivationTarget | null>;
+  findClient?: (id: string) => Promise<{ currentTariffId: string | null; currentPricePerDay: number | null } | null>;
   getUser?: typeof remnaGetUser;
   resetUserTraffic?: typeof remnaResetUserTraffic;
   updateUser?: typeof remnaUpdateUser;
@@ -917,6 +938,7 @@ export async function extendSecondarySubscription(
           extraDevicesMonthlyPrice: true,
           trialId: true,
           currentPricePerDay: true,
+          subscriptionIndex: true,
           trial: { select: { tariffId: true, convertEnabled: true, convertAllTariffs: true, convertTariffIds: true } },
         },
       }));
@@ -1005,9 +1027,22 @@ export async function extendSecondarySubscription(
     const newBasePerDay = effectiveDays > 0 ? newPrice / effectiveDays : 0;
     const extrasPerDay = (sec.extraDevices ?? 0) > 0 ? (sec.extraDevicesMonthlyPrice ?? 0) / 30 : 0;
     const keepExtras = !removeExtrasAfter && extrasPerDay > 0;
+    const canonicalClient = sec.subscriptionIndex === 0
+      ? await (dependencies.findClient ?? ((id: string) => prisma.client.findUnique({
+          where: { id },
+          select: { currentTariffId: true, currentPricePerDay: true },
+        })))(expectedClientId)
+      : null;
+    const sourcePricePerDay = resolvePrimarySubscriptionPricePerDay({
+      subscriptionIndex: sec.subscriptionIndex,
+      subscriptionTariffId: sec.tariffId,
+      clientTariffId: canonicalClient?.currentTariffId ?? null,
+      subscriptionPricePerDay: sec.currentPricePerDay,
+      clientPricePerDay: canonicalClient?.currentPricePerDay ?? null,
+    });
     // Старая ПОЛНАЯ ставка (база + устройства).
-    const oldFullPerDay = sec.currentPricePerDay != null
-      ? sec.currentPricePerDay + extrasPerDay
+    const oldFullPerDay = sourcePricePerDay != null
+      ? sourcePricePerDay + extrasPerDay
       : (extrasPerDay > 0 ? extrasPerDay : null);
     // Новая ставка: с устройствами, если юзер их оставляет.
     const newFullPerDay = newBasePerDay + (keepExtras ? extrasPerDay : 0);
@@ -1223,13 +1258,25 @@ export async function findConvertibleSubscription(
       }));
   }
   if (!candidate) return null;
+  const canonicalClient = candidate.subscriptionIndex === 0
+    ? await prisma.client.findUnique({
+        where: { id: clientId },
+        select: { currentTariffId: true, currentPricePerDay: true },
+      })
+    : null;
   return {
     id: candidate.id,
     subscriptionIndex: candidate.subscriptionIndex,
     tariffId: candidate.tariffId,
     tariffName: candidate.tariff?.name ?? null,
     expireAt: candidate.expireAt,
-    currentPricePerDay: candidate.currentPricePerDay,
+    currentPricePerDay: resolvePrimarySubscriptionPricePerDay({
+      subscriptionIndex: candidate.subscriptionIndex,
+      subscriptionTariffId: candidate.tariffId,
+      clientTariffId: canonicalClient?.currentTariffId ?? null,
+      subscriptionPricePerDay: candidate.currentPricePerDay,
+      clientPricePerDay: canonicalClient?.currentPricePerDay ?? null,
+    }),
     trialId: candidate.trialId,
     // тот же тариф = продление (дни складываются, сквады/трафик
     // не сбрасываются), конвертация только при ДРУГОМ тарифе. Триал не считается

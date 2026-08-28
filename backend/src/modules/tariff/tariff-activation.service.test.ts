@@ -6,7 +6,62 @@ process.env.JWT_SECRET ??= "test-secret-that-is-long-enough-for-validation";
 process.env.REMNA_API_URL = "https://remna.test";
 process.env.REMNA_ADMIN_TOKEN = "test-token";
 
-const { computeConvertedDays, extendSecondarySubscription } = await import("./tariff-activation.service.js");
+const { computeConvertedDays, extendSecondarySubscription, resolvePrimarySubscriptionPricePerDay } = await import("./tariff-activation.service.js");
+
+test("uses the client rate for the canonical subscription when its stored rate is stale", () => {
+  assert.equal(resolvePrimarySubscriptionPricePerDay({
+    subscriptionIndex: 0,
+    subscriptionTariffId: "standard",
+    clientTariffId: "standard",
+    subscriptionPricePerDay: 200 / 365,
+    clientPricePerDay: 200 / 30,
+  }), 200 / 30);
+});
+
+test("does not replace a secondary subscription rate with the client rate", () => {
+  assert.equal(resolvePrimarySubscriptionPricePerDay({
+    subscriptionIndex: 1,
+    subscriptionTariffId: "standard",
+    clientTariffId: "standard",
+    subscriptionPricePerDay: 10,
+    clientPricePerDay: 20,
+  }), 10);
+});
+
+test("actual conversion uses the canonical client rate for a stale primary snapshot", async () => {
+  const result = await extendSecondarySubscription(
+    "sub-1",
+    "client-1",
+    {
+      id: "cheaper-tariff", durationDays: 30, trafficLimitBytes: 200n, deviceLimit: 1, includedDevices: 1,
+      internalSquadUuids: ["new-squad"], trafficResetMode: "monthly", trafficLimitMode: "REMNAWAVE", price: 120,
+    },
+    undefined,
+    undefined,
+    false,
+    true,
+    false,
+    {
+      findSubscription: async () => ({
+        id: "sub-1", remnawaveUuid: "owning-uuid", tariffId: "old-tariff", ownerId: "client-1",
+        giftedToClientId: null, deletionRequestedAt: null, customPrice: 200, extraDevices: 0,
+        extraDevicesMonthlyPrice: 0, trialId: null, currentPricePerDay: 200 / 365, subscriptionIndex: 0, trial: null,
+      }),
+      findClient: async () => ({ currentTariffId: "old-tariff", currentPricePerDay: 200 / 30 }),
+      getUser: async () => ({ data: { response: {
+        expireAt: new Date(Date.now() + 30.9 * 24 * 60 * 60 * 1000).toISOString(),
+        activeInternalSquads: [], trafficLimitBytes: 100, userTraffic: { usedTrafficBytes: 20 },
+      } }, status: 200 }),
+      resetUserTraffic: async () => ({ data: {}, status: 200 }),
+      updateUser: async () => ({ data: {}, status: 200 }),
+      updateSubscription: async () => ({}),
+      applyEntitlement: async () => null,
+    } as any,
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.convertedDays, 47);
+});
 
 test("converts remaining value into new tariff days", () => {
   assert.equal(computeConvertedDays({

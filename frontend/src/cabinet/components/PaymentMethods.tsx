@@ -16,6 +16,7 @@ type PaymentMethodsProps = {
 };
 
 const focusRing = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-glow/70 focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950";
+const methodButton = `${focusRing} flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.045] px-3 py-2.5 text-sm font-semibold text-fog-200 transition-colors hover:border-white/20 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-45`;
 
 function Busy({ loading, children }: { loading: boolean; children: ReactNode }) {
   return loading ? <Loader2 className="h-4 w-4 animate-spin" /> : children;
@@ -44,7 +45,7 @@ export function PaymentMethods({
           type="button"
           disabled={unavailable || insufficient}
           onClick={onBalance}
-          className={`${focusRing} flex min-h-14 items-center gap-3 rounded-2xl border border-orange-300/20 bg-orange-500/90 p-4 text-left font-bold text-white transition-colors hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-45`}
+          className={`${focusRing} flex min-h-12 items-center gap-3 rounded-2xl border border-white/[0.12] bg-white/[0.08] p-3.5 text-left font-bold text-white transition-colors hover:border-white/20 hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-45`}
         >
           <Wallet className="h-5 w-5 shrink-0" />
           <span className="min-w-0 flex-1">
@@ -56,12 +57,12 @@ export function PaymentMethods({
       )}
 
       {plategaMethods.length > 0 && (
-        <section className="rounded-3xl border border-white/10 bg-white/[0.025] p-4">
-          <div className="mb-3 flex items-center gap-3">
-            <div className="icon-tile h-10 w-10 rounded-xl"><CreditCard className="h-5 w-5" /></div>
+        <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-3.5">
+          <div className="mb-2.5 flex items-center gap-2.5">
+            <div className="icon-tile h-9 w-9 rounded-xl"><CreditCard className="h-4 w-4" /></div>
             <div className="min-w-0">
-              <p className="font-bold">Банковская оплата</p>
-              <p className="text-xs text-fog-500">СБП, карта и другие способы</p>
+              <p className="text-sm font-bold">Банковская оплата</p>
+              <p className="text-[11px] text-fog-500">СБП, карта и другие способы</p>
             </div>
           </div>
 
@@ -72,7 +73,7 @@ export function PaymentMethods({
                   type="button"
                   disabled={unavailable}
                   onClick={() => onPlatega(grouped.sbp!.id)}
-                  className={`${focusRing} btn-primary min-h-12 rounded-2xl px-3 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-45`}
+                  className={`${methodButton} min-h-14`}
                 >
                   <Busy loading={loading}><QrCode className="h-4 w-4" /></Busy>
                   <span><span className="block font-bold">СБП</span><span className="block text-[11px] font-medium opacity-75">по QR-коду</span></span>
@@ -83,7 +84,7 @@ export function PaymentMethods({
                   type="button"
                   disabled={unavailable}
                   onClick={() => onPlatega(grouped.card!.id)}
-                  className={`${focusRing} btn-primary min-h-12 rounded-2xl px-3 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-45`}
+                  className={`${methodButton} min-h-14`}
                 >
                   <Busy loading={loading}><CreditCard className="h-4 w-4" /></Busy>
                   <span><span className="block font-bold">Карта</span><span className="block text-[11px] font-medium opacity-75">любой банк</span></span>
@@ -97,7 +98,7 @@ export function PaymentMethods({
               type="button"
               disabled={unavailable}
               onClick={() => onPlatega(grouped.crypto!.id)}
-              className={`${focusRing} btn-ghost mt-2.5 min-h-11 w-full rounded-2xl px-3 py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-45`}
+              className={`${methodButton} mt-2.5 w-full sm:w-auto`}
             >
               <Busy loading={loading}><Bitcoin className="h-4 w-4" /></Busy>
               Криптовалюта через Platega
@@ -105,14 +106,14 @@ export function PaymentMethods({
           )}
 
           {grouped.other.length > 0 && (
-            <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+            <div className="mt-2.5 flex flex-wrap gap-2">
               {grouped.other.map((method) => (
                 <button
                   key={method.id}
                   type="button"
                   disabled={unavailable}
                   onClick={() => onPlatega(method.id)}
-                  className={`${focusRing} btn-ghost min-h-11 rounded-2xl px-3 py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-45`}
+                  className={`${methodButton} w-full sm:w-auto`}
                 >
                   <Busy loading={loading}><CreditCard className="h-4 w-4" /></Busy>
                   {method.label}
@@ -124,13 +125,13 @@ export function PaymentMethods({
       )}
 
       {(onCryptoBot || onRollyPay) && (
-        <div className="grid gap-2.5 sm:grid-cols-2">
+        <div className="flex flex-wrap gap-2.5">
           {onCryptoBot && (
             <button
               type="button"
               disabled={unavailable}
               onClick={onCryptoBot}
-              className={`${focusRing} glass-inset flex min-h-14 items-center gap-3 rounded-2xl p-3.5 text-left transition-colors hover:border-amber-glow/30 disabled:cursor-not-allowed disabled:opacity-45`}
+              className={`${focusRing} glass-inset flex min-h-12 w-full items-center gap-3 rounded-2xl p-3 text-left transition-colors hover:border-white/18 disabled:cursor-not-allowed disabled:opacity-45 sm:w-64`}
             >
               <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-amber-glow/20 bg-amber-glow/10 text-amber-glow"><Zap className="h-4 w-4" /></span>
               <span><span className="block text-sm font-bold">Crypto Bot</span><span className="block text-xs text-fog-500">USDT · TON · BTC</span></span>
@@ -141,7 +142,7 @@ export function PaymentMethods({
               type="button"
               disabled={unavailable}
               onClick={onRollyPay}
-              className={`${focusRing} glass-inset flex min-h-14 items-center gap-3 rounded-2xl p-3.5 text-left transition-colors hover:border-mint-400/30 disabled:cursor-not-allowed disabled:opacity-45`}
+              className={`${focusRing} glass-inset flex min-h-12 w-full items-center gap-3 rounded-2xl p-3 text-left transition-colors hover:border-white/18 disabled:cursor-not-allowed disabled:opacity-45 sm:w-64`}
             >
               <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-mint-400/20 bg-mint-400/10 text-mint-300"><CreditCard className="h-4 w-4" /></span>
               <span><span className="block text-sm font-bold">RollyPay</span><span className="block text-xs text-fog-500">Оплата в рублях</span></span>

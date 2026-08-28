@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Gift, KeyRound, ShoppingBag, Smartphone, X, ChevronRight, Monitor, Send, Package, RefreshCw } from "lucide-react";
+import { Gift, KeyRound, ShoppingBag, Smartphone, X, ChevronRight, Monitor, Send, Package, PackagePlus, RefreshCw } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import { useClientAuth } from "@/contexts/client-auth";
 import { TrialsPickerDialog } from "@/components/cabinet/trials-picker-dialog";
@@ -325,7 +325,7 @@ function RegistrationSuccessDialog({ open, onClose }: { open: boolean; onClose: 
 }
 
 export default function Cabinet() {
-  const { availableTrials, reload, subscriptions, tariffGroups, toast } = useApp();
+  const { availableTrials, config, reload, subscriptions, tariffGroups, toast } = useApp();
   const { state } = useClientAuth();
   const [params, setParams] = useSearchParams();
   const [selectedId, setSelectedId] = useState<string | undefined>(subscriptions[0]?.id);
@@ -402,6 +402,7 @@ export default function Cabinet() {
               <RefreshCw className="h-5 w-5" />
               Продлить подписку
             </Link>
+            {config?.sellOptions?.some((option) => option.kind === "traffic") && <Link to="/cabinet/traffic" className="btn-ghost px-5 py-3 text-sm"><PackagePlus className="h-4 w-4" />Докупить трафик</Link>}
             <Link to={`/cabinet/subscribe?sub=${main.id}`} className="btn-ghost px-6 py-4 text-base">
               <KeyRound className="h-5 w-5" />
               Открыть ключи доступа
