@@ -1,16 +1,17 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
+import * as Dialog from "@radix-ui/react-dialog";
 import {
-  Box, CalendarDays, Copy, CreditCard, Gift, Headphones, KeyRound,
-  Layers3, MessageCircle, Network, PackagePlus, Send, Server, ShieldCheck,
-  Smartphone, Ticket, Wallet, Wifi, Zap,
+  Bitcoin, Box, CalendarDays, Check, Copy, CreditCard, Gift, Headphones, KeyRound,
+  Layers3, MessageCircle, Network, PackagePlus, QrCode, Send, Server, ShieldCheck,
+  Signal, Smartphone, Ticket, Wallet, Wifi, X, Zap,
   Loader2,
 } from "lucide-react";
 import { useClientAuth } from "@/contexts/client-auth";
 import { api, type PublicSellOption, type TicketMessageDto } from "@/lib/api";
 import { preparePaymentRedirect } from "@/lib/open-payment-url";
-import { canBuyTrafficOption, resolvePaymentUrl, trafficOptionLabel } from "../model";
+import { canBuyTrafficOption, groupPlategaMethods, isWhitelistTrafficOption, resolvePaymentUrl, sortTrafficOptions, trafficOptionLabel, trafficOptionUnitPrice } from "../model";
 import { useApp } from "../store/AppContext";
 import { cn } from "../lib/cn";
 
@@ -98,25 +99,359 @@ function optionDescription(option: PublicSellOption) {
   return option.trafficGb ? `Дополнительный сервер · ${option.trafficGb} ГБ` : "Дополнительный сервер";
 }
 
+type TrafficSellOption = Extract<PublicSellOption, { kind: "traffic" }>;
+
+function TrafficCard({ option, onBuy }: { option: TrafficSellOption; onBuy: () => void }) {
+  const whitelist = isWhitelistTrafficOption(option);
+  const perGb = trafficOptionUnitPrice(option.trafficGb ?? 0, option.price);
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 14 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={cn(
+        "relative mt-2 flex flex-col rounded-3xl border p-5 transition-all duration-300",
+        whitelist
+          ? "border-amber-glow/40 bg-amber-glow/8 shadow-[0_0_36px_-12px_rgba(255,181,69,0.55)]"
+          : "glass-inset hover:border-white/16",
+      )}
+    >
+      {whitelist && (
+        <span className="absolute -top-3 left-5 flex items-center gap-1 rounded-full bg-gradient-to-r from-amber-glow to-amber-500 px-3 py-1 text-[11px] font-extrabold text-ink-950 shadow-[0_4px_16px_-4px_rgba(255,181,69,0.7)]">
+          <Signal className="h-3 w-3" /> Белые списки
+        </span>
+      )}
+      <div className="flex items-center justify-between">
+        <div className={cn("icon-tile h-11 w-11 rounded-xl", whitelist && "border border-amber-glow/30 bg-amber-glow/12 text-amber-glow")}>
+          {whitelist ? <Signal className="h-5 w-5" /> : <Wifi className="h-5 w-5" />}
+        </div>
+        {!whitelist && <span className="chip chip-fluid max-w-[60%]">{trafficOptionLabel(option.trafficMode)}</span>}
+      </div>
+      <p className="mt-4 text-3xl font-extrabold tracking-tight">+{option.trafficGb} ГБ</p>
+      <p className="mt-1 truncate text-sm font-semibold text-fog-400">{option.name}</p>
+      <div className="my-4 h-px bg-white/8" />
+      <div className="mt-auto flex items-end justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-2xl font-extrabold tracking-tight">{money(option.price, option.currency)}</p>
+          {perGb > 0 && <p className="text-[11px] text-fog-600">{money(perGb, option.currency)}/ГБ</p>}
+        </div>
+        <motion.button
+          whileTap={{ scale: 0.96 }}
+          onClick={onBuy}
+          className={cn(
+            "flex shrink-0 items-center gap-2 rounded-2xl px-5 py-3 text-sm font-bold transition-all",
+            whitelist
+              ? "bg-gradient-to-r from-amber-glow to-amber-500 text-ink-950 shadow-[0_8px_24px_-8px_rgba(255,181,69,0.7)] hover:brightness-105"
+              : "bg-white/90 text-ink-950 shadow-[0_8px_24px_-8px_rgba(255,255,255,0.4)] hover:bg-white",
+          )}
+        >
+          <CreditCard className="h-4 w-4" /> Оплатить
+        </motion.button>
+      </div>
+    </motion.section>
+  );
+}
+
+function TrafficOptionDialog({
+  option,
+  open,
+  onOpenChange,
+  targetSubscriptionId,
+}: {
+  option: TrafficSellOption | null;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  targetSubscriptionId?: string;
+}) {
+  const { state, refreshProfile } = useClientAuth();
+  const { user, config, reload, toast } = useApp();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [step, setStep] = useState<"checkout" | "success">("checkout");
+  const [paying, setPaying] = useState(false);
+
+  useEffect(() => {
+    if (open) setStep("checkout");
+  }, [open]);
+
+  if (!option) return null;
+
+  const whitelist = isWhitelistTrafficOption(option);
+  const payload = { extraOption: { kind: "traffic" as const, productId: option.id, targetSubscriptionId: targetSubscriptionId || undefined } };
+  const plategaMethods = config?.plategaMethods ?? [];
+  const { sbp: sbpMethod, card: cardMethod, crypto: cryptoMethod, other: otherPlategaMethods } = groupPlategaMethods(plategaMethods);
+
+  const payBalance = async () => {
+    if (!state.token) return;
+    setPaying(true);
+    try {
+      const result = await api.clientPayOptionByBalance(state.token, payload);
+      toast({ title: result.message, variant: "success" });
+      void Promise.all([refreshProfile(), reload()]).catch(() => undefined);
+      setStep("success");
+    } catch (cause) {
+      toast({ title: "Оплата не прошла", description: cause instanceof Error ? cause.message : undefined, variant: "error" });
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  const openPayment = async (provider: string, create: () => Promise<{ paymentId: string; paymentUrl?: string; payUrl?: string; miniAppPayUrl?: string; webAppPayUrl?: string }>) => {
+    const redirect = preparePaymentRedirect();
+    setPaying(true);
+    try {
+      const result = await create();
+      const url = resolvePaymentUrl(result, redirect.isTelegramMiniApp);
+      if (!url) throw new Error("Платёжная система не вернула ссылку");
+      if (redirect.isTelegramMiniApp) {
+        redirect.open(url);
+      } else {
+        navigate(`/cabinet/payment-wait?id=${encodeURIComponent(result.paymentId)}&kind=service`, { state: { url, provider, returnPath: location.pathname } });
+        onOpenChange(false);
+      }
+    } catch (cause) {
+      redirect.cancel();
+      toast({ title: "Не удалось открыть оплату", description: cause instanceof Error ? cause.message : undefined, variant: "error" });
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  const payPlatega = (methodId: number) => state.token && openPayment("Platega", () => api.clientCreatePlategaPayment(state.token!, { ...payload, paymentMethod: methodId, description: option.name }));
+  const payCryptoBot = () => state.token && openPayment("Crypto Bot", () => api.cryptopayCreatePayment(state.token!, payload));
+  const payRollyPay = () => state.token && openPayment("RollyPay", () => api.rollypayCreatePayment(state.token!, { ...payload, currency: option.currency }));
+
+  return (
+    <Dialog.Root
+      open={open}
+      onOpenChange={(v) => {
+        onOpenChange(v);
+        if (!v) setStep("checkout");
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay asChild>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="fixed inset-0 z-50 bg-ink-950/70 backdrop-blur-md"
+          />
+        </Dialog.Overlay>
+        <Dialog.Content asChild onFocusOutside={(event) => event.preventDefault()}>
+          <motion.div
+            initial={{ opacity: 0, y: 60, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ type: "spring", stiffness: 300, damping: 30 }}
+            className="glass-strong fixed inset-x-3 bottom-3 z-50 mx-auto flex max-h-[92dvh] max-w-lg flex-col overflow-hidden rounded-4xl sm:inset-x-0 sm:top-1/2 sm:bottom-auto sm:-translate-y-1/2"
+          >
+            <AnimatePresence mode="wait" initial={false}>
+              {step === "success" ? (
+                <motion.div
+                  key="success"
+                  initial={{ opacity: 0, scale: 0.94 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="p-7 text-center"
+                >
+                  <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-mint-500/15 text-mint-400">
+                    <Check className="h-8 w-8" strokeWidth={3} />
+                  </div>
+                  <Dialog.Title className="mt-5 text-2xl font-extrabold">Трафик зачислен</Dialog.Title>
+                  <Dialog.Description className="mt-2 text-sm text-fog-500">
+                    Пакет «{option.name}» добавлен к выбранной подписке.
+                  </Dialog.Description>
+                  <button autoFocus onClick={() => onOpenChange(false)} className="btn-primary mt-6 w-full px-6 py-4">
+                    Готово
+                  </button>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="checkout"
+                  initial={{ opacity: 0, x: 24 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 24 }}
+                  transition={{ duration: 0.22 }}
+                  className="no-scrollbar min-h-0 overflow-y-auto p-6"
+                >
+                  <div className="flex items-start gap-4">
+                    <div className={cn("grid h-14 w-14 shrink-0 place-items-center rounded-2xl border", whitelist ? "border-amber-glow/30 bg-amber-glow/12 text-amber-glow" : "border-violet-glow/30 bg-violet-glow/12 text-violet-glow")}>
+                      {whitelist ? <Signal className="h-6 w-6" /> : <Wifi className="h-6 w-6" />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <Dialog.Title className="text-2xl font-extrabold tracking-tight">{option.name}</Dialog.Title>
+                      <Dialog.Description className="mt-0.5 text-xs text-fog-500">{trafficOptionLabel(option.trafficMode)}</Dialog.Description>
+                    </div>
+                    <Dialog.Close className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-fog-500 transition-colors hover:bg-white/8 hover:text-white">
+                      <X className="h-5 w-5" />
+                    </Dialog.Close>
+                  </div>
+
+                  <div className="glass-inset mt-5 rounded-3xl p-5">
+                    <p className="text-sm text-fog-500">Итого к оплате</p>
+                    <p className="mt-1 text-4xl font-extrabold tracking-tight">{money(option.price, option.currency)}</p>
+                    <div className="mt-4 grid grid-cols-2 gap-2.5">
+                      <div className="flex flex-col justify-center rounded-2xl border border-white/8 bg-white/3 p-3">
+                        <p className="text-[10px] font-bold tracking-wider text-fog-600 uppercase">Трафик</p>
+                        <p className="mt-1 flex items-center gap-1.5 text-sm font-bold">
+                          <Wifi className="h-4 w-4 text-fog-500" /> +{option.trafficGb} ГБ
+                        </p>
+                      </div>
+                      <div className="flex flex-col justify-center rounded-2xl border border-white/8 bg-white/3 p-3">
+                        <p className="text-[10px] font-bold tracking-wider text-fog-600 uppercase">Назначение</p>
+                        <p className="mt-1 flex items-center gap-1.5 text-sm font-bold">
+                          <Signal className={cn("h-4 w-4", whitelist ? "text-amber-glow" : "text-fog-500")} /> {trafficOptionLabel(option.trafficMode)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="mt-6 mb-2 flex items-center gap-2 text-sm font-bold">
+                    <Wallet className="h-4 w-4 text-fog-500" /> Способ оплаты
+                  </p>
+                  <div className="flex flex-col gap-2.5">
+                    {user.balance > 0 && (
+                      <motion.button
+                        whileTap={{ scale: 0.98 }}
+                        disabled={paying || user.balance < option.price}
+                        onClick={payBalance}
+                        className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-orange-500 to-orange-600 p-4 text-left font-bold text-white shadow-[0_0_28px_-8px_rgba(249,115,22,0.7)] transition-filter hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wallet className="h-5 w-5" />}
+                        <span className="flex-1">{paying ? "Оплата…" : "Оплатить с баланса"}</span>
+                        <span className="rounded-lg bg-black/25 px-2.5 py-1 text-sm">
+                          {user.balance.toLocaleString("ru-RU")} ₽
+                        </span>
+                      </motion.button>
+                    )}
+
+                    {plategaMethods.length > 0 && <div className="rounded-3xl border border-accent-400/40 bg-accent-500/8 p-4 shadow-neon-blue">
+                      <div className="mb-3 flex items-center gap-2.5">
+                        <div className="icon-tile h-10 w-10 rounded-xl">
+                          <CreditCard className="h-5 w-5" />
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-bold">Platega</p>
+                          <p className="text-[11px] text-fog-500">Банковские платежи и крипта</p>
+                        </div>
+                        <span className="rounded-full bg-accent-500/20 px-2.5 py-1 text-[10px] font-extrabold tracking-wider text-accent-400 uppercase">
+                          Рекомендуем
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2.5">
+                        {sbpMethod && <motion.button
+                          whileTap={{ scale: 0.96 }}
+                          disabled={paying}
+                          onClick={() => payPlatega(sbpMethod.id)}
+                          className="btn-primary flex-col gap-0.5 rounded-2xl px-3 py-3.5 text-sm"
+                        >
+                          <span className="flex items-center gap-1.5 font-bold">
+                            {paying ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />} {paying ? "Оплата…" : "СБП"}
+                          </span>
+                          <span className="text-[10px] font-medium opacity-75">по QR-коду</span>
+                        </motion.button>}
+                        {cardMethod && <motion.button
+                          whileTap={{ scale: 0.96 }}
+                          disabled={paying}
+                          onClick={() => payPlatega(cardMethod.id)}
+                          className="btn-primary flex-col gap-0.5 rounded-2xl px-3 py-3.5 text-sm"
+                        >
+                          <span className="flex items-center gap-1.5 font-bold">
+                            {paying ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />} {paying ? "Оплата…" : "Карта"}
+                          </span>
+                          <span className="text-[10px] font-medium opacity-75">RUB · любой банк</span>
+                        </motion.button>}
+                      </div>
+                      {cryptoMethod && <button
+                        disabled={paying}
+                        onClick={() => payPlatega(cryptoMethod.id)}
+                        className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-xl py-1.5 text-xs font-semibold text-fog-400 transition-colors hover:text-accent-400"
+                      >
+                        {paying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bitcoin className="h-3.5 w-3.5" />} {paying ? "Оплата…" : "Оплатить криптой через Platega"}
+                      </button>}
+                      {otherPlategaMethods.length > 0 && <div className="mt-2.5 grid grid-cols-1 gap-2">
+                        {otherPlategaMethods.map((method) => (
+                          <button
+                            key={method.id}
+                            disabled={paying}
+                            onClick={() => payPlatega(method.id)}
+                            className="rounded-xl border border-accent-400/20 bg-accent-500/8 px-3 py-2 text-sm font-semibold transition-colors hover:bg-accent-500/15"
+                          >
+                            {paying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} {paying ? "Оплата…" : method.label}
+                          </button>
+                        ))}
+                      </div>}
+                    </div>}
+
+                    {config?.cryptopayEnabled && <button
+                      disabled={paying}
+                      onClick={payCryptoBot}
+                      className="glass group flex items-center gap-3 rounded-2xl p-4 text-left transition-all hover:border-amber-glow/30"
+                    >
+                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-amber-glow/25 bg-amber-glow/10 text-amber-glow">
+                        {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <Zap className="h-5 w-5" />}
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-bold">{paying ? "Оплата…" : "Crypto Bot"}</p>
+                        <p className="text-xs text-fog-500">USDT · TON · BTC</p>
+                      </div>
+                    </button>}
+                    {config?.rollypayEnabled && option.currency.toUpperCase() === "RUB" && <button
+                      disabled={paying}
+                      onClick={payRollyPay}
+                      className="glass group flex items-center gap-3 rounded-2xl p-4 text-left transition-all hover:border-emerald-400/30"
+                    >
+                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-emerald-400/25 bg-emerald-400/10 text-emerald-300">
+                        {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <CreditCard className="h-5 w-5" />}
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-bold">{paying ? "Оплата…" : "RollyPay"}</p>
+                        <p className="text-xs text-fog-500">Оплата в рублях</p>
+                      </div>
+                    </button>}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </motion.div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 export function ExtraOptions({ trafficOnly = false }: { trafficOnly?: boolean } = {}) {
   const { state } = useClientAuth();
   const { config, subscriptions } = useApp();
   const activeSubscriptions = subscriptions.filter((item) => item.status === "active");
   const selectableSubscriptions = trafficOnly ? activeSubscriptions : subscriptions;
   const [target, setTarget] = useState(selectableSubscriptions[0]?.id ?? "");
+  const [dialogOption, setDialogOption] = useState<TrafficSellOption | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const targetSubscription = selectableSubscriptions.find((item) => item.id === target) ?? selectableSubscriptions[0];
-  const options = (config?.sellOptions ?? []).filter((option) => {
+  const allOptions = (config?.sellOptions ?? []).filter((option) => {
     if (trafficOnly && option.kind !== "traffic") return false;
     if (trafficOnly && !targetSubscription) return false;
     return option.kind !== "traffic" || canBuyTrafficOption(option, targetSubscription);
   });
+  const options = allOptions;
   useEffect(() => {
     const pool = trafficOnly ? subscriptions.filter((item) => item.status === "active") : subscriptions;
     if (!pool.some((item) => item.id === target)) setTarget(pool[0]?.id ?? "");
   }, [subscriptions, target, trafficOnly]);
   return <div className="flex flex-col gap-5"><PageTitle icon={PackagePlus} title={trafficOnly ? "Докупить трафик" : "Дополнительные опции"} subtitle={trafficOnly ? "Пакеты трафика для выбранной подписки." : "Трафик, устройства и серверы для выбранной подписки."} />
     {selectableSubscriptions.length > 1 && <select value={target} onChange={(event) => setTarget(event.target.value)} className="input-glass"><option value="">Выберите подписку</option>{selectableSubscriptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{options.map((option) => <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} key={`${option.kind}:${option.id}`} className="glass rounded-4xl p-5"><div className="icon-tile h-11 w-11 rounded-xl">{option.kind === "traffic" ? <Wifi className="h-5 w-5" /> : option.kind === "devices" ? <Smartphone className="h-5 w-5" /> : <Server className="h-5 w-5" />}</div><h2 className="mt-4 text-lg font-extrabold">{option.name}</h2><p className="mt-1 text-sm text-fog-500">{optionDescription(option)}</p><p className="mt-4 text-2xl font-extrabold">{money(option.price, option.currency)}</p><CheckoutActions amount={option.price} currency={option.currency} description={option.name} payload={{ extraOption: { kind: option.kind, productId: option.id, targetSubscriptionId: target || undefined } }} balancePay={() => api.clientPayOptionByBalance(state.token!, { extraOption: { kind: option.kind, productId: option.id }, targetSubscriptionId: target || undefined })} /></motion.section>)}</div>
+    {trafficOnly ? (
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {sortTrafficOptions(options.filter((option): option is TrafficSellOption => option.kind === "traffic")).map((option) => (
+          <TrafficCard
+            key={option.id}
+            option={option}
+            onBuy={() => { setDialogOption(option); setDialogOpen(true); }}
+          />
+        ))}
+      </div>
+    ) : (
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{options.map((option) => <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} key={`${option.kind}:${option.id}`} className="glass rounded-4xl p-5"><div className="icon-tile h-11 w-11 rounded-xl">{option.kind === "traffic" ? <Wifi className="h-5 w-5" /> : option.kind === "devices" ? <Smartphone className="h-5 w-5" /> : <Server className="h-5 w-5" />}</div><h2 className="mt-4 text-lg font-extrabold">{option.name}</h2><p className="mt-1 text-sm text-fog-500">{optionDescription(option)}</p><p className="mt-4 text-2xl font-extrabold">{money(option.price, option.currency)}</p><CheckoutActions amount={option.price} currency={option.currency} description={option.name} payload={{ extraOption: { kind: option.kind, productId: option.id, targetSubscriptionId: target || undefined } }} balancePay={() => api.clientPayOptionByBalance(state.token!, { extraOption: { kind: option.kind, productId: option.id }, targetSubscriptionId: target || undefined })} /></motion.section>)}</div>
+    )}
+    {trafficOnly && <TrafficOptionDialog option={dialogOption} open={dialogOpen} onOpenChange={setDialogOpen} targetSubscriptionId={target || undefined} />}
     {config && options.length === 0 && <div className="glass rounded-4xl p-7 text-center text-fog-500">{trafficOnly && !targetSubscription ? "Сначала подключите тариф — после этого здесь появятся пакеты трафика." : "Для выбранной подписки подходящих пакетов сейчас нет."}</div>}
   </div>;
 }

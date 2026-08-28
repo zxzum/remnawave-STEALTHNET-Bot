@@ -8,6 +8,8 @@ import {
   mapSubscription,
   mapTariffGroups,
   canBuyTrafficOption,
+  sortTrafficOptions,
+  isWhitelistTrafficOption,
   groupPlategaMethods,
   trafficOptionLabel,
   trafficOptionUnitPrice,
@@ -269,4 +271,19 @@ test("groups devices under their actual subscription", () => {
   assert.deepEqual(grouped.get("root")?.map((item) => item.id), ["root-device"]);
   assert.deepEqual(grouped.get("secondary")?.map((item) => item.id), ["secondary-device"]);
   assert.equal(grouped.get("secondary")?.[0].app, "Happ");
+});
+
+test("prioritizes whitelist traffic packages for the accent card", () => {
+  const options = [
+    { id: "regular-100", trafficMode: "REMNAWAVE" },
+    { id: "whitelist-50", trafficMode: "LOCAL_SQUAD" },
+    { id: "any-pack", trafficMode: "ANY" },
+    { id: "legacy" },
+  ];
+  const sorted = sortTrafficOptions(options);
+  assert.deepEqual(sorted.map((option) => option.id), ["whitelist-50", "regular-100", "any-pack", "legacy"]);
+  assert.equal(isWhitelistTrafficOption(options[1]), true);
+  assert.equal(isWhitelistTrafficOption(options[0]), false);
+  assert.equal(isWhitelistTrafficOption(options[2]), false);
+  assert.equal(isWhitelistTrafficOption(options[3]), false);
 });

@@ -9,6 +9,13 @@ test("keeps the approved page transition", async () => {
   assert.match(layout, /duration: 0\.2/);
 });
 
+test("keeps the mounted page alive during background reloads", async () => {
+  const layout = await readFile(new URL("./components/Layout.tsx", import.meta.url), "utf8");
+  assert.match(layout, /const \[ready, setReady\] = useState\(false\)/);
+  assert.match(layout, /if \(!loading\) setReady\(true\)/);
+  assert.match(layout, /ready \? displayedOutlet/);
+});
+
 test("uses production cabinet routes and the real client logout", async () => {
   const layout = await readFile(new URL("./components/Layout.tsx", import.meta.url), "utf8");
   assert.match(layout, /useClientAuth/);

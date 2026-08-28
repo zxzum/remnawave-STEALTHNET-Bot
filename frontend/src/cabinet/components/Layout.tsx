@@ -303,6 +303,11 @@ export function Layout() {
   const [displayedOutlet, setDisplayedOutlet] = useState(outlet);
   const [displayedRouteKey, setDisplayedRouteKey] = useState(routeKey);
   const [isLeaving, setIsLeaving] = useState(false);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!loading) setReady(true);
+  }, [loading]);
 
   useEffect(() => {
     document.body.classList.add("cabinet-ui-active");
@@ -340,7 +345,7 @@ export function Layout() {
           transition={{ duration: 0.2, ease: "easeOut" }}
           className="min-w-0 max-w-full"
         >
-          {loading ? <InitialSkeleton pathname={location.pathname} /> : error ? <LoadError message={error} onRetry={reload} /> : displayedOutlet}
+          {ready ? displayedOutlet : loading ? <InitialSkeleton pathname={location.pathname} /> : error ? <LoadError message={error} onRetry={reload} /> : <InitialSkeleton pathname={location.pathname} />}
         </motion.div>
       </main>
     </div>

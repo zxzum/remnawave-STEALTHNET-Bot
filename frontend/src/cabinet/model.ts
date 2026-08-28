@@ -398,6 +398,16 @@ export function canBuyTrafficOption(
   return subscription.trafficLimitMode === "LOCAL_SQUAD" || subscription.whitelistGB !== null;
 }
 
+/** Пакет трафика для белых списков — акцентная карточка. */
+export function isWhitelistTrafficOption(option: { trafficMode?: "LOCAL_SQUAD" | "REMNAWAVE" | "ANY" }): boolean {
+  return option.trafficMode === "LOCAL_SQUAD";
+}
+
+/** Whitelist-пакеты первыми, остальные в исходном порядке. */
+export function sortTrafficOptions<T extends { trafficMode?: "LOCAL_SQUAD" | "REMNAWAVE" | "ANY" }>(options: T[]): T[] {
+  return [...options.filter(isWhitelistTrafficOption), ...options.filter((option) => !isWhitelistTrafficOption(option))];
+}
+
 export type PlategaMethod = { id: number; label: string };
 
 export function groupPlategaMethods(methods: PlategaMethod[]) {
