@@ -6,6 +6,12 @@ import { Gift, KeyRound, ShoppingBag, Smartphone, X, ChevronRight, Monitor, Send
 import { useApp } from "../store/AppContext";
 import { useClientAuth } from "@/contexts/client-auth";
 import { TrialsPickerDialog } from "@/components/cabinet/trials-picker-dialog";
+import { AnimatedNumber } from "../components/ui/animated-number";
+import { Button, buttonVariants } from "../components/ui/button";
+import { EmptyState } from "../components/ui/empty-state";
+import { IconTile } from "../components/ui/icon-tile";
+import { Progress } from "../components/ui/progress";
+import { Separator } from "../components/ui/separator";
 import { cn } from "../lib/cn";
 import { isExpiredTrial, type CabinetSubscription as Subscription } from "../model";
 import { PlanDialog } from "./Tariffs";
@@ -37,20 +43,6 @@ export function PageHeader() {
   );
 }
 
-function TrafficBar({ used, limit }: { used: number; limit: number }) {
-  const pct = Math.min(100, (used / limit) * 100);
-  return (
-    <div className="h-2.5 w-full overflow-hidden rounded-full bg-white/8 shadow-[inset_0_1px_3px_rgba(0,0,0,0.5)]">
-      <motion.div
-        className="h-full rounded-full bg-gradient-to-r from-accent-500 via-accent-400 to-mint-400 shadow-[0_0_12px_rgba(77,124,254,0.6)]"
-        initial={{ width: 0 }}
-        animate={{ width: `${pct}%` }}
-        transition={{ duration: 1.1, ease: [0.22, 1, 0.36, 1], delay: 0.2 }}
-      />
-    </div>
-  );
-}
-
 function MainSubscriptionCard({ sub }: { sub: Subscription }) {
   const { disconnectDevice } = useApp();
   const limit = sub.trafficLimitGB ?? 0;
@@ -62,7 +54,7 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -14, transition: { duration: 0.18 } }}
       transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-      className="glass-strong liquid min-w-0 max-w-full rounded-4xl p-5 min-[380px]:p-6 sm:p-7"
+      className="glass-strong liquid min-w-0 max-w-full rounded-4xl p-5 sm:p-6"
     >
       <div className="flex min-w-0 items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
@@ -77,21 +69,21 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
       </div>
 
       {expiredTrial ? (
-        <div className="flex min-h-72 flex-col items-center justify-center text-center">
-          <div className="icon-tile h-16 w-16 rounded-2xl">
-            <Gift className="h-7 w-7" />
-          </div>
-          <h2 className="mt-5 text-2xl font-extrabold">Пробный период закончился</h2>
-          <p className="mt-2 max-w-sm text-sm leading-relaxed text-fog-500">Выберите тариф, чтобы продолжить пользоваться Лазейкой ВПН.</p>
-          <Link to="/cabinet/tariffs" className="btn-primary mt-5 px-6 py-3">
-            <ShoppingBag className="h-5 w-5" />
+        <EmptyState
+          icon={Gift}
+          title="Пробный период закончился"
+          description="Выберите тариф, чтобы продолжить пользоваться Лазейкой ВПН."
+          className="min-h-72 justify-center"
+        >
+          <Link to="/cabinet/tariffs" className={buttonVariants({ size: "lg" })}>
+            <ShoppingBag />
             Все тарифы
           </Link>
-        </div>
+        </EmptyState>
       ) : <>
       <div className="mt-4 flex min-w-0 flex-wrap items-end gap-x-3 gap-y-1">
-        <span className="bg-gradient-to-br from-white to-fog-300 bg-clip-text text-6xl leading-none font-extrabold tracking-tight text-transparent min-[380px]:text-7xl">
-          {sub.daysLeft}
+        <span className="bg-gradient-to-br from-white to-fog-300 bg-clip-text text-5xl leading-none font-extrabold tracking-tight text-transparent min-[380px]:text-6xl">
+          <AnimatedNumber value={sub.daysLeft} />
         </span>
         <span className="pb-1.5 text-xl font-semibold text-fog-500">{pluralDays(sub.daysLeft)}</span>
         <span className="ml-auto pb-1 text-right text-xs text-fog-600">
@@ -106,7 +98,7 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
             {sub.trafficUsedGB.toLocaleString("ru-RU")} / {sub.trafficLimitGB ? `${limit} ГБ` : "∞"}
           </span>
         </div>
-        {sub.trafficLimitGB && <TrafficBar used={sub.trafficUsedGB} limit={limit} />}
+        {sub.trafficLimitGB && <Progress value={sub.trafficUsedGB} max={limit} />}
         <p className="mt-2 text-xs text-fog-600">
           Всего за всё время: {sub.trafficAllTimeGB.toLocaleString("ru-RU")} ГБ
         </p>
@@ -118,12 +110,13 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
                 {formatGb(sub.whitelistUsedGB)} / {formatGb(sub.whitelistGB)}
               </span>
             </div>
-            <TrafficBar used={sub.whitelistUsedGB} limit={sub.whitelistGB} />
+            {/* Whitelist-трафик выделяем янтарным тоном — как chips в ключах доступа */}
+            <Progress value={sub.whitelistUsedGB} max={sub.whitelistGB} tone="amber" />
           </div>
         )}
       </div>
 
-      <div className="my-6 h-px bg-white/8" />
+      <Separator className="my-6" />
 
       <div className="mb-4 flex items-center justify-between">
         <h3 className="text-lg font-bold">Устройства</h3>
@@ -138,24 +131,26 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
             key={d.id}
             initial={{ opacity: 0, x: -12 }}
             animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.3 + i * 0.08 }}
-            className="flex items-center gap-4"
+            transition={{ delay: 0.2 + i * 0.05 }}
+            className="flex items-center gap-3"
           >
-            <div className="icon-tile">
-              {d.os === "macOS" || d.os === "Windows" ? <Monitor className="h-5 w-5" /> : <Smartphone className="h-5 w-5" />}
-            </div>
+            <IconTile size="sm">
+              {d.os === "macOS" || d.os === "Windows" ? <Monitor className="h-4 w-4" /> : <Smartphone className="h-4 w-4" />}
+            </IconTile>
             <div className="min-w-0 flex-1">
               <p className="truncate font-bold">{d.name}</p>
               <p className={cn("text-sm", d.connectedNow ? "text-mint-400" : "text-fog-600")}>
                 {d.connectedNow ? "Подключено сейчас" : "Не в сети"}
               </p>
             </div>
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-fog-500 hover:bg-red-500/10 hover:text-red-400"
               onClick={() => disconnectDevice(sub.id, d.id)}
-              className="rounded-xl px-3 py-2 text-sm font-semibold text-fog-500 transition-all hover:bg-red-500/10 hover:text-red-400"
             >
               Отключить
-            </button>
+            </Button>
           </motion.li>
         ))}
       </ul>
@@ -359,15 +354,27 @@ export default function Cabinet() {
 
   if (!main) {
     return (
-      <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-4">
         <PageHeader />
-        <div><h1 className="text-3xl font-extrabold tracking-tight">Кабинет</h1><p className="mt-1 text-fog-500">Ваша подписка и подключённые устройства</p></div>
-        <section className="glass-strong liquid mx-auto w-full max-w-xl rounded-4xl p-7 text-center sm:p-9">
-          <div className="icon-tile mx-auto h-16 w-16 rounded-2xl"><Package className="h-7 w-7" /></div>
-          <h2 className="mt-5 text-xl font-extrabold">Подписка ещё не выбрана</h2>
-          <p className="mt-2 text-sm leading-relaxed text-fog-500">Выберите тариф, чтобы получить ключ доступа и подключить VPN.</p>
-          {availableTrials.length > 0 && <Link to="/cabinet/dashboard?trial=1" className="btn-primary mt-4 px-6 py-4"><Gift className="h-5 w-5" />Активировать пробный период</Link>}
-          <Link to="/cabinet/tariffs" className="btn-primary mt-6 px-6 py-4"><ShoppingBag className="h-5 w-5" />Выбрать тариф</Link>
+        <div><h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Кабинет</h1><p className="mt-1 text-fog-500">Ваша подписка и подключённые устройства</p></div>
+        <section className="glass-strong liquid mx-auto w-full max-w-xl rounded-4xl p-6 text-center sm:p-8">
+          <EmptyState
+            icon={Package}
+            title="Подписка ещё не выбрана"
+            description="Выберите тариф, чтобы получить ключ доступа и подключить VPN."
+            className="py-2"
+          >
+            {availableTrials.length > 0 && (
+              <Link to="/cabinet/dashboard?trial=1" className={cn(buttonVariants({ size: "lg" }), "w-full max-w-xs")}>
+                <Gift />
+                Активировать пробный период
+              </Link>
+            )}
+            <Link to="/cabinet/tariffs" className={cn(buttonVariants({ size: "lg" }), "w-full max-w-xs")}>
+              <ShoppingBag />
+              Выбрать тариф
+            </Link>
+          </EmptyState>
         </section>
         {trialDialog}
         <BindTelegramDialog open={bindOpen} onClose={() => setParams({})} />
@@ -378,41 +385,58 @@ export default function Cabinet() {
   }
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader />
 
       <div>
-        <h1 className="text-3xl font-extrabold tracking-tight">Кабинет</h1>
+        <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Кабинет</h1>
         <p className="mt-1 text-fog-500">Ваша подписка и подключённые устройства</p>
       </div>
 
-      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <AnimatePresence mode="wait">
           {main && <MainSubscriptionCard key={main.id} sub={main} />}
         </AnimatePresence>
 
-        <div className="flex flex-col gap-5">
-          <motion.div
-            className="flex flex-col gap-3"
+        <div className="flex flex-col gap-4">
+          <motion.section
+            className="glass rounded-4xl p-5"
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.35, duration: 0.4 }}
+            transition={{ delay: 0.3, duration: 0.4 }}
           >
-            <Link to="/cabinet/tariffs" onClick={(event) => { if (renewalPlan) { event.preventDefault(); setRenewOpen(true); } }} className="btn-primary px-6 py-4 text-base">
-              <RefreshCw className="h-5 w-5" />
-              Продлить подписку
-            </Link>
-            {config?.sellOptions?.some((option) => option.kind === "traffic") && <Link to="/cabinet/tariffs#traffic" className="btn-ghost px-6 py-4 text-base"><PackagePlus className="h-5 w-5" />Докупить трафик</Link>}
-            <Link to={`/cabinet/subscribe?sub=${main.id}`} className="btn-ghost px-6 py-4 text-base">
-              <KeyRound className="h-5 w-5" />
-              Открыть ключи доступа
-            </Link>
-            {availableTrials.length > 0 && <Link to="/cabinet/dashboard?trial=1" className="btn-ghost px-6 py-4 text-base"><Gift className="h-5 w-5" />Активировать пробный период</Link>}
-            <Link to="/cabinet/tariffs" className="btn-ghost px-6 py-4 text-base">
-              <ShoppingBag className="h-5 w-5" />
-              Все тарифы
-            </Link>
-          </motion.div>
+            <h3 className="text-base font-extrabold">Быстрые действия</h3>
+            <div className="mt-4 flex flex-col gap-2.5">
+              <Link
+                to="/cabinet/tariffs"
+                onClick={(event) => { if (renewalPlan) { event.preventDefault(); setRenewOpen(true); } }}
+                className={cn(buttonVariants({ size: "lg" }), "w-full justify-start")}
+              >
+                <RefreshCw />
+                Продлить подписку
+              </Link>
+              {config?.sellOptions?.some((option) => option.kind === "traffic") && (
+                <Link to="/cabinet/tariffs#traffic" className={cn(buttonVariants({ variant: "secondary", size: "md" }), "w-full justify-start")}>
+                  <PackagePlus />
+                  Докупить трафик
+                </Link>
+              )}
+              <Link to={`/cabinet/subscribe?sub=${main.id}`} className={cn(buttonVariants({ variant: "secondary", size: "md" }), "w-full justify-start")}>
+                <KeyRound />
+                Открыть ключи доступа
+              </Link>
+              {availableTrials.length > 0 && (
+                <Link to="/cabinet/dashboard?trial=1" className={cn(buttonVariants({ variant: "secondary", size: "md" }), "w-full justify-start")}>
+                  <Gift />
+                  Активировать пробный период
+                </Link>
+              )}
+              <Link to="/cabinet/tariffs" className={cn(buttonVariants({ variant: "secondary", size: "md" }), "w-full justify-start")}>
+                <ShoppingBag />
+                Все тарифы
+              </Link>
+            </div>
+          </motion.section>
 
           {rest.length > 0 && (
             <div className="flex flex-col gap-3">
