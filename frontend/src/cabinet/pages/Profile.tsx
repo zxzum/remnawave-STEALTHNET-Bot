@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import * as Switch from "@radix-ui/react-switch";
-import * as Dialog from "@radix-ui/react-dialog";
 import {
   ShieldCheck,
   KeyRound,
@@ -24,7 +22,6 @@ import {
   Hash,
   QrCode,
   Bitcoin,
-  X,
   Layers3,
   PackagePlus,
   Gift,
@@ -37,6 +34,10 @@ import {
 import { cn } from "../lib/cn";
 import { useApp } from "../store/AppContext";
 import { formatCurrency, resolvePaymentUrl, type CabinetTransaction as Transaction } from "../model";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Switch } from "../components/ui/switch";
+import { Modal, ModalBody, ModalDescription, ModalTitle } from "../components/ui/modal";
 import { CopyIconButton } from "../components/ui/CopyButton";
 import { useClientAuth } from "@/contexts/client-auth";
 import { api } from "@/lib/api";
@@ -219,7 +220,7 @@ function TopUp() {
   };
 
   return (
-    <section className="glass rounded-4xl p-5 sm:p-6">
+    <section id="topup" className="glass scroll-mt-6 rounded-4xl p-5 sm:p-6">
       <div className="mb-4 flex items-center gap-3">
         <div className="icon-tile h-11 w-11 rounded-xl">
           <Wallet className="h-5 w-5" />
@@ -234,6 +235,7 @@ function TopUp() {
         {quickAmounts.map((a) => (
           <button
             key={a}
+            type="button"
             onClick={() => setAmount(a)}
             className={cn(
               "flex-1 rounded-xl border py-2 text-sm font-bold transition-all",
@@ -247,22 +249,29 @@ function TopUp() {
         ))}
       </div>
 
-      <div className="flex gap-2.5">
+      {/* сабмит по Enter из поля суммы */}
+      <form
+        className="flex gap-2.5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!paying && method) void pay();
+        }}
+      >
         <div className="relative flex-1">
-          <input
+          <Input
             type="number"
             min={1}
             value={amount || ""}
             onChange={(e) => setAmount(parseInt(e.target.value) || 0)}
             placeholder="Сумма"
-            className="input-glass pr-10"
+            className="pr-10"
           />
           <span className="absolute top-1/2 right-4 -translate-y-1/2 text-fog-500">{currency.toUpperCase()}</span>
         </div>
-        <button disabled={paying || !method} onClick={pay} className="btn-primary px-6 py-3 text-sm disabled:opacity-40">
-          {paying ? "Открываем…" : "Пополнить"}
-        </button>
-      </div>
+        <Button type="submit" size="lg" className="px-6" disabled={!method} loading={paying} loadingText="Открываем…">
+          Пополнить
+        </Button>
+      </form>
 
       <div className="mt-3 flex flex-wrap gap-2">
         {methods.map((m) => (
@@ -312,8 +321,12 @@ function AccountData() {
         ))}
       </div>
       {canLinkTelegram && (
-        <button
-          disabled={linking}
+        <Button
+          variant="ghost"
+          size="lg"
+          className="mt-4 w-full"
+          loading={linking}
+          loadingText="Открываем Telegram…"
           onClick={async () => {
             setLinking(true);
             try {
@@ -322,14 +335,17 @@ function AccountData() {
               setLinking(false);
             }
           }}
-          className="btn-ghost mt-4 w-full px-5 py-3 text-sm disabled:cursor-wait disabled:opacity-60"
         >
-          <Send className="h-4 w-4" /> {linking ? "Открываем Telegram…" : "Привязать Telegram"}
-        </button>
+          <Send /> Привязать Telegram
+        </Button>
       )}
       {canUnlinkTelegram && (
-        <button
-          disabled={unlinking}
+        <Button
+          variant="ghost"
+          size="lg"
+          className="mt-2 w-full text-rose-300"
+          loading={unlinking}
+          loadingText="Отвязываем…"
           onClick={async () => {
             if (!window.confirm("Отвязать Telegram от аккаунта?")) return;
             setUnlinking(true);
@@ -339,10 +355,9 @@ function AccountData() {
               setUnlinking(false);
             }
           }}
-          className="btn-ghost mt-2 w-full px-5 py-3 text-sm text-rose-300 disabled:cursor-wait disabled:opacity-60"
         >
-          <Unlink className="h-4 w-4" /> {unlinking ? "Отвязываем…" : "Отвязать Telegram"}
-        </button>
+          <Unlink /> Отвязать Telegram
+        </Button>
       )}
       <div className="mt-4 flex flex-col gap-2">
         <p className="text-[10px] font-bold tracking-wider text-fog-600 uppercase">Реферальные ссылки</p>
@@ -435,36 +450,39 @@ function SecurityDialog({ mode, onClose }: { mode: SecurityMode | null; onClose:
     || (mode === "email" && !/^\S+@\S+\.\S+$/.test(email));
 
   return (
-    <Dialog.Root open={mode !== null} onOpenChange={(open) => !open && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Overlay asChild><motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 z-50 bg-ink-950/70 backdrop-blur-md" /></Dialog.Overlay>
-        <Dialog.Content asChild>
-          <motion.div initial={{ opacity: 0, y: 30, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} className="glass-strong fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md rounded-4xl p-6 sm:inset-x-0 sm:top-1/2 sm:bottom-auto sm:-translate-y-1/2">
-            <div className="flex items-center gap-3">
-              <div className="icon-tile h-11 w-11 rounded-xl"><ShieldCheck className="h-5 w-5" /></div>
-              <Dialog.Title className="flex-1 text-lg font-extrabold">{title}</Dialog.Title>
-              <Dialog.Close className="grid h-9 w-9 place-items-center rounded-xl text-fog-500 hover:bg-white/8"><X className="h-5 w-5" /></Dialog.Close>
-            </div>
-            <Dialog.Description className="mt-2 text-xs text-fog-500">
-              {mode === "2fa" ? "Используйте приложение-аутентификатор и одноразовый шестизначный код." : "Изменение применяется только после подтверждения сервером."}
-            </Dialog.Description>
+    <Modal open={mode !== null} onOpenChange={(open) => !open && onClose()} className="max-w-md">
+      <ModalBody>
+        {/* крестик закрытия встроен в Modal */}
+        <div className="flex items-center gap-3">
+          <div className="icon-tile h-11 w-11 rounded-xl"><ShieldCheck className="h-5 w-5" /></div>
+          <ModalTitle className="flex-1 pr-8 text-lg font-extrabold">{title}</ModalTitle>
+        </div>
+        <ModalDescription className="mt-2 text-xs text-fog-500">
+          {mode === "2fa" ? "Используйте приложение-аутентификатор и одноразовый шестизначный код." : "Изменение применяется только после подтверждения сервером."}
+        </ModalDescription>
 
-            {mode === "2fa" && !totpEnabled && setup && <>
-              <div className="mx-auto mt-5 w-fit rounded-2xl bg-white p-3"><QRCodeSVG value={setup.otpauthUrl} size={176} /></div>
-              <div className="glass-inset mt-3 flex items-center gap-2 rounded-xl px-3 py-2"><span className="min-w-0 flex-1 truncate font-mono text-xs">{setup.secret}</span><CopyIconButton text={setup.secret} label="Ключ скопирован" /></div>
-            </>}
-            {mode === "2fa" && <input value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="000000" className="input-glass mt-4 text-center font-mono text-xl tracking-[0.45em]" />}
-            {mode === "password" && <div className="mt-4 flex flex-col gap-3">
-              {state.client?.hasPassword && <input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" placeholder="Текущий пароль" className="input-glass" />}
-              <input type="password" minLength={8} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" placeholder="Новый пароль · минимум 8 символов" className="input-glass" />
-            </div>}
-            {mode === "email" && <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="name@example.com" className="input-glass mt-4" />}
-            {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
-            <button disabled={disabled} onClick={submit} className="btn-primary mt-5 w-full px-5 py-3.5 text-sm disabled:opacity-40">{loading ? "Сохраняем…" : "Подтвердить"}</button>
-          </motion.div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+        {/* Enter в любом поле отправляет форму */}
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!disabled) void submit();
+          }}
+        >
+          {mode === "2fa" && !totpEnabled && setup && <>
+            <div className="mx-auto mt-5 w-fit rounded-2xl bg-white p-3"><QRCodeSVG value={setup.otpauthUrl} size={176} /></div>
+            <div className="glass-inset mt-3 flex items-center gap-2 rounded-xl px-3 py-2"><span className="min-w-0 flex-1 truncate font-mono text-xs">{setup.secret}</span><CopyIconButton text={setup.secret} label="Ключ скопирован" /></div>
+          </>}
+          {mode === "2fa" && <Input value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="000000" className="mt-4 text-center font-mono text-xl tracking-[0.45em]" />}
+          {mode === "password" && <div className="mt-4 flex flex-col gap-3">
+            {state.client?.hasPassword && <Input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" placeholder="Текущий пароль" />}
+            <Input type="password" minLength={8} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" placeholder="Новый пароль · минимум 8 символов" />
+          </div>}
+          {mode === "email" && <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="name@example.com" className="mt-4" />}
+          {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
+          <Button type="submit" size="lg" className="mt-5 w-full" disabled={disabled} loading={loading} loadingText="Сохраняем…">Подтвердить</Button>
+        </form>
+      </ModalBody>
+    </Modal>
   );
 }
 
@@ -494,13 +512,10 @@ function Security() {
             <p className="text-xs text-fog-500">Двухфакторная аутентификация</p>
             <p className="text-sm font-bold">Многоуровневая защита</p>
           </div>
-          <Switch.Root
+          <Switch
             checked={Boolean(state.client?.totpEnabled)}
             onCheckedChange={() => setMode("2fa")}
-            className="relative h-7 w-12 shrink-0 rounded-full bg-white/10 transition-colors data-[state=checked]:bg-mint-500 data-[state=checked]:shadow-neon-mint"
-          >
-            <Switch.Thumb className="block h-5 w-5 translate-x-1 rounded-full bg-white shadow transition-transform data-[state=checked]:translate-x-6" />
-          </Switch.Root>
+          />
         </div>
 
         {[
@@ -515,12 +530,9 @@ function Security() {
               <p className="text-xs text-fog-500">{r.sub}</p>
               <p className="text-sm font-bold">{r.title}</p>
             </div>
-            <button
-              onClick={() => setMode(r.mode)}
-              className="btn-ghost px-4 py-2 text-xs"
-            >
+            <Button variant="ghost" size="sm" onClick={() => setMode(r.mode)}>
               {r.btn}
-            </button>
+            </Button>
           </div>
         ))}
 
@@ -640,66 +652,53 @@ function PaymentsHistory() {
         ))}
       </div>
 
-      <button onClick={() => setOpen(true)} className="btn-ghost mt-3 w-full px-4 py-3 text-sm">
-        <History className="h-4 w-4" /> Все операции ({transactions.length})
-      </button>
+      <Button variant="ghost" className="mt-3 w-full" onClick={() => setOpen(true)}>
+        <History /> Все операции ({transactions.length})
+      </Button>
 
-      <Dialog.Root open={open} onOpenChange={setOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay asChild>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 z-50 bg-ink-950/70 backdrop-blur-md" />
-          </Dialog.Overlay>
-          <Dialog.Content asChild>
-            <motion.div
-              initial={{ opacity: 0, y: 60, scale: 0.97 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={{ type: "spring", stiffness: 300, damping: 30 }}
-              className="glass-strong fixed inset-x-3 bottom-3 z-50 mx-auto flex max-h-[88dvh] max-w-lg flex-col overflow-hidden rounded-4xl sm:inset-x-0 sm:top-1/2 sm:bottom-auto sm:-translate-y-1/2"
-            >
-              <div className="flex items-center gap-3 border-b border-white/8 p-5">
-                <div className="icon-tile h-10 w-10 rounded-xl">
-                  <History className="h-5 w-5" />
-                </div>
-                <div className="flex-1">
-                  <Dialog.Title className="font-extrabold">История платежей</Dialog.Title>
-                  <Dialog.Description className="text-xs text-fog-500">
-                    {filtered.length} из {transactions.length} операций
-                  </Dialog.Description>
-                </div>
-                <Dialog.Close className="grid h-9 w-9 place-items-center rounded-xl text-fog-500 transition-colors hover:bg-white/8 hover:text-white">
-                  <X className="h-5 w-5" />
-                </Dialog.Close>
-              </div>
+      <Modal open={open} onOpenChange={setOpen} className="max-w-lg">
+        {/* крестик закрытия встроен в Modal */}
+        <ModalBody className="flex flex-col p-0">
+          <div className="flex items-center gap-3 border-b border-white/8 p-5 pr-16">
+            <div className="icon-tile h-10 w-10 rounded-xl">
+              <History className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <ModalTitle className="font-extrabold">История платежей</ModalTitle>
+              <ModalDescription className="text-xs text-fog-500">
+                {filtered.length} из {transactions.length} операций
+              </ModalDescription>
+            </div>
+          </div>
 
-              <div className="flex gap-2 border-b border-white/8 px-5 py-3">
-                {filters.map((f) => (
-                  <button
-                    key={f.id}
-                    onClick={() => setFilter(f.id)}
-                    className={cn(
-                      "rounded-xl border px-3.5 py-2 text-xs font-bold transition-all",
-                      filter === f.id
-                        ? "border-accent-400/60 bg-accent-500/15 text-accent-400 shadow-neon-blue"
-                        : "border-white/8 bg-white/3 text-fog-500 hover:border-white/20",
-                    )}
-                  >
-                    {f.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-2">
-                {filtered.map((t, i) => (
-                  <TxRow key={t.id} t={t} i={i} />
-                ))}
-                {filtered.length === 0 && (
-                  <p className="py-10 text-center text-sm text-fog-500">Операций не найдено</p>
+          <div className="flex gap-2 border-b border-white/8 px-5 py-3">
+            {filters.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setFilter(f.id)}
+                className={cn(
+                  "rounded-xl border px-3.5 py-2 text-xs font-bold transition-all",
+                  filter === f.id
+                    ? "border-accent-400/60 bg-accent-500/15 text-accent-400 shadow-neon-blue"
+                    : "border-white/8 bg-white/3 text-fog-500 hover:border-white/20",
                 )}
-              </div>
-            </motion.div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-2">
+            {filtered.map((t, i) => (
+              <TxRow key={t.id} t={t} i={i} />
+            ))}
+            {filtered.length === 0 && (
+              <p className="py-10 text-center text-sm text-fog-500">Операций не найдено</p>
+            )}
+          </div>
+        </ModalBody>
+      </Modal>
     </section>
   );
 }
@@ -827,6 +826,7 @@ export default function Profile() {
   const { user } = useApp();
   const { logout } = useClientAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [isDesktopLayout, setIsDesktopLayout] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1024);
   const isMiniapp = typeof window !== "undefined" && Boolean((window as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp?.initData);
   useEffect(() => {
@@ -836,6 +836,11 @@ export default function Profile() {
     media.addEventListener("change", updateLayout);
     return () => media.removeEventListener("change", updateLayout);
   }, []);
+  useEffect(() => {
+    // Прямая ссылка /cabinet/profile#topup — прокручиваем к секции пополнения
+    // (ключ локации меняется при каждом переходе, поэтому повторный клик тоже сработает)
+    if (location.hash === "#topup") document.getElementById("topup")?.scrollIntoView({ block: "start" });
+  }, [location.key, location.hash]);
   return (
     <div className="flex flex-col gap-5">
       <header className="flex items-center gap-4 lg:hidden">
