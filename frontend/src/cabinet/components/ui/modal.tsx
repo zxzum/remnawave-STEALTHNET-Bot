@@ -2,11 +2,18 @@ import { createContext, useContext, type HTMLAttributes, type ReactNode } from "
 import * as RadixDialog from "@radix-ui/react-dialog";
 import { AnimatePresence, motion } from "framer-motion";
 import { Drawer } from "vaul";
-import { X } from "lucide-react";
+import { ArrowLeft, X } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { useIsDesktop } from "../../lib/use-media-query";
 
 const ModalKindContext = createContext<"radix" | "drawer">("radix");
+
+/**
+ * Общий плейт икон-кнопок шапки (back = close): одинаковая плашка h-8 w-8,
+ * иконка 16px по центру. Любые шапки с ним симметричны — голой стрелки больше нет.
+ */
+export const modalIconButtonClass =
+  "grid h-8 w-8 shrink-0 cursor-pointer place-items-center rounded-xl bg-white/6 text-fog-400 transition-all duration-200 hover:bg-white/12 hover:text-white active:scale-[0.97]";
 
 export interface ModalProps {
   open: boolean;
@@ -87,14 +94,32 @@ export function Modal({ open, onOpenChange, children, className, hideClose }: Mo
 
 function ModalClose({ target }: { target: "radix" | "drawer" }) {
   const button = (
-    <button
-      aria-label="Закрыть"
-      className="absolute top-4 right-4 z-10 grid h-8 w-8 cursor-pointer place-items-center rounded-xl bg-white/6 text-fog-400 transition-colors hover:bg-white/12 hover:text-white"
-    >
+    <button aria-label="Закрыть" className={cn(modalIconButtonClass, "absolute top-4 right-4 z-10")}>
       <X className="h-4 w-4" />
     </button>
   );
   return target === "drawer" ? <Drawer.Close asChild>{button}</Drawer.Close> : <RadixDialog.Close asChild>{button}</RadixDialog.Close>;
+}
+
+/**
+ * Back-кнопка шапки — тем же плейтом, что и close (X). Ставить в один ряд с X
+ * (та же высота h-8 и иконка 16px) — тогда шапка симметрична с обеих сторон.
+ */
+export function ModalBack({
+  onClick,
+  className,
+  label = "Назад",
+}: {
+  onClick: () => void;
+  className?: string;
+  /** Доступное имя для aria */
+  label?: string;
+}) {
+  return (
+    <button type="button" aria-label={label} onClick={onClick} className={cn(modalIconButtonClass, className)}>
+      <ArrowLeft className="h-4 w-4" />
+    </button>
+  );
 }
 
 /** Скролл-область модалки */

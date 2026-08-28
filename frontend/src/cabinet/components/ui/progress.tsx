@@ -29,7 +29,8 @@ export function Progress({
         )}
         initial={{ width: 0 }}
         animate={{ width: `${pct}%` }}
-        transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
+        // spring вместо линейного tween: заполнение доезжает без рывков при частых обновлениях
+        transition={{ type: "spring", stiffness: 110, damping: 20, mass: 0.9 }}
       />
     </div>
   );

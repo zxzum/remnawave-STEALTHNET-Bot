@@ -20,7 +20,8 @@ Select.displayName = "Select";
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean }>(
   ({ className, invalid, ...props }, ref) => (
-    <textarea ref={ref} className={cn(controlBase, "min-h-20 resize-none", invalid && "border-red-400/50", className)} {...props} />
+    // py-2.5 — многострочному тексту нужно больше воздуха, чем однострочным контролям (высота не 44px)
+    <textarea ref={ref} className={cn(controlBase, "min-h-20 resize-none py-2.5", invalid && "border-red-400/50", className)} {...props} />
   ),
 );
 Textarea.displayName = "Textarea";

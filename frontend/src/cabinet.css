@@ -140,6 +140,15 @@ body.cabinet-ui-active *::-webkit-scrollbar-thumb:hover {
     color: #04120b;
     font-weight: 700;
     box-shadow: var(--shadow-neon-mint), inset 0 1px 0 rgb(255 255 255 / 0.35);
+    /* как у primary: плавный press/hover, иначе active:scale срабатывает рывком */
+    transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease, filter 0.2s ease;
+  }
+  body.cabinet-ui-active .btn-success:hover {
+    filter: brightness(1.08);
+    box-shadow: 0 0 28px -6px rgb(47 213 138 / 0.6), var(--shadow-neon-mint), inset 0 1px 0 rgb(255 255 255 / 0.4);
+  }
+  body.cabinet-ui-active .btn-success:active {
+    transform: scale(0.965);
   }
 
   /* ---------- Chips ---------- */
@@ -186,18 +195,25 @@ body.cabinet-ui-active *::-webkit-scrollbar-thumb:hover {
   }
 
   /* ---------- Inputs ---------- */
+  /* Вертикальный ритм контролов = 44px (кнопка md = h-11):
+     пара «инпут промокода + кнопка Применить» — одна высота, ровная строка */
   body.cabinet-ui-active .input-glass {
     width: 100%;
+    min-height: 2.75rem;
     border-radius: 1.2rem;
     background: rgb(4 6 14 / 0.55);
     border: 1px solid rgb(255 255 255 / 0.08);
-    padding: 0.9rem 1.2rem;
+    padding: 0.5rem 1rem;
     color: var(--color-fog-100);
     outline: none;
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
   }
   body.cabinet-ui-active .input-glass::placeholder {
     color: var(--color-fog-600);
+  }
+  /* лёгкий отклик на курсор до фокуса (живость) */
+  body.cabinet-ui-active .input-glass:hover:not(:focus) {
+    border-color: rgb(255 255 255 / 0.15);
   }
   body.cabinet-ui-active .input-glass:focus {
     border-color: rgb(167 139 250 / 0.5);
