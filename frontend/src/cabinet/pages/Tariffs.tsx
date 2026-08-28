@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import * as Accordion from "@radix-ui/react-accordion";
 import { useClientAuth } from "@/contexts/client-auth";
 import { api, type PublicConfig, type TariffConversionPreview } from "@/lib/api";
-import { Modal, ModalDescription, ModalTitle } from "../components/ui/modal";
+import { Modal, ModalBack, ModalDescription, ModalTitle } from "../components/ui/modal";
 import { OptionCard } from "../components/ui/option-card";
 import { Stepper } from "../components/ui/stepper";
 import { Checkbox } from "../components/ui/checkbox";
@@ -23,7 +23,8 @@ import {
   Signal,
   Smartphone,
   CreditCard,
-  ArrowLeft,
+  Globe,
+  Loader2,
   RefreshCw,
   Wallet,
   Zap,
@@ -51,6 +52,71 @@ function formatMoney(value: number, currency: string) {
   } catch {
     return `${value.toLocaleString("ru-RU")} ${currency.toUpperCase()}`;
   }
+}
+
+/**
+ * Ряд способа оплаты — единая строка h-11: иконка и название слева, подпись/баланс справа.
+ * Все методы оплаты (баланс, Platega, CryptoBot, RollyPay) строятся из него — сетка без
+ * разнобоя высот и без ссылок-строк по центру.
+ */
+function PaymentRow({
+  icon,
+  title,
+  sub,
+  trailing,
+  tone = "default",
+  size = "md",
+  loading,
+  disabled,
+  className,
+  type = "button",
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  icon?: ReactNode;
+  title: ReactNode;
+  /** Подпись под названием («USDT · TON · BTC») */
+  sub?: ReactNode;
+  /** Слот справа (баланс) */
+  trailing?: ReactNode;
+  /** accent — акцентные ячейки Platega (СБП/Карта) */
+  tone?: "default" | "accent";
+  /** sm — ячейка сетки (мельче шрифт), md — ряд на всю ширину */
+  size?: "md" | "sm";
+  loading?: boolean;
+}) {
+  const titleSize = size === "sm" ? "text-xs" : "text-sm";
+  return (
+    <button
+      type={type}
+      disabled={disabled || loading}
+      className={cn(
+        "flex h-11 w-full cursor-pointer items-center gap-2.5 rounded-2xl border px-3 text-left transition-all duration-200 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-400",
+        tone === "accent"
+          ? "border-accent-400/45 bg-accent-500/12 text-white hover:border-accent-400/80 hover:bg-accent-500/20"
+          : "glass text-fog-100 hover:bg-white/8 hover:border-white/20",
+        className,
+      )}
+      {...props}
+    >
+      {loading ? (
+        <>
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+          <span className={cn("truncate font-extrabold", titleSize)}>Оплата…</span>
+        </>
+      ) : (
+        <>
+          {icon}
+          <span className="flex min-w-0 flex-1 flex-col justify-center leading-tight">
+            <span className={cn("truncate font-bold", titleSize)}>{title}</span>
+            {sub != null && (
+              <span className={cn("truncate font-medium text-fog-500", size === "sm" ? "text-[10px]" : "text-[11px]")}>{sub}</span>
+            )}
+          </span>
+          {trailing}
+        </>
+      )}
+    </button>
+  );
 }
 
 /* ---------------- Конфигуратор + оплата ---------------- */
@@ -93,8 +159,10 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
     ?? plan?.durationOptions[0]?.id
     ?? null;
 
+  // Прогрев конвертации стартует сразу при выборе плана — даже когда модалка ещё закрыта
+  // (кейс «Продлить» / `?extend=`), поэтому к открытию чекаута строка «+N дн.» уже в кэше
   useEffect(() => {
-    if (!open || !plan || !state.token) {
+    if (!plan || !state.token) {
       setConversion(null);
       return;
     }
@@ -104,9 +172,9 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
       tariffId: plan.id,
       priceOptionId: selectedOptionId ?? undefined,
     }).then((preview) => {
-      if (current) setConversion(preview);
+      if (current && open) setConversion(preview);
     }).catch(() => {
-      if (current) setConversion(null);
+      if (current && open) setConversion(null);
     });
     return () => { current = false; };
   }, [open, plan, selectedOptionId, state.token]);
@@ -290,6 +358,19 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
   const payRollyPay = () => state.token && openPayment("RollyPay", () => api.rollypayCreatePayment(state.token!, purchasePayload));
   const plategaMethods = config?.plategaMethods ?? [];
   const { sbp: sbpMethod, card: cardMethod, crypto: cryptoMethod, other: otherPlategaMethods } = groupPlategaMethods(plategaMethods);
+  // Второй ряд Platega-плита: крипта + остальные методы. Нечётный последний тянется на 2 колонки,
+  // чтобы в сетке не оставалось пустой ячейки
+  const plategaSecondary = [
+    ...(cryptoMethod
+      ? [{ key: `crypto-${cryptoMethod.id}`, method: cryptoMethod, title: "Крипта через Platega", icon: <Bitcoin className="h-4 w-4 text-fog-300" /> }]
+      : []),
+    ...otherPlategaMethods.map((method) => ({
+      key: `other-${method.id}`,
+      method,
+      title: method.label,
+      icon: <Globe className="h-4 w-4 text-fog-300" />,
+    })),
+  ];
 
   return (
     <Modal
@@ -414,103 +495,95 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: 24 }}
             transition={{ duration: 0.22 }}
-            className="no-scrollbar min-h-0 overflow-y-auto p-6"
+            className="no-scrollbar min-h-0 overflow-y-auto p-4"
           >
+            {/* back-кнопка — тот же плейт, что и X в шапке (h-8 w-8 rounded-xl), ряд симметричен */}
             <div className="flex items-center gap-3">
-              <button
-                onClick={() => setStep("config")}
-                className="grid h-9 w-9 place-items-center rounded-xl text-fog-400 transition-colors hover:bg-white/8 hover:text-white"
-              >
-                <ArrowLeft className="h-5 w-5" />
-              </button>
-              <div className="min-w-0 pr-10">
-                <ModalTitle className="text-lg font-extrabold">Оплата тарифа</ModalTitle>
+              <ModalBack label="К конфигурации тарифа" onClick={() => setStep("config")} />
+              <div className="min-w-0 flex-1 pr-10">
+                <ModalTitle className="text-base font-extrabold">Оплата тарифа</ModalTitle>
                 <ModalDescription className="text-xs text-fog-500">{plan.name}</ModalDescription>
               </div>
             </div>
 
-            {/* сводка-плейт */}
-            <div className="glass-inset mt-5 rounded-2xl p-4">
-              <div className="flex justify-between text-sm">
+            {/* сводка — один компактный плейт */}
+            <div className="glass-inset mt-4 rounded-2xl p-3.5">
+              <div className="flex justify-between gap-3 text-xs">
                 <span className="text-fog-500">Тариф, {days} дней</span>
                 <span className="font-bold">{formatMoney(quote.base, plan.currency)}</span>
               </div>
               {extra > 0 && (
-                <div className="mt-1 flex justify-between text-sm">
+                <div className="mt-1 flex justify-between gap-3 text-xs">
                   <span className="text-fog-500">Доп. устройства ×{extra}</span>
                   <span className="font-bold">{formatMoney(quote.extras, plan.currency)}</span>
                 </div>
               )}
               {conversionExtraCost > 0 && (
-                <div className="mt-1 flex justify-between text-sm">
+                <div className="mt-1 flex justify-between gap-3 text-xs">
                   <span className="text-fog-500">Сохранение устройств</span>
                   <span className="font-bold">{formatMoney(conversionExtraCost, plan.currency)}</span>
                 </div>
               )}
               {conversion?.willConvert && conversion.convertedDays !== undefined && (
-                <div className="mt-1 flex justify-between text-sm">
+                <div className="mt-1 flex justify-between gap-3 text-xs">
                   <span className="text-fog-500">Добавится конвертацией</span>
                   <span className="font-bold text-amber-glow">+{conversion.convertedDays} дн.</span>
                 </div>
               )}
-              <Separator className="my-3" />
+              <Separator className="my-2.5" />
               <div className="flex items-baseline justify-between">
                 <span className="font-bold">Итого</span>
-                <span className="text-xl font-extrabold">
+                <span className="text-lg font-extrabold">
                   {formatMoney(price, plan.currency)}
-                  {discountPercent > 0 && <span className="ml-2 text-sm font-bold text-mint-400">−{discountPercent}%</span>}
+                  {discountPercent > 0 && <span className="ml-2 text-xs font-bold text-mint-400">−{discountPercent}%</span>}
                 </span>
               </div>
               {plan.whitelistGB && (
-                <p className="mt-2.5 flex items-center gap-1.5 text-xs text-fog-500">
+                <p className="mt-2 flex items-center gap-1.5 text-[11px] text-fog-500">
                   <Signal className="h-3.5 w-3.5" /> Белые списки: {plan.whitelistGB.toFixed(0)} ГБ / мес
                 </p>
               )}
             </div>
 
-            {/* renewal notice */}
+            {/* информеры — максимум 1–2 строки */}
             {ownedSub && (
-              <div className="mt-3 flex items-start gap-3 rounded-2xl border border-violet-glow/25 bg-violet-glow/8 p-3.5">
-                <IconTile size="sm" tone="violet">
-                  <RefreshCw className="h-4 w-4" />
-                </IconTile>
-                <div>
-                  <p className="text-sm font-bold">Этот тариф у вас уже есть — подписка будет продлена</p>
-                  <p className="mt-1 text-xs leading-relaxed text-fog-500">
-                    Вторая подписка не создастся — дни просто сложатся: остаток {ownedSub.daysLeft} дней + покупка{" "}
-                    {days} дней = <span className="font-bold text-violet-glow">{ownedSub.daysLeft + days} дней</span>.
-                    Устройства и серверы останутся как есть.
-                  </p>
-                </div>
+              <div className="mt-2.5 flex items-start gap-2.5 rounded-2xl border border-violet-glow/25 bg-violet-glow/8 p-3">
+                <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-violet-glow" />
+                <p className="min-w-0 flex-1 text-xs leading-snug text-fog-400">
+                  Тариф уже ваш — дни сложатся: {ownedSub.daysLeft} + {days} ={" "}
+                  <span className="font-bold text-violet-glow">{ownedSub.daysLeft + days} дн.</span>{" "}
+                  Устройства и серверы останутся как есть.
+                </p>
               </div>
             )}
 
             {conversion?.willConvert && conversion.mode !== "extend" && (
-              <div className="mt-3 rounded-2xl border border-amber-glow/25 bg-amber-glow/8 p-3.5">
-                <p className="text-sm font-bold">
-                  {conversion.mode === "replace" ? "Текущая подписка будет заменена" : "Остаток подписки будет пересчитан"}
-                </p>
-                <p className="mt-1 text-xs leading-relaxed text-fog-500">
-                  {conversion.subscription?.tariffName && <>Текущий тариф: {conversion.subscription.tariffName}. </>}
-                  {conversion.remainingDays !== undefined && <>Остаток: {conversion.remainingDays} дн. </>}
-                  {conversion.convertedDays !== undefined && <>После пересчёта: {conversion.convertedDays} дн. </>}
-                  {conversion.totalDays !== undefined && <>Итого после покупки: <b className="text-amber-glow">{conversion.totalDays} дн.</b></>}
+              <div className="mt-2.5 flex items-start gap-2.5 rounded-2xl border border-amber-glow/25 bg-amber-glow/8 p-3">
+                <CalendarDays className="mt-0.5 h-4 w-4 shrink-0 text-amber-glow" />
+                <p className="min-w-0 flex-1 text-xs leading-snug text-fog-400">
+                  <span className="font-bold text-amber-glow">
+                    {conversion.mode === "replace" ? "Подписка будет заменена" : "Остаток будет пересчитан"}
+                  </span>
+                  {conversion.subscription?.tariffName && <> · {conversion.subscription.tariffName}</>}
+                  {conversion.remainingDays !== undefined && <> · остаток {conversion.remainingDays} дн.</>}
+                  {conversion.convertedDays !== undefined && <> · после пересчёта {conversion.convertedDays} дн.</>}
+                  {conversion.totalDays !== undefined && <> · итого <b className="text-amber-glow">{conversion.totalDays} дн.</b></>}
                 </p>
               </div>
             )}
 
             {conversion?.willConvert && (conversion.extras?.extraDevices ?? 0) > 0 && (
-              <div className="mt-3 grid grid-cols-2 gap-2.5">
+              <div className="mt-2.5 grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => setKeepExistingExtras(true)}
                   className={cn(
-                    "rounded-2xl border p-3 text-left transition-all",
+                    "rounded-2xl border p-2.5 text-left transition-all",
                     keepExistingExtras ? "border-violet-glow/50 bg-violet-glow/12" : "border-white/8 bg-white/3",
                   )}
                 >
                   <p className="text-xs font-bold">Сохранить устройства</p>
-                  <p className="mt-1 text-[11px] text-fog-500">
+                  <p className="mt-0.5 text-[11px] text-fog-500">
                     {conversion.extras?.keep.totalDevices} устр.
                     {(conversion.extras?.keep.extraCost ?? 0) > 0 && ` · +${formatMoney(conversion.extras?.keep.extraCost ?? 0, plan.currency)}`}
                   </p>
@@ -519,27 +592,27 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                   type="button"
                   onClick={() => setKeepExistingExtras(false)}
                   className={cn(
-                    "rounded-2xl border p-3 text-left transition-all",
+                    "rounded-2xl border p-2.5 text-left transition-all",
                     !keepExistingExtras ? "border-accent-400/50 bg-accent-500/12" : "border-white/8 bg-white/3",
                   )}
                 >
                   <p className="text-xs font-bold">Убрать дополнительные</p>
-                  <p className="mt-1 text-[11px] text-fog-500">Останется {conversion.extras?.drop.totalDevices} устр.</p>
+                  <p className="mt-0.5 text-[11px] text-fog-500">Останется {conversion.extras?.drop.totalDevices} устр.</p>
                 </button>
               </div>
             )}
 
             {!conversion?.willConvert && trialConversionCandidates.length > 1 && (
-              <div className="mt-3 rounded-2xl border border-white/8 bg-white/3 p-3.5">
-                <p className="text-sm font-bold">Какую пробную подписку конвертировать</p>
-                <div className="mt-2 flex flex-col gap-2">
+              <div className="mt-2.5 rounded-2xl border border-white/8 bg-white/3 p-3">
+                <p className="text-xs font-bold">Какую пробную подписку конвертировать</p>
+                <div className="mt-2 flex flex-col gap-1.5">
                   {trialConversionCandidates.map((subscription) => (
                     <button
                       type="button"
                       key={subscription.id}
                       onClick={() => setSelectedTrialId(subscription.id)}
                       className={cn(
-                        "rounded-xl border px-3 py-2 text-left text-xs font-semibold transition-all",
+                        "rounded-xl border px-3 py-1.5 text-left text-xs font-semibold transition-all",
                         (selectedTrialId ?? trialConversionCandidates[0].id) === subscription.id
                           ? "border-violet-glow/50 bg-violet-glow/12"
                           : "border-white/8 bg-white/3",
@@ -553,132 +626,97 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
             )}
 
             {/* promo */}
-            <p className="mt-5 mb-2 text-xs font-semibold text-fog-500">Промокод</p>
+            <p className="mt-4 mb-2 text-xs font-semibold text-fog-500">Промокод</p>
             <form onSubmit={(e) => { e.preventDefault(); void applyPromo(); }} className="flex gap-2">
-              <Input value={promo} onChange={(e) => setPromo(e.target.value)} placeholder="Промокод" className="flex-1" />
+              <Input value={promo} onChange={(e) => setPromo(e.target.value)} placeholder="Промокод" className="min-w-0 flex-1" />
               <Button variant="secondary" type="submit">Применить</Button>
             </form>
 
-            {/* payment methods */}
-            <p className="mt-5 mb-2 text-xs font-semibold text-fog-500">Способ оплаты</p>
-            <div className="flex flex-col gap-2.5">
+            {/* способы оплаты — единая сетка рядов h-11 */}
+            <p className="mt-4 mb-2 text-xs font-semibold text-fog-500">Способ оплаты</p>
+            <div className="flex flex-col gap-2">
               {user.balance > 0 && (
-                <Button
-                  variant="secondary"
-                  size="lg"
-                  className="w-full justify-between"
+                <PaymentRow
                   loading={paying}
-                  loadingText="Оплата…"
                   disabled={user.balance < price}
                   onClick={payBalance}
-                >
-                  <span className="flex items-center gap-2">
-                    <Wallet /> С баланса
-                  </span>
-                  <AnimatedNumber value={user.balance} format={(v) => `${v.toLocaleString("ru-RU")} ₽`} />
-                </Button>
+                  icon={<Wallet className="h-4 w-4 text-mint-400" />}
+                  title="С баланса"
+                  trailing={<AnimatedNumber value={user.balance} format={(v) => `${v.toLocaleString("ru-RU")} ₽`} className="text-xs font-bold tabular-nums" />}
+                />
               )}
 
-              {/* Platega — основной способ, акцентный блок */}
-              {plategaMethods.length > 0 && <div className="rounded-2xl border border-accent-400/40 bg-accent-500/8 p-4 shadow-neon-blue">
-                <div className="mb-3 flex items-center gap-2.5">
-                  <IconTile size="sm">
-                    <CreditCard className="h-4 w-4" />
-                  </IconTile>
-                  <div className="flex-1">
-                    <p className="text-sm font-bold">Platega</p>
-                    <p className="text-[11px] text-fog-500">Банковские платежи и крипта</p>
+              {/* Platega — основной провайдер: акцентный плейт с сеткой методов */}
+              {plategaMethods.length > 0 && (
+                <div className="rounded-2xl border border-accent-400/40 bg-accent-500/8 p-3 shadow-neon-blue">
+                  <div className="mb-2 flex items-center gap-2.5">
+                    <IconTile size="sm">
+                      <CreditCard className="h-4 w-4" />
+                    </IconTile>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-bold leading-tight">Platega</p>
+                      <p className="text-[10px] leading-tight text-fog-500">Банковские платежи и крипта</p>
+                    </div>
+                    <span className="rounded-full bg-accent-500/20 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-accent-400">
+                      Рекомендуем
+                    </span>
                   </div>
-                  <span className="rounded-full bg-accent-500/20 px-2.5 py-1 text-[10px] font-extrabold tracking-wider text-accent-400 uppercase">
-                    Рекомендуем
-                  </span>
+                  <div className="grid grid-cols-2 gap-2">
+                    {sbpMethod && (
+                      <PaymentRow
+                        size="sm"
+                        tone="accent"
+                        loading={paying}
+                        onClick={() => payPlatega(sbpMethod.id)}
+                        icon={<QrCode className="h-4 w-4 text-accent-400" />}
+                        title="СБП"
+                        sub="по QR-коду"
+                      />
+                    )}
+                    {cardMethod && (
+                      <PaymentRow
+                        size="sm"
+                        tone="accent"
+                        loading={paying}
+                        onClick={() => payPlatega(cardMethod.id)}
+                        icon={<CreditCard className="h-4 w-4 text-accent-400" />}
+                        title="Карта"
+                        sub="RUB · любой банк"
+                      />
+                    )}
+                    {plategaSecondary.map((cell, index) => (
+                      <PaymentRow
+                        key={cell.key}
+                        size="sm"
+                        loading={paying}
+                        className={index === plategaSecondary.length - 1 && plategaSecondary.length % 2 === 1 ? "col-span-2" : undefined}
+                        onClick={() => payPlatega(cell.method.id)}
+                        icon={cell.icon}
+                        title={cell.title}
+                      />
+                    ))}
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 gap-2.5">
-                  {sbpMethod && <Button
-                    size="lg"
-                    loading={paying}
-                    loadingText="Оплата…"
-                    onClick={() => payPlatega(sbpMethod.id)}
-                  >
-                    <span className="flex flex-col items-center">
-                      <span className="flex items-center gap-1.5 font-bold">
-                        <QrCode /> СБП
-                      </span>
-                      <span className="text-[10px] font-medium opacity-75">по QR-коду</span>
-                    </span>
-                  </Button>}
-                  {cardMethod && <Button
-                    size="lg"
-                    loading={paying}
-                    loadingText="Оплата…"
-                    onClick={() => payPlatega(cardMethod.id)}
-                  >
-                    <span className="flex flex-col items-center">
-                      <span className="flex items-center gap-1.5 font-bold">
-                        <CreditCard /> Карта
-                      </span>
-                      <span className="text-[10px] font-medium opacity-75">RUB · любой банк</span>
-                    </span>
-                  </Button>}
-                </div>
-                {cryptoMethod && <Button
-                  variant="link"
-                  size="sm"
-                  className="mt-2.5 w-full"
-                  loading={paying}
-                  loadingText="Оплата…"
-                  onClick={() => payPlatega(cryptoMethod.id)}
-                >
-                  <Bitcoin /> Оплатить криптой через Platega
-                </Button>}
-                {otherPlategaMethods.length > 0 && <div className="mt-2.5 flex flex-col gap-2">
-                  {otherPlategaMethods.map((method) => (
-                    <Button
-                      key={method.id}
-                      variant="outline"
-                      size="sm"
-                      loading={paying}
-                      loadingText="Оплата…"
-                      onClick={() => payPlatega(method.id)}
-                    >
-                      {method.label}
-                    </Button>
-                  ))}
-                </div>}
-              </div>}
+              )}
 
-              {config?.cryptopayEnabled && <Button
-                variant="secondary"
-                size="lg"
-                className="w-full justify-start hover:border-amber-glow/30"
-                loading={paying}
-                loadingText="Оплата…"
-                onClick={payCryptoBot}
-              >
-                <IconTile size="sm" className="border-amber-glow/25 bg-amber-glow/10 text-amber-glow">
-                  <Zap className="h-4 w-4" />
-                </IconTile>
-                <span className="flex flex-col items-start">
-                  <span>Crypto Bot</span>
-                  <span className="text-xs font-medium text-fog-500">USDT · TON · BTC</span>
-                </span>
-              </Button>}
-              {config?.rollypayEnabled && plan.currency.toUpperCase() === "RUB" && <Button
-                variant="secondary"
-                size="lg"
-                className="w-full justify-start hover:border-emerald-400/30"
-                loading={paying}
-                loadingText="Оплата…"
-                onClick={payRollyPay}
-              >
-                <IconTile size="sm" className="border-emerald-400/25 bg-emerald-400/10 text-emerald-300">
-                  <CreditCard className="h-4 w-4" />
-                </IconTile>
-                <span className="flex flex-col items-start">
-                  <span>RollyPay</span>
-                  <span className="text-xs font-medium text-fog-500">Оплата в рублях</span>
-                </span>
-              </Button>}
+              {config?.cryptopayEnabled && (
+                <PaymentRow
+                  loading={paying}
+                  onClick={payCryptoBot}
+                  icon={<Zap className="h-4 w-4 text-amber-glow" />}
+                  title="Crypto Bot"
+                  sub="USDT · TON · BTC"
+                />
+              )}
+              {config?.rollypayEnabled && plan.currency.toUpperCase() === "RUB" && (
+                <PaymentRow
+                  loading={paying}
+                  onClick={payRollyPay}
+                  icon={<CreditCard className="h-4 w-4 text-emerald-300" />}
+                  title="RollyPay"
+                  sub="Оплата в рублях"
+                />
+              )}
             </div>
           </motion.div>
         )}
@@ -688,14 +726,8 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
 }
 
 function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; index: number }) {
-  const { state } = useClientAuth();
   const startingOption = plan.durationOptions.reduce((best, option) => option.price < best.price ? option : best, plan.durationOptions[0]);
   const perDay = startingOption.price / startingOption.days;
-  // Прогреваем кэш конвертации ещё до открытия диалога — он открывается с готовыми данными
-  const prefetchConversion = () => {
-    if (!state.token) return;
-    void prefetchConversionPreview(state.token, { tariffId: plan.id, priceOptionId: plan.durationOptions[0]?.id ?? undefined }).catch(() => undefined);
-  };
   return (
     <motion.div
       initial={{ opacity: 0, y: 14 }}
@@ -743,7 +775,6 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
         </p>
         <motion.button
           whileTap={{ scale: 0.96 }}
-          onPointerDown={prefetchConversion}
           onClick={onPay}
           className={cn(
             "mt-3 flex w-full items-center justify-center gap-2 rounded-2xl text-sm font-bold transition-all",
@@ -763,6 +794,8 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
 
 export default function Tariffs() {
   const { config, tariffGroups } = useApp();
+  const { state } = useClientAuth();
+  const token = state.token;
   const [selected, setSelected] = useState<TariffPlan | null>(null);
   const firstGroupId = tariffGroups[0]?.id;
   const [openGroups, setOpenGroups] = useState<string[]>([]);
@@ -776,6 +809,20 @@ export default function Tariffs() {
 
   // Прогреваем кэш public-config заранее — диалог тарифа открывается мгновенно
   useEffect(() => { void prefetchPublicConfig().catch(() => undefined); }, []);
+
+  // Прогрев preview конвертации для первого варианта каждого плана: строка «+N дн.»
+  // уже в кэше, когда юзер доходит до чекаута (см. prefetchConversionPreview)
+  useEffect(() => {
+    if (!token) return;
+    for (const group of tariffGroups) {
+      for (const plan of group.plans) {
+        void prefetchConversionPreview(token, {
+          tariffId: plan.id,
+          priceOptionId: plan.durationOptions[0]?.id ?? undefined,
+        }).catch(() => undefined);
+      }
+    }
+  }, [token, tariffGroups]);
 
   return (
     <div className="flex flex-col gap-5">
