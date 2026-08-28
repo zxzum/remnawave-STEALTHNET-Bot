@@ -121,6 +121,8 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
         if (!active) return;
         if (payment.status === "PAID" && payment.fulfilled) {
           setPendingPaymentId(null);
+          // Промокод/скидка не должны переживать оплату и протекать в следующую покупку
+          reset();
           // Подписка изменилась — устаревший preview конвертации нельзя переиспользовать
           invalidatePrefetch("conversion:");
           await Promise.all([refreshProfile(), reload()]);
