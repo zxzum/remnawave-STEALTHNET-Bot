@@ -16,6 +16,13 @@ export function prefetch<T>(key: string, loader: () => Promise<T>): Promise<T> {
   return promise;
 }
 
+/** Сбрасывает закэшированные промисы, чей ключ начинается с prefix (напр. «conversion:» после оплаты) */
+export function invalidatePrefetch(prefix: string) {
+  for (const key of cache.keys()) {
+    if (key.startsWith(prefix)) cache.delete(key);
+  }
+}
+
 export const prefetchPublicConfig = () => prefetch("public-config", () => api.getPublicConfig());
 
 export const prefetchConversionPreview = (

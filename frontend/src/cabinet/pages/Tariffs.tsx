@@ -9,7 +9,7 @@ import { OptionCard } from "../components/ui/option-card";
 import { Stepper } from "../components/ui/stepper";
 import { Checkbox } from "../components/ui/checkbox";
 import { Button } from "../components/ui/button";
-import { prefetchConversionPreview, prefetchPublicConfig } from "../components/ui/prefetch";
+import { invalidatePrefetch, prefetchConversionPreview, prefetchPublicConfig } from "../components/ui/prefetch";
 import {
   Box,
   ChevronDown,
@@ -118,12 +118,15 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
         if (!active) return;
         if (payment.status === "PAID" && payment.fulfilled) {
           setPendingPaymentId(null);
+          // Подписка изменилась — устаревший preview конвертации нельзя переиспользовать
+          invalidatePrefetch("conversion:");
           await Promise.all([refreshProfile(), reload()]);
           if (active) setStep("success");
           return;
         }
         if (payment.status === "FAILED") {
           setPendingPaymentId(null);
+          invalidatePrefetch("conversion:");
           toast({ title: "Платёж не прошёл", variant: "error" });
           return;
         }
@@ -225,6 +228,8 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
     try {
       const result = await api.clientPayByBalance(state.token, purchasePayload);
       toast({ title: "Оплата прошла", description: result.message, variant: "success" });
+      // Баланс/подписка изменились — сбрасываем кэш preview конвертации
+      invalidatePrefetch("conversion:");
       onOpenChange(false);
       reset();
       navigate("/cabinet/dashboard?payment=success");
