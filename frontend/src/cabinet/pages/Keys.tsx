@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import * as Accordion from "@radix-ui/react-accordion";
@@ -6,6 +6,8 @@ import {
   KeyRound,
   Lock,
   ChevronDown,
+  Check,
+  Copy,
   Download,
   CircleHelp,
   CircleAlert,
@@ -16,7 +18,6 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { useApp } from "../store/AppContext";
-import { CopyButton } from "../components/ui/CopyButton";
 import { Button, buttonVariants } from "../components/ui/button";
 import { Modal, ModalBody, ModalDescription, ModalTitle } from "../components/ui/modal";
 import { cn } from "../lib/cn";
@@ -31,6 +32,32 @@ const appColors: Record<string, { tile: string }> = {
     tile: "bg-violet-glow/15 border-violet-glow/25 text-violet-glow",
   },
 };
+
+/** Кнопка копирования на ките: высота md как у остальных кнопок карточки, галочка успеха вместо конфетти. */
+function KeyCopyButton({ text, label = "Скопировать ключ", successLabel = "Скопировано!", className }: {
+  text: string;
+  label?: string;
+  successLabel?: string;
+  className?: string;
+}) {
+  const [done, setDone] = useState(false);
+  const timer = useRef<number | null>(null);
+  const { copy } = useApp();
+
+  const handle = async () => {
+    await copy(text, "Ключ скопирован в буфер обмена");
+    setDone(true);
+    if (timer.current) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setDone(false), 2200);
+  };
+
+  return (
+    <Button variant={done ? "success" : "primary"} size="md" className={cn("w-full", className)} onClick={() => void handle()}>
+      {done ? <Check strokeWidth={3} /> : <Copy />}
+      {done ? successLabel : label}
+    </Button>
+  );
+}
 
 const manualConnectionSteps = [
   "Скопируйте ссылку подписки кнопкой выше.",
@@ -97,9 +124,9 @@ function DeeplinkButtons({ apps, keyUrl }: { apps: ReturnType<typeof useApp>["cl
               variant: "info",
             });
           }}
-          className={cn(index === 0 ? "" : "border-violet-glow/30 hover:border-violet-glow/50", "h-auto flex-col gap-1.5 whitespace-normal rounded-3xl px-3 py-4 text-sm")}
+          className={cn(index === 0 ? "" : "border-violet-glow/30 hover:border-violet-glow/50", "h-auto flex-col gap-1 whitespace-normal rounded-2xl px-3 py-3 text-sm")}
         >
-          <span className="flex items-center gap-2 text-base font-bold">
+          <span className="flex items-center gap-2 text-sm font-bold">
             <Zap className="h-4 w-4" />
             Подключиться в {app.name}
           </span>
@@ -122,7 +149,7 @@ function DeeplinkButtons({ apps, keyUrl }: { apps: ReturnType<typeof useApp>["cl
             <li><b className="text-white">5.</b> Нажмите кнопку подключения и пользуйтесь VPN.</li>
           </ol>
           <div className="glass-inset mt-5 break-all rounded-2xl p-3 font-mono text-xs text-fog-300">{keyUrl}</div>
-          <CopyButton text={keyUrl} label="Скопировать ссылку" className="mt-3" />
+          <KeyCopyButton text={keyUrl} label="Скопировать ссылку" className="mt-3" />
           <Button variant="ghost" className="mt-3 w-full" onClick={() => setHelpOpen(false)}>Закрыть</Button>
         </ModalBody>
       </Modal>
@@ -165,11 +192,11 @@ export default function Keys() {
   const siteUrl = `${config?.publicAppUrl?.replace(/\/$/, "") || window.location.origin}/cabinet/subscribe?sub=${encodeURIComponent(active?.id ?? "")}`;
 
   if (!active) return (
-    <div className="flex flex-col gap-5">
-      <div><h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Ключи доступа</h1><p className="mt-1 text-fog-500">Получите доступ за пару минут</p></div>
-      <section className="glass-strong liquid mx-auto w-full max-w-xl rounded-4xl p-7 text-center sm:p-9">
-        <div className="icon-tile mx-auto h-16 w-16 rounded-2xl"><KeyRound className="h-7 w-7" /></div>
-        <h2 className="mt-5 text-xl font-extrabold">Ключа пока нет</h2>
+    <div className="flex flex-col gap-3">
+      <div><h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Ключи доступа</h1><p className="mt-1 text-sm text-fog-500">Получите доступ за пару минут</p></div>
+      <section className="glass-strong liquid mx-auto w-full max-w-xl rounded-4xl p-5 text-center sm:p-7">
+        <div className="icon-tile mx-auto h-14 w-14 rounded-2xl"><KeyRound className="h-6 w-6" /></div>
+        <h2 className="mt-4 text-lg font-extrabold">Ключа пока нет</h2>
         <p className="mt-2 text-sm leading-relaxed text-fog-500">Сначала выберите и оплатите тариф — после этого здесь появится ключ для подключения VPN.</p>
         {availableTrials.length > 0 && <Link to="/cabinet/dashboard?trial=1" className={cn(buttonVariants({ size: "md" }), "mt-4")}><Gift className="h-5 w-5" />Активировать пробный период</Link>}
         <Link to="/cabinet/tariffs" className={cn(buttonVariants({ size: "md" }), "mt-6")}><ShoppingBag className="h-5 w-5" />Перейти к тарифам</Link>
@@ -178,10 +205,10 @@ export default function Keys() {
   );
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-3">
       <div>
         <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Ключи доступа</h1>
-        <p className="mt-1 text-fog-500">Получите доступ за пару минут</p>
+        <p className="mt-1 text-sm text-fog-500">Получите доступ за пару минут</p>
       </div>
 
       {subscriptions.length > 1 && (
@@ -195,7 +222,7 @@ export default function Keys() {
                   key={s.id}
                   onClick={() => setParams({ sub: s.id })}
                   className={cn(
-                    "relative min-w-28 shrink-0 grow basis-28 rounded-xl px-4 py-2.5 text-sm font-semibold whitespace-nowrap transition-colors",
+                    "relative min-w-24 shrink-0 grow basis-24 rounded-xl px-3 py-2 text-sm font-semibold whitespace-nowrap transition-colors",
                     isActive ? "text-white" : "text-fog-500 hover:text-fog-100",
                   )}
                 >
@@ -214,8 +241,8 @@ export default function Keys() {
         </div>
       )}
 
-      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
-        <div className="flex min-w-0 flex-col gap-5">
+      <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+        <div className="flex min-w-0 flex-col gap-3">
           {/* Key card */}
           <AnimatePresence mode="wait">
         <motion.section
@@ -224,31 +251,30 @@ export default function Keys() {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -8 }}
           transition={{ duration: 0.25 }}
-          className="glass-strong liquid rounded-4xl p-6"
+          className="glass-strong liquid rounded-4xl p-5"
         >
-          <div className="flex items-center gap-4">
-            <div className="icon-tile h-14 w-14 rounded-2xl shadow-neon-blue">
-              <KeyRound className="h-6 w-6" />
+          <div className="flex items-center gap-3">
+            <div className="icon-tile h-12 w-12 rounded-2xl shadow-neon-blue">
+              <KeyRound className="h-5 w-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <h2 className="whitespace-nowrap text-base leading-tight font-extrabold tracking-tight sm:text-lg">Ключ доступа</h2>
-              <p className="text-sm text-fog-500">VPN-подписка</p>
+              <h2 className="whitespace-nowrap text-sm leading-tight font-extrabold tracking-tight sm:text-base">Ключ доступа</h2>
+              <p className="text-xs text-fog-500">VPN-подписка</p>
             </div>
-            <span className="flex items-center gap-1.5 text-xs font-bold text-mint-400 sm:gap-2 sm:text-sm">
+            <span className="flex items-center gap-1.5 text-xs font-bold text-mint-400">
               <span className="status-dot" />
               Активен
             </span>
           </div>
 
-          <div className="glass-inset mt-5 flex items-center gap-3 rounded-2xl px-4 py-3.5">
+          <div className="glass-inset mt-4 flex items-center gap-3 rounded-2xl px-3.5 py-3">
             <Lock className="h-4 w-4 shrink-0 text-fog-600" />
             <span className="truncate font-mono text-sm text-fog-300">{keyUrl}</span>
           </div>
 
-          <div className="mt-4">
-            <CopyButton text={keyUrl} />
-          </div>
-          <Button type="button" variant="ghost" onClick={() => setReissueOpen(true)} className="mt-3 w-full">
+          {/* Пара кнопок одной высоты md (h-11): primary для копирования, secondary для обновления */}
+          <KeyCopyButton text={keyUrl} className="mt-4" />
+          <Button type="button" variant="secondary" size="md" onClick={() => setReissueOpen(true)} className="mt-2.5 w-full">
             Обновить ссылку
           </Button>
         </motion.section>
@@ -290,21 +316,21 @@ export default function Keys() {
       {/* Deep links */}
       <DeeplinkButtons apps={apps} keyUrl={keyUrl} />
 
-          {/* Warnings */}
+          {/* Warnings — компактные информеры в один ряд */}
           <div className="glass grid rounded-3xl lg:grid-cols-2">
-            <div className="flex items-center gap-3 p-4">
-              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-red-400/25 bg-red-500/12 text-red-400">
-                <CircleAlert className="h-5 w-5" />
+            <div className="flex items-center gap-2.5 p-3">
+              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-red-400/25 bg-red-500/12 text-red-400">
+                <CircleAlert className="h-4 w-4" />
               </div>
-              <p className="text-sm leading-snug text-fog-300">
+              <p className="text-xs leading-snug text-fog-300">
                 <span className="font-bold text-red-300">Не передавайте ключ</span> — блокировка без возврата средств.
               </p>
             </div>
-            <div className="flex items-center gap-3 border-t border-white/8 p-4 lg:border-t-0 lg:border-l">
-              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-amber-glow/25 bg-amber-glow/10 text-amber-glow">
-                <TriangleAlert className="h-5 w-5" />
+            <div className="flex items-center gap-2.5 border-t border-white/8 p-3 lg:border-t-0 lg:border-l">
+              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-amber-glow/25 bg-amber-glow/10 text-amber-glow">
+                <TriangleAlert className="h-4 w-4" />
               </div>
-              <p className="text-sm leading-snug text-fog-300">
+              <p className="text-xs leading-snug text-fog-300">
                 Работает только через приложение <span className="font-bold text-amber-glow">Happ</span> или{" "}
                 <span className="font-bold text-violet-glow">INCY</span>.
               </p>
@@ -318,20 +344,21 @@ export default function Keys() {
         {apps.map((app, index) => (
           <Accordion.Item key={app.id} value={app.id} className="glass overflow-hidden rounded-3xl">
             <Accordion.Header>
-              <Accordion.Trigger className="group flex w-full items-center gap-4 p-5 text-left">
-                <div className={cn("grid h-12 w-12 shrink-0 place-items-center rounded-2xl border", index === 0 ? appColors.blue.tile : "border-white/10 bg-white/5 text-fog-400")}>
-                  <Download className="h-5 w-5" />
+              <Accordion.Trigger className="group flex w-full items-center gap-3 p-4 text-left">
+                <div className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-xl border", index === 0 ? appColors.blue.tile : "border-white/10 bg-white/5 text-fog-400")}>
+                  <Download className="h-4 w-4" />
                 </div>
-                <div className="flex-1">
-                  <p className="font-extrabold">Скачать {app.name}</p>
-                  <p className="text-sm text-fog-500">{app.stores}</p>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold">Скачать {app.name}</p>
+                  <p className="truncate text-xs text-fog-500">{app.stores}</p>
                 </div>
-                <ChevronDown className="h-5 w-5 text-fog-600 transition-transform duration-300 group-data-[state=open]:rotate-180" />
+                <ChevronDown className="h-4 w-4 shrink-0 text-fog-600 transition-transform duration-300 group-data-[state=open]:rotate-180" />
               </Accordion.Trigger>
             </Accordion.Header>
             <Accordion.Content className="overflow-hidden data-[state=closed]:animate-[accordion-up_0.25s_ease-out] data-[state=open]:animate-[accordion-down_0.25s_ease-out]">
-              <div className="flex flex-wrap gap-3 px-5 pb-5">
-                {app.downloads.map((download) => <a key={download.url} href={download.url} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: "ghost", size: "md" }), "flex-1")}><Download className="h-4 w-4" /> {download.label}</a>)}
+              {/* Чипы переносятся на новую строку, а не обрезаются: grow без flex-1 + flex-wrap */}
+              <div className="flex flex-wrap gap-2 px-4 pb-4">
+                {app.downloads.map((download) => <a key={download.url} href={download.url} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "grow")}><Download className="h-4 w-4" /> {download.label}</a>)}
                 {app.downloads.length === 0 && <p className="text-sm text-fog-500">Ссылки на загрузку пока не настроены.</p>}
               </div>
             </Accordion.Content>
@@ -340,22 +367,22 @@ export default function Keys() {
 
         {primaryApp && <Accordion.Item value="howto" className="glass overflow-hidden rounded-3xl">
           <Accordion.Header>
-            <Accordion.Trigger className="group flex w-full items-center gap-4 p-5 text-left">
-              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl border border-mint-400/25 bg-mint-500/12 text-mint-400">
-                <CircleHelp className="h-5 w-5" />
+            <Accordion.Trigger className="group flex w-full items-center gap-3 p-4 text-left">
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-mint-400/25 bg-mint-500/12 text-mint-400">
+                <CircleHelp className="h-4 w-4" />
               </div>
-              <div className="flex-1">
-                <p className="font-extrabold">Как подключиться</p>
-                <p className="text-sm text-fog-500">6 простых шагов</p>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold">Как подключиться</p>
+                <p className="text-xs text-fog-500">6 простых шагов</p>
               </div>
-              <ChevronDown className="h-5 w-5 text-fog-600 transition-transform duration-300 group-data-[state=open]:rotate-180" />
+              <ChevronDown className="h-4 w-4 shrink-0 text-fog-600 transition-transform duration-300 group-data-[state=open]:rotate-180" />
             </Accordion.Trigger>
           </Accordion.Header>
           <Accordion.Content className="overflow-hidden data-[state=closed]:animate-[accordion-up_0.25s_ease-out] data-[state=open]:animate-[accordion-down_0.25s_ease-out]">
-            <ol className="flex flex-col gap-3 px-5 pb-5">
+            <ol className="flex flex-col gap-2 px-4 pb-4">
               {manualConnectionSteps.map((step, i) => (
-                <li key={i} className="glass-inset flex items-center gap-3 rounded-2xl px-4 py-3">
-                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-accent-500/15 text-xs font-extrabold text-accent-400">
+                <li key={i} className="glass-inset flex items-center gap-2.5 rounded-2xl px-3 py-2.5">
+                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-lg bg-accent-500/15 text-xs font-extrabold text-accent-400">
                     {i + 1}
                   </span>
                   <span className="text-sm text-fog-300">{step}</span>
@@ -365,7 +392,7 @@ export default function Keys() {
           </Accordion.Content>
         </Accordion.Item>}
       </Accordion.Root>
-      {apps.length === 0 && <div className="glass rounded-3xl p-6 text-center text-sm text-fog-500">Для этого устройства приложения ещё не настроены администратором.</div>}
+      {apps.length === 0 && <div className="glass rounded-3xl p-5 text-center text-sm text-fog-500">Для этого устройства приложения ещё не настроены администратором.</div>}
         </div>
       </div>
     </div>
