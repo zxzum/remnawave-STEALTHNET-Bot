@@ -380,7 +380,7 @@ export default function Cabinet() {
             transition={{ delay: 0.3, duration: 0.4 }}
           >
             <h3 className="text-base font-extrabold">Быстрые действия</h3>
-            {/* Лестница акцентов из референса: primary → secondary → outline → ghost, контент по центру */}
+            {/* Лестница акцентов из референса: primary → secondary → outline → link, контент по центру */}
             <div className="mt-4 flex flex-col gap-2.5">
               <Link
                 to="/cabinet/tariffs"
@@ -400,7 +400,8 @@ export default function Cabinet() {
                 <KeyRound />
                 Открыть ключи доступа
               </Link>
-              <Link to="/cabinet/tariffs" className={cn(buttonVariants({ variant: "ghost", size: "md" }), "w-full")}>
+              {/* link вместо ghost: token ghost рисует подложку, а по референсу 4-я ступень — прозрачный текст */}
+              <Link to="/cabinet/tariffs" className={cn(buttonVariants({ variant: "link", size: "md" }), "w-full")}>
                 <Layers />
                 Все тарифы
               </Link>
