@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import * as Accordion from "@radix-ui/react-accordion";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -17,17 +17,16 @@ import {
   CreditCard,
   Check,
   ArrowLeft,
-  ArrowRight,
   RefreshCw,
   Tag,
   Sparkles,
   Flame,
-  PackagePlus,
 } from "lucide-react";
 import { cn } from "../lib/cn";
 import { useApp } from "../store/AppContext";
 import { quoteTariff, resolvePaymentUrl, type TariffPlan } from "../model";
 import { preparePaymentRedirect } from "@/lib/open-payment-url";
+import { ExtraOptions } from "./Services";
 import { PaymentMethods } from "../components/PaymentMethods";
 
 function durationPrice(plan: TariffPlan, days: number, extraDevices: number) {
@@ -750,16 +749,9 @@ export default function Tariffs() {
       </Accordion.Root>
 
       {config?.sellOptions?.some((option) => option.kind === "traffic") && (
-        <Link to="/cabinet/traffic" className="group flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-white/[0.025] p-3.5 transition-colors hover:border-white/16 hover:bg-white/[0.05]">
-          <span className="flex min-w-0 items-center gap-3">
-            <span className="icon-tile h-9 w-9 rounded-xl"><PackagePlus className="h-4 w-4" /></span>
-            <span className="min-w-0">
-              <span className="block text-sm font-bold">Докупить трафик</span>
-              <span className="block truncate text-xs text-fog-500">Пакеты для активной подписки</span>
-            </span>
-          </span>
-          <ArrowRight className="h-4 w-4 shrink-0 text-fog-500 transition-transform group-hover:translate-x-0.5" />
-        </Link>
+        <section id="traffic" className="scroll-mt-5">
+          <ExtraOptions trafficOnly />
+        </section>
       )}
 
       <PlanDialog plan={selected} open={selected !== null} onOpenChange={(v) => !v && setSelected(null)} />

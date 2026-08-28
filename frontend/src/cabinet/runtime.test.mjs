@@ -249,6 +249,21 @@ test("extra options keep payment methods behind one compact checkout action", as
   assert.match(tariffs, /config\?\.sellOptions\?\.some/);
 });
 
+test("keeps traffic purchase inline and preserves the approved payment hierarchy", async () => {
+  const app = await readFile(new URL("../App.tsx", import.meta.url), "utf8");
+  const cabinet = await readFile(new URL("./pages/Cabinet.tsx", import.meta.url), "utf8");
+  const tariffs = await readFile(new URL("./pages/Tariffs.tsx", import.meta.url), "utf8");
+  const paymentMethods = await readFile(new URL("./components/PaymentMethods.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(app, /<Route\s+path="traffic"/);
+  assert.match(tariffs, /<ExtraOptions trafficOnly \/>/);
+  assert.match(cabinet, /to="\/cabinet\/tariffs#traffic"/);
+  assert.match(cabinet, /className="btn-primary h-14 w-full px-6 text-base"/);
+  assert.match(cabinet, /className="btn-ghost h-14 w-full px-6 text-base"/);
+  assert.match(paymentMethods, /border-orange-300\/20 bg-orange-500\/90/);
+  assert.match(paymentMethods, /btn-primary min-h-12/);
+  assert.match(paymentMethods, /btn-ghost mt-2\.5 min-h-11 w-full/);
+});
+
 test("cabinet traffic top-up explains the selected subscription before purchase", async () => {
   const services = await readFile(new URL("./pages/Services.tsx", import.meta.url), "utf8");
   assert.match(services, /Для подписки/);

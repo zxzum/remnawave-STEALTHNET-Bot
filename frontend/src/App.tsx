@@ -417,7 +417,6 @@ function AppRoutes() {
           <Route path="profile" element={<CabinetProfile />} />
           <Route path="tickets" element={<CabinetDesignPage defaultPage={<RequireClientFeature feature="tickets"><Tickets /></RequireClientFeature>} auroraPage={<RequireClientFeature feature="tickets"><AuroraTickets /></RequireClientFeature>} />} />
           <Route path="custom-build" element={<RequireClientFeature feature="customBuild"><CustomBuild /></RequireClientFeature>} />
-          <Route path="traffic" element={<RequireClientFeature feature="extraOptions"><ExtraOptions trafficOnly /></RequireClientFeature>} />
           <Route path="extra-options" element={<RequireClientFeature feature="extraOptions"><ExtraOptions /></RequireClientFeature>} />
           <Route path="proxy" element={<RequireClientFeature feature="proxy"><ProxyService /></RequireClientFeature>} />
           <Route path="singbox" element={<RequireClientFeature feature="singbox"><SingboxService /></RequireClientFeature>} />
