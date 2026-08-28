@@ -8,6 +8,7 @@ import { cn } from "../lib/cn";
 import { formatCurrency } from "../model";
 import { useApp } from "../store/AppContext";
 import { Toasts } from "./ui/Toasts";
+import { SuccessProvider } from "./ui/success-dialog";
 
 const navItems = [
   { to: "/cabinet/dashboard", label: "Кабинет", icon: Home, end: true },
@@ -331,23 +332,25 @@ export function Layout() {
   }, [displayedRouteKey, outlet, routeKey]);
 
   return (
-    <div className="relative min-h-dvh w-full min-w-0 max-w-full overflow-x-clip">
-      <Background />
-      <Sidebar />
-      <BottomNav />
-      <Toasts />
-      <FloatingChat />
-      <main className="relative z-10 mx-auto w-full min-w-0 max-w-2xl px-4 pt-6 pb-32 max-[420px]:px-3 max-[420px]:pt-4 sm:px-6 lg:max-w-none lg:pr-8 lg:pl-84 lg:pb-12 xl:pr-12 2xl:max-w-[1800px]">
-        <motion.div
-          key={displayedRouteKey}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: isLeaving ? 0 : 1 }}
-          transition={{ duration: 0.2, ease: "easeOut" }}
-          className="min-w-0 max-w-full"
-        >
-          {ready ? displayedOutlet : loading ? <InitialSkeleton pathname={location.pathname} /> : error ? <LoadError message={error} onRetry={reload} /> : <InitialSkeleton pathname={location.pathname} />}
-        </motion.div>
-      </main>
-    </div>
+    <SuccessProvider>
+      <div className="relative min-h-dvh w-full min-w-0 max-w-full overflow-x-clip">
+        <Background />
+        <Sidebar />
+        <BottomNav />
+        <Toasts />
+        <FloatingChat />
+        <main className="relative z-10 mx-auto w-full min-w-0 max-w-2xl px-4 pt-6 pb-32 max-[420px]:px-3 max-[420px]:pt-4 sm:px-6 lg:max-w-none lg:pr-8 lg:pl-84 lg:pb-12 xl:pr-12 2xl:max-w-[1800px]">
+          <motion.div
+            key={displayedRouteKey}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: isLeaving ? 0 : 1 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="min-w-0 max-w-full"
+          >
+            {ready ? displayedOutlet : loading ? <InitialSkeleton pathname={location.pathname} /> : error ? <LoadError message={error} onRetry={reload} /> : <InitialSkeleton pathname={location.pathname} />}
+          </motion.div>
+        </main>
+      </div>
+    </SuccessProvider>
   );
 }

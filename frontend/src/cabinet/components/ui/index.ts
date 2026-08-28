@@ -11,3 +11,6 @@ export * from "./progress";
 export * from "./option-card";
 export * from "./stepper";
 export * from "./empty-state";
+export * from "./modal";
+export * from "./success-dialog";
+export * from "./prefetch";
