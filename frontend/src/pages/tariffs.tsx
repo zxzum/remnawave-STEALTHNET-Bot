@@ -275,12 +275,12 @@ function SortableTariffRow({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-foreground/[0.03] dark:bg-white/[0.02] backdrop-blur-md px-4 py-3 hover:border-white/20 hover:-translate-y-px transition-[border-color,transform]",
+        "grid gap-3 rounded-xl border border-white/10 bg-foreground/[0.03] dark:bg-white/[0.02] backdrop-blur-md px-4 py-3 hover:border-white/20 hover:-translate-y-px transition-[border-color,transform] md:grid-cols-[minmax(0,1fr)_auto]",
         isDragging && "opacity-90 shadow-lg z-10",
         t.archivedAt && "opacity-60"
       )}
     >
-      <div className="flex items-center gap-3 flex-wrap min-w-0 flex-1">
+      <div className="flex min-w-0 items-start gap-3">
         <button
           type="button"
           className="h-8 w-8 shrink-0 cursor-grab active:cursor-grabbing rounded-lg bg-foreground/[0.04] dark:bg-white/[0.04] border border-white/10 text-muted-foreground hover:bg-foreground/[0.06] dark:hover:bg-white/[0.06] flex items-center justify-center transition-colors"
@@ -293,38 +293,45 @@ function SortableTariffRow({
         <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary/15 to-primary/5 border border-white/10 flex items-center justify-center shrink-0">
           <CreditCard className="h-4 w-4 text-primary" />
         </div>
-        <span className="font-semibold truncate">{t.name}</span>
-        {t.archivedAt && <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500">Архив</span>}
-        {t.description?.trim() ? (
-          <span className="text-muted-foreground text-xs max-w-[200px] truncate" title={t.description}>
-            {t.description}
-          </span>
-        ) : null}
-        <span className="inline-flex items-center rounded-full bg-foreground/[0.05] dark:bg-white/[0.05] border border-white/10 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-          {t.durationDays} дн.
-        </span>
-        <span className="text-sm font-bold text-emerald-500 dark:text-emerald-400">
-          {formatPrice(t.price ?? 0, t.currency ?? "usd")}
-        </span>
-        <span className="inline-flex items-center rounded-full bg-cyan-500/10 text-cyan-500 dark:text-cyan-400 border border-cyan-500/20 px-2 py-0.5 text-[10px] font-medium">
-          сквадов: {t.internalSquadUuids.length}
-        </span>
-        <span className="inline-flex items-center rounded-full bg-blue-500/10 text-blue-500 dark:text-blue-400 border border-blue-500/20 px-2 py-0.5 text-[10px] font-medium">
-          Remnawave: {formatTraffic(t.trafficLimitBytes)}
-        </span>
-        {t.trafficLimitMode === "LOCAL_SQUAD" && <span className="inline-flex items-center rounded-full bg-cyan-500/10 text-cyan-500 border border-cyan-500/20 px-2 py-0.5 text-[10px] font-medium">Локально: {formatTraffic(t.localTrafficLimitBytes)}</span>}
-        {t.trafficResetMode && t.trafficResetMode !== "no_reset" && (
-          <span className="inline-flex items-center rounded-full bg-amber-500/10 text-amber-500 dark:text-amber-400 border border-amber-500/20 px-2 py-0.5 text-[10px] font-medium">
-            {t.trafficResetMode === "carry_over" ? "перенос остатка" : t.trafficResetMode === "on_purchase" ? "сброс при покупке" : t.trafficResetMode === "monthly" ? "сброс ежемесячно" : t.trafficResetMode === "monthly_rolling" ? "скользящий месяц" : ""}
-          </span>
-        )}
-        {t.deviceLimit != null && (
-          <span className="inline-flex items-center rounded-full bg-violet-500/10 text-violet-500 dark:text-violet-400 border border-violet-500/20 px-2 py-0.5 text-[10px] font-medium">
-            устройств: {t.deviceLimit}
-          </span>
-        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="font-semibold leading-5">{t.name}</span>
+            {t.isBestChoice && <span className="inline-flex shrink-0 items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-500 dark:text-amber-400">🔥 Лучший выбор</span>}
+            {t.archivedAt && <span className="inline-flex shrink-0 items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500">Архив</span>}
+            {t.description?.trim() ? (
+              <span className="min-w-0 max-w-full truncate text-xs text-muted-foreground sm:max-w-[240px]" title={t.description}>
+                {t.description}
+              </span>
+            ) : null}
+          </div>
+          <div data-tariff-meta className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+            <span className="inline-flex shrink-0 items-center rounded-full bg-foreground/[0.05] dark:bg-white/[0.05] border border-white/10 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+              {t.durationDays} дн.
+            </span>
+            <span className="shrink-0 text-sm font-bold text-emerald-500 dark:text-emerald-400">
+              {formatPrice(t.price ?? 0, t.currency ?? "usd")}
+            </span>
+            <span className="inline-flex shrink-0 items-center rounded-full bg-cyan-500/10 text-cyan-500 dark:text-cyan-400 border border-cyan-500/20 px-2 py-0.5 text-[10px] font-medium">
+              сквадов: {t.internalSquadUuids.length}
+            </span>
+            <span className="inline-flex shrink-0 items-center rounded-full bg-blue-500/10 text-blue-500 dark:text-blue-400 border border-blue-500/20 px-2 py-0.5 text-[10px] font-medium">
+              Remnawave: {formatTraffic(t.trafficLimitBytes)}
+            </span>
+            {t.trafficLimitMode === "LOCAL_SQUAD" && <span className="inline-flex shrink-0 items-center rounded-full bg-cyan-500/10 text-cyan-500 dark:text-cyan-400 border border-cyan-500/20 px-2 py-0.5 text-[10px] font-medium">Локально: {formatTraffic(t.localTrafficLimitBytes)}</span>}
+            {t.trafficResetMode && t.trafficResetMode !== "no_reset" && (
+              <span className="inline-flex shrink-0 items-center rounded-full bg-amber-500/10 text-amber-500 dark:text-amber-400 border border-amber-500/20 px-2 py-0.5 text-[10px] font-medium">
+                {t.trafficResetMode === "carry_over" ? "перенос остатка" : t.trafficResetMode === "on_purchase" ? "сброс при покупке" : t.trafficResetMode === "monthly" ? "сброс ежемесячно" : t.trafficResetMode === "monthly_rolling" ? "скользящий месяц" : ""}
+              </span>
+            )}
+            {t.deviceLimit != null && (
+              <span className="inline-flex shrink-0 items-center rounded-full bg-violet-500/10 text-violet-500 dark:text-violet-400 border border-violet-500/20 px-2 py-0.5 text-[10px] font-medium">
+                устройств: {t.deviceLimit}
+              </span>
+            )}
+          </div>
+        </div>
       </div>
-      <div className="flex items-center gap-1 shrink-0">
+      <div data-tariff-actions className="flex shrink-0 items-center justify-end gap-1 md:self-center">
         <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={onArchive} title={t.archivedAt ? "Вернуть из архива" : "Архивировать"}>
           {t.archivedAt ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
         </Button>
@@ -1705,13 +1712,27 @@ function TariffModal({
           <p className="text-[10px] text-muted-foreground -mt-2">
             Эмодзи показывается перед названием подписки в главном меню бота (напр. 🌐 / 🔒 / ♾️🔒). Если пусто — fallback по типу.
           </p>
-          <button
-            type="button"
-            onClick={() => setIsBestChoice((value) => !value)}
-            className={`w-full rounded-xl border p-3 text-left text-sm ${isBestChoice ? "border-amber-400/50 bg-amber-400/10" : "border-white/10 bg-foreground/[0.03]"}`}
+          <label
+            htmlFor="tariff-best-choice"
+            className={cn(
+              "flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors",
+              isBestChoice ? "border-amber-400/50 bg-amber-400/10" : "border-white/10 bg-foreground/[0.03] hover:border-white/20",
+            )}
           >
-            🔥 Лучший выбор {isBestChoice ? "— будет подсвечен в воронке оплаты" : ""}
-          </button>
+            <input
+              id="tariff-best-choice"
+              type="checkbox"
+              checked={isBestChoice}
+              onChange={(event) => setIsBestChoice(event.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-amber-500"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold">🔥 Лучший выбор</span>
+              <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                Подсветить тариф в выборе подписки
+              </span>
+            </span>
+          </label>
           <div className="grid gap-1.5">
             <Label htmlFor="tariff-desc" className="text-xs text-muted-foreground">Описание (необязательно)</Label>
             <textarea
