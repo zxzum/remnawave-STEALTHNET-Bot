@@ -3,3 +3,6 @@ export * from "./icon-tile";
 export * from "./badge";
 export * from "./separator";
 export * from "./skeleton";
+export * from "./input";
+export * from "./checkbox";
+export * from "./switch";
