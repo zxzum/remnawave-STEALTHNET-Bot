@@ -9,6 +9,11 @@ import { OptionCard } from "../components/ui/option-card";
 import { Stepper } from "../components/ui/stepper";
 import { Checkbox } from "../components/ui/checkbox";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Separator } from "../components/ui/separator";
+import { IconTile } from "../components/ui/icon-tile";
+import { AnimatedNumber } from "../components/ui/animated-number";
+import { useSuccess } from "../components/ui/success-dialog";
 import { invalidatePrefetch, prefetchConversionPreview, prefetchPublicConfig } from "../components/ui/prefetch";
 import {
   Box,
@@ -18,12 +23,9 @@ import {
   Signal,
   Smartphone,
   CreditCard,
-  Check,
   ArrowLeft,
   RefreshCw,
-  Tag,
   Wallet,
-  Loader2,
   Zap,
   Flame,
   QrCode,
@@ -56,9 +58,10 @@ function formatMoney(value: number, currency: string) {
 export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | null; open: boolean; onOpenChange: (v: boolean) => void }) {
   const { user, subscriptions, toast, reload } = useApp();
   const { state, refreshProfile } = useClientAuth();
+  const { show } = useSuccess();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [step, setStep] = useState<"config" | "checkout" | "success">("config");
+  const [step, setStep] = useState<"config" | "checkout">("config");
   const [days, setDays] = useState(30);
   const [extra, setExtra] = useState(0);
   const [agreed, setAgreed] = useState(true);
@@ -121,7 +124,14 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
           // Подписка изменилась — устаревший preview конвертации нельзя переиспользовать
           invalidatePrefetch("conversion:");
           await Promise.all([refreshProfile(), reload()]);
-          if (active) setStep("success");
+          if (active) {
+            // Успех показываем глобальным SuccessDialog — модалку конфигурации закрываем
+            onOpenChange(false);
+            show({
+              title: "Оплата прошла",
+              description: "Подписка уже активирована. Если был пробный период, он автоматически конвертирован.",
+            });
+          }
           return;
         }
         if (payment.status === "FAILED") {
@@ -147,6 +157,8 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
   const priceBeforePromo = basePrice + conversionExtraCost;
   const price = Math.max(0, Math.round((priceBeforePromo * (1 - discountPercent / 100) - discountFixed) * 100) / 100);
   const totalDevices = plan.baseDevices + extra;
+  // База для бейджа скидки — максимальная цена/день среди опций (не полагаемся на сортировку API)
+  const basePricePerDay = Math.max(0, ...plan.durationOptions.map((option) => (option.days > 0 ? option.price / option.days : 0)));
   const selectedOption = plan.durationOptions.find((option) => option.days === days) ?? plan.durationOptions[0];
   const promoCode = discountPercent > 0 || discountFixed > 0 ? promo.trim() : undefined;
   const trialSubscriptions = subscriptions.filter((subscription) => subscription.isTrial);
@@ -227,13 +239,19 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
     setPaying(true);
     try {
       const result = await api.clientPayByBalance(state.token, purchasePayload);
-      toast({ title: "Оплата прошла", description: result.message, variant: "success" });
       // Баланс/подписка изменились — сбрасываем кэш preview конвертации
       invalidatePrefetch("conversion:");
-      onOpenChange(false);
-      reset();
-      navigate("/cabinet/dashboard?payment=success");
-      void Promise.all([refreshProfile(), reload()]).catch(() => undefined);
+      // Успех — глобальное окно (без дубля в toast), модалка закрывается по «Готово»
+      show({
+        title: "Оплата прошла",
+        description: result.message,
+        onDone: () => {
+          onOpenChange(false);
+          reset();
+          navigate("/cabinet/dashboard?payment=success");
+        },
+      });
+      void Promise.all([refreshProfile(), reload({ soft: true })]).catch(() => undefined);
     } catch (cause) {
       toast({ title: "Не удалось оплатить", description: cause instanceof Error ? cause.message : undefined, variant: "error" });
     } finally {
@@ -308,9 +326,10 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {plan.durationOptions.map((d) => {
                   const p = durationPrice(plan, d.days, extra);
-                  // В API у опций нет процента скидки — считаем её от цены/день первой (базовой) опции
-                  const baseOption = plan.durationOptions[0];
-                  const discount = Math.round((1 - (d.price / d.days) / (baseOption.price / baseOption.days)) * 100);
+                  // В API у опций нет процента скидки — считаем её от базовой цены/день (guard от days === 0)
+                  const discount = basePricePerDay > 0 && d.days > 0
+                    ? Math.round((1 - (d.price / d.days) / basePricePerDay) * 100)
+                    : 0;
                   return (
                     <OptionCard
                       key={d.days}
@@ -385,27 +404,6 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
               </Button>
             </div>
           </motion.div>
-        ) : step === "success" ? (
-          <motion.div
-            key="success"
-            initial={{ opacity: 0, scale: 0.94 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="p-7 text-center"
-          >
-            <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-mint-500/15 text-mint-400">
-              <Check className="h-8 w-8" strokeWidth={3} />
-            </div>
-            <ModalTitle className="mt-5 text-2xl font-extrabold">Оплата прошла</ModalTitle>
-            <ModalDescription className="mt-2 text-sm text-fog-500">
-              Подписка уже активирована. Если был пробный период, он автоматически конвертирован.
-            </ModalDescription>
-            <button
-              onClick={() => { onOpenChange(false); navigate("/cabinet/dashboard?payment=success"); }}
-              className="btn-primary mt-6 w-full px-6 py-4"
-            >
-              Перейти к подписке
-            </button>
-          </motion.div>
         ) : (
           <motion.div
             key="checkout"
@@ -422,51 +420,57 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
               >
                 <ArrowLeft className="h-5 w-5" />
               </button>
-              <div>
+              <div className="min-w-0 pr-10">
                 <ModalTitle className="text-lg font-extrabold">Оплата тарифа</ModalTitle>
                 <ModalDescription className="text-xs text-fog-500">{plan.name}</ModalDescription>
               </div>
             </div>
 
-            {/* total */}
-            <div className="glass-inset mt-5 rounded-3xl p-5">
-              <p className="text-sm text-fog-500">Итого к оплате</p>
-              <p className="mt-1 text-4xl font-extrabold tracking-tight">
-                {formatMoney(price, plan.currency)}
-                {discountPercent > 0 && (
-                  <span className="ml-2 align-middle text-base font-bold text-mint-400">−{discountPercent}%</span>
-                )}
-              </p>
-              <div className="mt-4 grid grid-cols-2 gap-2.5">
-                <div className="flex flex-col justify-center rounded-2xl border border-white/8 bg-white/3 p-3">
-                  <p className="text-[10px] font-bold tracking-wider text-fog-600 uppercase">Срок</p>
-                  <p className="mt-1 flex items-center gap-1.5 text-sm font-bold">
-                    <CalendarDays className="h-4 w-4 text-fog-500" /> {days} дн.
-                  </p>
+            {/* сводка-плейт */}
+            <div className="glass-inset mt-5 rounded-2xl p-4">
+              <div className="flex justify-between text-sm">
+                <span className="text-fog-500">Тариф, {days} дней</span>
+                <span className="font-bold">{formatMoney(quote.base, plan.currency)}</span>
+              </div>
+              {extra > 0 && (
+                <div className="mt-1 flex justify-between text-sm">
+                  <span className="text-fog-500">Доп. устройства ×{extra}</span>
+                  <span className="font-bold">{formatMoney(quote.extras, plan.currency)}</span>
                 </div>
-                <div className="flex flex-col justify-center rounded-2xl border border-white/8 bg-white/3 p-3">
-                  <p className="text-[10px] font-bold tracking-wider text-fog-600 uppercase">Трафик</p>
-                  <p className="mt-1 flex items-center gap-1.5 text-sm font-bold">
-                    <Wifi className="h-4 w-4 text-fog-500" /> {plan.traffic}
-                  </p>
+              )}
+              {conversionExtraCost > 0 && (
+                <div className="mt-1 flex justify-between text-sm">
+                  <span className="text-fog-500">Сохранение устройств</span>
+                  <span className="font-bold">{formatMoney(conversionExtraCost, plan.currency)}</span>
                 </div>
+              )}
+              {conversion?.willConvert && conversion.convertedDays !== undefined && (
+                <div className="mt-1 flex justify-between text-sm">
+                  <span className="text-fog-500">Добавится конвертацией</span>
+                  <span className="font-bold text-amber-glow">+{conversion.convertedDays} дн.</span>
                 </div>
-                {conversion?.willConvert && conversion.convertedDays !== undefined && (
-                  <p className="mt-3 text-xs text-fog-500">В обычной покупке к сроку добавится конвертация: <b className="text-amber-glow">+{conversion.convertedDays} дн.</b></p>
-                )}
-              {plan.whitelistGB && (
-                <span className="chip chip-amber chip-fluid mt-2.5">
-                  <Signal className="h-3.5 w-3.5" /> Белые списки: {plan.whitelistGB.toFixed(0)} ГБ / мес
+              )}
+              <Separator className="my-3" />
+              <div className="flex items-baseline justify-between">
+                <span className="font-bold">Итого</span>
+                <span className="text-xl font-extrabold">
+                  {formatMoney(price, plan.currency)}
+                  {discountPercent > 0 && <span className="ml-2 text-sm font-bold text-mint-400">−{discountPercent}%</span>}
                 </span>
+              </div>
+              {plan.whitelistGB && (
+                <p className="mt-2.5 flex items-center gap-1.5 text-xs text-fog-500">
+                  <Signal className="h-3.5 w-3.5" /> Белые списки: {plan.whitelistGB.toFixed(0)} ГБ / мес
+                </p>
               )}
             </div>
 
             {/* renewal notice */}
             {ownedSub && (
-              <div className="mt-4 flex items-start gap-3 rounded-3xl border border-violet-glow/25 bg-violet-glow/8 p-4">
-                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-violet-glow/15 text-violet-glow">
-                  <RefreshCw className="h-5 w-5" />
-                </div>
+              <div className="mt-3 flex items-start gap-3 rounded-2xl border border-violet-glow/25 bg-violet-glow/8 p-3.5">
+                <IconTile size="sm" tone="violet">
+                  <RefreshCw className="h-4 w-4" />
+                </IconTile>
                 <div>
                   <p className="text-sm font-bold">Этот тариф у вас уже есть — подписка будет продлена</p>
                   <p className="mt-1 text-xs leading-relaxed text-fog-500">
@@ -479,7 +483,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
             )}
 
             {conversion?.willConvert && conversion.mode !== "extend" && (
-              <div className="mt-4 rounded-3xl border border-amber-glow/25 bg-amber-glow/8 p-4">
+              <div className="mt-3 rounded-2xl border border-amber-glow/25 bg-amber-glow/8 p-3.5">
                 <p className="text-sm font-bold">
                   {conversion.mode === "replace" ? "Текущая подписка будет заменена" : "Остаток подписки будет пересчитан"}
                 </p>
@@ -523,7 +527,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
             )}
 
             {!conversion?.willConvert && trialConversionCandidates.length > 1 && (
-              <div className="mt-4 rounded-3xl border border-white/8 bg-white/3 p-4">
+              <div className="mt-3 rounded-2xl border border-white/8 bg-white/3 p-3.5">
                 <p className="text-sm font-bold">Какую пробную подписку конвертировать</p>
                 <div className="mt-2 flex flex-col gap-2">
                   {trialConversionCandidates.map((subscription) => (
@@ -546,49 +550,40 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
             )}
 
             {/* promo */}
-            <p className="mt-6 mb-2 flex items-center gap-2 text-sm font-bold">
-              <Tag className="h-4 w-4 text-fog-500" /> Промокод
-            </p>
-            <div className="flex gap-2.5">
-              <input
-                value={promo}
-                onChange={(e) => setPromo(e.target.value)}
-                placeholder="Введите промокод"
-                className="input-glass flex-1"
-              />
-              <button onClick={applyPromo} className="btn-ghost px-5 text-sm">
-                Применить
-              </button>
-            </div>
+            <p className="mt-5 mb-2 text-xs font-semibold text-fog-500">Промокод</p>
+            <form onSubmit={(e) => { e.preventDefault(); void applyPromo(); }} className="flex gap-2">
+              <Input value={promo} onChange={(e) => setPromo(e.target.value)} placeholder="Промокод" className="flex-1" />
+              <Button variant="secondary" type="submit">Применить</Button>
+            </form>
 
             {/* payment methods */}
-            <p className="mt-6 mb-2 flex items-center gap-2 text-sm font-bold">
-              <Wallet className="h-4 w-4 text-fog-500" /> Способ оплаты
-            </p>
+            <p className="mt-5 mb-2 text-xs font-semibold text-fog-500">Способ оплаты</p>
             <div className="flex flex-col gap-2.5">
               {user.balance > 0 && (
-                <motion.button
-                  whileTap={{ scale: 0.98 }}
-                  disabled={paying}
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  className="w-full justify-between"
+                  loading={paying}
+                  loadingText="Оплата…"
+                  disabled={user.balance < price}
                   onClick={payBalance}
-                  className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-orange-500 to-orange-600 p-4 text-left font-bold text-white shadow-[0_0_28px_-8px_rgba(249,115,22,0.7)] transition-filter hover:brightness-110"
                 >
-                  {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wallet className="h-5 w-5" />}
-                  <span className="flex-1">{paying ? "Оплата…" : "Оплатить с баланса"}</span>
-                  <span className="rounded-lg bg-black/25 px-2.5 py-1 text-sm">
-                    {user.balance.toLocaleString("ru-RU")} ₽
+                  <span className="flex items-center gap-2">
+                    <Wallet /> С баланса
                   </span>
-                </motion.button>
+                  <AnimatedNumber value={user.balance} format={(v) => `${v.toLocaleString("ru-RU")} ₽`} />
+                </Button>
               )}
 
               {/* Platega — основной способ, акцентный блок */}
-              {plategaMethods.length > 0 && <div className="rounded-3xl border border-accent-400/40 bg-accent-500/8 p-4 shadow-neon-blue">
+              {plategaMethods.length > 0 && <div className="rounded-2xl border border-accent-400/40 bg-accent-500/8 p-4 shadow-neon-blue">
                 <div className="mb-3 flex items-center gap-2.5">
-                  <div className="icon-tile h-10 w-10 rounded-xl">
-                    <CreditCard className="h-5 w-5" />
-                  </div>
+                  <IconTile size="sm">
+                    <CreditCard className="h-4 w-4" />
+                  </IconTile>
                   <div className="flex-1">
-                    <p className="font-bold">Platega</p>
+                    <p className="text-sm font-bold">Platega</p>
                     <p className="text-[11px] text-fog-500">Банковские платежи и крипта</p>
                   </div>
                   <span className="rounded-full bg-accent-500/20 px-2.5 py-1 text-[10px] font-extrabold tracking-wider text-accent-400 uppercase">
@@ -596,76 +591,91 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                   </span>
                 </div>
                 <div className="grid grid-cols-2 gap-2.5">
-                  {sbpMethod && <motion.button
-                    whileTap={{ scale: 0.96 }}
-                    disabled={paying}
+                  {sbpMethod && <Button
+                    size="lg"
+                    loading={paying}
+                    loadingText="Оплата…"
                     onClick={() => payPlatega(sbpMethod.id)}
-                    className="btn-primary flex-col gap-0.5 rounded-2xl px-3 py-3.5 text-sm"
                   >
-                    <span className="flex items-center gap-1.5 font-bold">
-                      {paying ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />} {paying ? "Оплата…" : "СБП"}
+                    <span className="flex flex-col items-center">
+                      <span className="flex items-center gap-1.5 font-bold">
+                        <QrCode /> СБП
+                      </span>
+                      <span className="text-[10px] font-medium opacity-75">по QR-коду</span>
                     </span>
-                    <span className="text-[10px] font-medium opacity-75">по QR-коду</span>
-                  </motion.button>}
-                  {cardMethod && <motion.button
-                    whileTap={{ scale: 0.96 }}
-                    disabled={paying}
+                  </Button>}
+                  {cardMethod && <Button
+                    size="lg"
+                    loading={paying}
+                    loadingText="Оплата…"
                     onClick={() => payPlatega(cardMethod.id)}
-                    className="btn-primary flex-col gap-0.5 rounded-2xl px-3 py-3.5 text-sm"
                   >
-                    <span className="flex items-center gap-1.5 font-bold">
-                      {paying ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />} {paying ? "Оплата…" : "Карта"}
+                    <span className="flex flex-col items-center">
+                      <span className="flex items-center gap-1.5 font-bold">
+                        <CreditCard /> Карта
+                      </span>
+                      <span className="text-[10px] font-medium opacity-75">RUB · любой банк</span>
                     </span>
-                    <span className="text-[10px] font-medium opacity-75">RUB · любой банк</span>
-                  </motion.button>}
+                  </Button>}
                 </div>
-                {cryptoMethod && <button
-                  disabled={paying}
+                {cryptoMethod && <Button
+                  variant="link"
+                  size="sm"
+                  className="mt-2.5 w-full"
+                  loading={paying}
+                  loadingText="Оплата…"
                   onClick={() => payPlatega(cryptoMethod.id)}
-                  className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-xl py-1.5 text-xs font-semibold text-fog-400 transition-colors hover:text-accent-400"
                 >
-                  {paying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bitcoin className="h-3.5 w-3.5" />} {paying ? "Оплата…" : "Оплатить криптой через Platega"}
-                </button>}
-                {otherPlategaMethods.length > 0 && <div className="mt-2.5 grid grid-cols-1 gap-2">
+                  <Bitcoin /> Оплатить криптой через Platega
+                </Button>}
+                {otherPlategaMethods.length > 0 && <div className="mt-2.5 flex flex-col gap-2">
                   {otherPlategaMethods.map((method) => (
-                    <button
+                    <Button
                       key={method.id}
-                      disabled={paying}
+                      variant="outline"
+                      size="sm"
+                      loading={paying}
+                      loadingText="Оплата…"
                       onClick={() => payPlatega(method.id)}
-                      className="rounded-xl border border-accent-400/20 bg-accent-500/8 px-3 py-2 text-sm font-semibold transition-colors hover:bg-accent-500/15"
                     >
-                      {paying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} {paying ? "Оплата…" : method.label}
-                    </button>
+                      {method.label}
+                    </Button>
                   ))}
                 </div>}
               </div>}
 
-              {config?.cryptopayEnabled && <button
-                disabled={paying}
+              {config?.cryptopayEnabled && <Button
+                variant="secondary"
+                size="lg"
+                className="w-full justify-start hover:border-amber-glow/30"
+                loading={paying}
+                loadingText="Оплата…"
                 onClick={payCryptoBot}
-                className="glass group flex items-center gap-3 rounded-2xl p-4 text-left transition-all hover:border-amber-glow/30"
               >
-                <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-amber-glow/25 bg-amber-glow/10 text-amber-glow">
-                  {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <Zap className="h-5 w-5" />}
-                </div>
-                <div className="flex-1">
-                  <p className="font-bold">{paying ? "Оплата…" : "Crypto Bot"}</p>
-                  <p className="text-xs text-fog-500">USDT · TON · BTC</p>
-                </div>
-              </button>}
-              {config?.rollypayEnabled && plan.currency.toUpperCase() === "RUB" && <button
-                disabled={paying}
+                <IconTile size="sm" className="border-amber-glow/25 bg-amber-glow/10 text-amber-glow">
+                  <Zap className="h-4 w-4" />
+                </IconTile>
+                <span className="flex flex-col items-start">
+                  <span>Crypto Bot</span>
+                  <span className="text-xs font-medium text-fog-500">USDT · TON · BTC</span>
+                </span>
+              </Button>}
+              {config?.rollypayEnabled && plan.currency.toUpperCase() === "RUB" && <Button
+                variant="secondary"
+                size="lg"
+                className="w-full justify-start hover:border-emerald-400/30"
+                loading={paying}
+                loadingText="Оплата…"
                 onClick={payRollyPay}
-                className="glass group flex items-center gap-3 rounded-2xl p-4 text-left transition-all hover:border-emerald-400/30"
               >
-                <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-emerald-400/25 bg-emerald-400/10 text-emerald-300">
-                  {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <CreditCard className="h-5 w-5" />}
-                </div>
-                <div className="flex-1">
-                  <p className="font-bold">{paying ? "Оплата…" : "RollyPay"}</p>
-                  <p className="text-xs text-fog-500">Оплата в рублях</p>
-                </div>
-              </button>}
+                <IconTile size="sm" className="border-emerald-400/25 bg-emerald-400/10 text-emerald-300">
+                  <CreditCard className="h-4 w-4" />
+                </IconTile>
+                <span className="flex flex-col items-start">
+                  <span>RollyPay</span>
+                  <span className="text-xs font-medium text-fog-500">Оплата в рублях</span>
+                </span>
+              </Button>}
             </div>
           </motion.div>
         )}
