@@ -41,7 +41,7 @@ interface AppState {
   canLinkTelegram: boolean;
   canUnlinkTelegram: boolean;
   toasts: Toast[];
-  reload: () => Promise<void>;
+  reload: (opts?: { soft?: boolean }) => Promise<void>;
   disconnectDevice: (subId: string, deviceId: string) => Promise<void>;
   linkTelegram: () => Promise<void>;
   unlinkTelegram: () => Promise<void>;
@@ -152,9 +152,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     toast({ title: label, variant: "success" });
   }, [toast]);
 
-  const reload = useCallback(async () => {
+  // soft: true — обновление данных без переключения в loading (без мигания каркаса)
+  const reload = useCallback(async (opts?: { soft?: boolean }) => {
     if (!state.token) return;
-    setLoading(true);
+    if (opts?.soft !== true) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const [all, deviceResult, publicConfig, subscriptionPage, stats, tariffs, payments, trials] = await Promise.all([

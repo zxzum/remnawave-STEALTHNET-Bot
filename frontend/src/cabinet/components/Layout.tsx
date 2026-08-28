@@ -9,6 +9,9 @@ import { formatCurrency } from "../model";
 import { useApp } from "../store/AppContext";
 import { Toasts } from "./ui/Toasts";
 import { SuccessProvider } from "./ui/success-dialog";
+import { AnimatedNumber } from "./ui/animated-number";
+import { Button } from "./ui/button";
+import { IconTile } from "./ui/icon-tile";
 
 const navItems = [
   { to: "/cabinet/dashboard", label: "Кабинет", icon: Home, end: true },
@@ -108,18 +111,22 @@ function Sidebar() {
         <div className="flex-1" />
 
         {/* balance plate */}
-        <NavLink
-          to="/cabinet/profile"
-          className="glass-inset group mb-3 flex items-center gap-3 rounded-2xl p-4 transition-colors hover:border-accent-400/30"
-        >
-          <div className="icon-tile h-10 w-10 rounded-xl">
-            <Wallet className="h-5 w-5" />
+        <div className="glass-inset mb-3 rounded-2xl p-4">
+          <div className="flex items-center gap-3">
+            <IconTile size="sm">
+              <Wallet className="h-4 w-4" />
+            </IconTile>
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold tracking-wider text-fog-500 uppercase">Баланс</p>
+              <p className="truncate text-lg font-extrabold">
+                <AnimatedNumber value={user.balance} format={(v) => formatCurrency(v, user.currency)} />
+              </p>
+            </div>
           </div>
-          <div>
-            <p className="text-[11px] font-semibold tracking-wider text-fog-500 uppercase">Баланс</p>
-            <p className="text-lg font-extrabold">{formatCurrency(user.balance, user.currency)}</p>
-          </div>
-        </NavLink>
+          <Button variant="secondary" size="sm" className="mt-3 w-full" onClick={() => navigate("/cabinet/profile#topup")}>
+            Пополнить
+          </Button>
+        </div>
 
         {/* profile + logout */}
         <NavLink
