@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
 import { motion } from "framer-motion";
 import { Check } from "lucide-react";
 import { Button } from "./button";
@@ -15,12 +15,20 @@ const SuccessContext = createContext<{ show: (payload: SuccessPayload) => void }
 /** Глобальное окно успеха: галка + заголовок + «Готово» (после покупок/зачислений) */
 export function SuccessProvider({ children }: { children: ReactNode }) {
   const [payload, setPayload] = useState<SuccessPayload | null>(null);
-  const show = useCallback((next: SuccessPayload) => setPayload(next), []);
+  // Зеркало payload для чтения вне рендера: в StrictMode/concurrent-режиме
+  // updater в setState может вызваться повторно, поэтому onDone зовём не в нём.
+  const payloadRef = useRef<SuccessPayload | null>(null);
+  const show = useCallback((next: SuccessPayload) => {
+    payloadRef.current = next;
+    setPayload(next);
+  }, []);
   const close = useCallback(() => {
-    setPayload((current) => {
-      current?.onDone?.();
-      return null;
-    });
+    // Сначала сбрасываем ref — так повторный close (или закрытие уже закрытого)
+    // не вызовет onDone второй раз.
+    const current = payloadRef.current;
+    payloadRef.current = null;
+    setPayload(null);
+    current?.onDone?.();
   }, []);
 
   return (
