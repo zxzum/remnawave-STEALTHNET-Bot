@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
@@ -10,7 +10,7 @@ import { useClientAuth } from "@/contexts/client-auth";
 import { api, type PublicSellOption, type TicketMessageDto } from "@/lib/api";
 import { preparePaymentRedirect } from "@/lib/open-payment-url";
 import { Button } from "../components/ui/button";
-import { Input, Textarea } from "../components/ui/input";
+import { Input, Select, Textarea } from "../components/ui/input";
 import { IconTile } from "../components/ui/icon-tile";
 import { Modal, ModalDescription, ModalTitle } from "../components/ui/modal";
 import { useSuccess } from "../components/ui/success-dialog";
@@ -28,7 +28,7 @@ function money(value: number, currency: string) {
 }
 
 function PageTitle({ icon: Icon, title, subtitle }: { icon: typeof Box; title: string; subtitle: string }) {
-  return <div className="flex items-center gap-4"><div className="icon-tile h-12 w-12 rounded-2xl"><Icon className="h-5 w-5" /></div><div><h1 className="text-3xl font-extrabold tracking-tight">{title}</h1><p className="mt-1 text-sm text-fog-500">{subtitle}</p></div></div>;
+  return <div className="flex items-center gap-4"><div className="icon-tile h-12 w-12 rounded-2xl"><Icon className="h-5 w-5" /></div><div><h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">{title}</h1><p className="mt-1 text-sm text-fog-500">{subtitle}</p></div></div>;
 }
 
 type PurchasePayload = {
@@ -392,7 +392,7 @@ export function ExtraOptions({ trafficOnly = false }: { trafficOnly?: boolean } 
     if (!pool.some((item) => item.id === target)) setTarget(pool[0]?.id ?? "");
   }, [subscriptions, target, trafficOnly]);
   return <div className="flex flex-col gap-5"><PageTitle icon={PackagePlus} title={trafficOnly ? "Докупить трафик" : "Дополнительные опции"} subtitle={trafficOnly ? "Пакеты трафика для выбранной подписки." : "Трафик, устройства и серверы для выбранной подписки."} />
-    {selectableSubscriptions.length > 1 && <select value={target} onChange={(event) => setTarget(event.target.value)} className="input-glass"><option value="">Выберите подписку</option>{selectableSubscriptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
+    {selectableSubscriptions.length > 1 && <Select value={target} onChange={(event) => setTarget(event.target.value)}><option value="">Выберите подписку</option>{selectableSubscriptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select>}
     {trafficOnly ? (
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {sortTrafficOptions(options.filter((option): option is TrafficSellOption => option.kind === "traffic")).map((option) => (
@@ -556,5 +556,15 @@ export function Tickets() {
 }
 
 function AttachmentInput({ files, onChange }: { files: File[]; onChange: (files: File[]) => void }) {
-  return <label className="btn-ghost mt-3 inline-flex cursor-pointer px-4 py-2 text-xs"><input type="file" accept="image/*" multiple className="hidden" onChange={(event) => onChange(Array.from(event.target.files ?? []).slice(0, 5))} /><Copy className="h-3.5 w-3.5" />{files.length > 0 ? `Фото: ${files.length}` : "Прикрепить фото"}</label>;
+  // Скрытый input открываем программно — кнопка-обёртка из ui-кита
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <input ref={inputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => onChange(Array.from(event.target.files ?? []).slice(0, 5))} />
+      <Button variant="ghost" size="sm" className="mt-3" onClick={() => inputRef.current?.click()}>
+        <Copy className="h-3.5 w-3.5" />
+        {files.length > 0 ? `Фото: ${files.length}` : "Прикрепить фото"}
+      </Button>
+    </>
+  );
 }

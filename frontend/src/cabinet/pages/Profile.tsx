@@ -35,7 +35,7 @@ import { cn } from "../lib/cn";
 import { useApp } from "../store/AppContext";
 import { formatCurrency, resolvePaymentUrl, type CabinetTransaction as Transaction } from "../model";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
+import { Input, Select } from "../components/ui/input";
 import { Switch } from "../components/ui/switch";
 import { Modal, ModalBody, ModalDescription, ModalTitle } from "../components/ui/modal";
 import { CopyIconButton } from "../components/ui/CopyButton";
@@ -819,7 +819,7 @@ function Preferences() {
     } finally { setSaving(false); }
   };
   const languageLabels: Record<string, string> = { ru: "Русский", en: "English" };
-  return <section className="glass rounded-4xl p-5 sm:p-6"><h2 className="mb-4 font-extrabold">Настройки кабинета</h2><div className="grid grid-cols-2 gap-3"><label className="text-xs font-bold text-fog-500">Язык<select value={language} onChange={(event) => setLanguage(event.target.value)} className="input-glass mt-2">{languages.map((item) => <option key={item} value={item}>{languageLabels[item.toLowerCase()] ?? item.toUpperCase()}</option>)}</select></label><label className="text-xs font-bold text-fog-500">Валюта<select value={currency} onChange={(event) => setCurrency(event.target.value)} className="input-glass mt-2">{currencies.map((item) => <option key={item} value={item}>{item.toUpperCase()}</option>)}</select></label></div><button disabled={saving} onClick={save} className="btn-primary mt-4 w-full px-5 py-3 text-sm disabled:opacity-40"><Save className="h-4 w-4" /> Сохранить</button>{state.client?.yookassaPaymentMethodTitle && <button disabled={saving} onClick={unlink} className="btn-ghost mt-2 w-full px-5 py-3 text-sm disabled:opacity-40"><Trash2 className="h-4 w-4" /> Отвязать {state.client.yookassaPaymentMethodTitle}</button>}</section>;
+  return <section className="glass rounded-4xl p-5 sm:p-6"><h2 className="mb-4 font-extrabold">Настройки кабинета</h2><div className="grid grid-cols-2 gap-3"><label className="text-xs font-bold text-fog-500">Язык<Select value={language} onChange={(event) => setLanguage(event.target.value)} className="mt-2">{languages.map((item) => <option key={item} value={item}>{languageLabels[item.toLowerCase()] ?? item.toUpperCase()}</option>)}</Select></label><label className="text-xs font-bold text-fog-500">Валюта<Select value={currency} onChange={(event) => setCurrency(event.target.value)} className="mt-2">{currencies.map((item) => <option key={item} value={item}>{item.toUpperCase()}</option>)}</Select></label></div><Button loading={saving} onClick={save} className="mt-4 w-full"><Save className="h-4 w-4" /> Сохранить</Button>{state.client?.yookassaPaymentMethodTitle && <Button variant="ghost" loading={saving} onClick={unlink} className="mt-2 w-full"><Trash2 className="h-4 w-4" /> Отвязать {state.client.yookassaPaymentMethodTitle}</Button>}</section>;
 }
 
 export default function Profile() {
@@ -854,7 +854,7 @@ export default function Profile() {
       </header>
 
       <div>
-        <h1 className="text-3xl font-extrabold tracking-tight">Профиль</h1>
+        <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Профиль</h1>
         <p className="mt-1 text-fog-500">Баланс, данные аккаунта и безопасность</p>
       </div>
 

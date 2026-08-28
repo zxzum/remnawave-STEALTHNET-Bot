@@ -1,4 +1,4 @@
-import { forwardRef, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from "react";
+import { forwardRef, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 import { cn } from "../../lib/cn";
 
 const controlBase = "input-glass";
@@ -9,6 +9,14 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
   ),
 );
 Input.displayName = "Input";
+
+/** Нативный select в стилистике Input (стрелку браузера не скрываем) */
+export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean }>(
+  ({ className, invalid, ...props }, ref) => (
+    <select ref={ref} className={cn(controlBase, invalid && "border-red-400/50", className)} {...props} />
+  ),
+);
+Select.displayName = "Select";
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean }>(
   ({ className, invalid, ...props }, ref) => (

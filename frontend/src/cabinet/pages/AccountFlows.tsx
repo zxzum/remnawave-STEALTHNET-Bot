@@ -5,6 +5,9 @@ import { Check, KeyRound, ShieldCheck, Wallet, X } from "lucide-react";
 import { useClientAuth } from "@/contexts/client-auth";
 import { api, type PublicConfig } from "@/lib/api";
 import { Background } from "../components/Layout";
+import { Button, buttonVariants } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { cn } from "../lib/cn";
 
 function FlowShell({ children }: { children: ReactNode }) {
   useEffect(() => {
@@ -50,9 +53,15 @@ export function ForgotPassword() {
   return (
     <FlowShell>
       <StatusIcon state={sent ? "ok" : "loading"} />
-      <h1 className="mt-5 text-3xl font-extrabold">{sent ? "Проверьте почту" : "Забыли пароль?"}</h1>
+      <h1 className="mt-5 text-2xl font-extrabold sm:text-3xl">{sent ? "Проверьте почту" : "Забыли пароль?"}</h1>
       <p className="mt-2 text-sm text-fog-500">{sent ? "Если аккаунт существует, ссылка для сброса уже отправлена и действует один час." : "Введите email — пришлём безопасную ссылку для сброса."}</p>
-      {!sent && <form onSubmit={submit}><input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" className="input-glass mt-6" autoFocus />{error && <p className="mt-3 text-sm text-red-400">{error}</p>}<button disabled={loading} className="btn-primary mt-4 w-full px-6 py-4 disabled:opacity-40">{loading ? "Отправляем…" : "Отправить ссылку"}</button></form>}
+      {!sent && (
+        <form onSubmit={submit}>
+          <Input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" className="mt-6" autoFocus />
+          {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
+          <Button type="submit" size="lg" loading={loading} loadingText="Отправляем…" className="mt-4 w-full">Отправить ссылку</Button>
+        </form>
+      )}
       <Link to="/cabinet/login" className="mt-5 inline-block text-sm font-semibold text-fog-500 hover:text-accent-400">Вернуться ко входу</Link>
     </FlowShell>
   );
@@ -84,8 +93,19 @@ export function ResetPassword() {
   return (
     <FlowShell>
       <StatusIcon state={!token ? "error" : done ? "ok" : "loading"} />
-      <h1 className="mt-5 text-3xl font-extrabold">{!token ? "Ссылка недействительна" : done ? "Пароль изменён" : "Новый пароль"}</h1>
-      {!token ? <Link to="/cabinet/forgot-password" className="btn-primary mt-6 px-6 py-3">Запросить новую ссылку</Link> : done ? <button onClick={() => navigate("/cabinet/login", { replace: true })} className="btn-primary mt-6 w-full px-6 py-4">Перейти ко входу</button> : <form onSubmit={submit} className="mt-6 space-y-3"><input type="password" minLength={8} required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Новый пароль" className="input-glass" /><input type="password" minLength={8} required value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Повторите пароль" className="input-glass" />{error && <p className="text-sm text-red-400">{error}</p>}<button disabled={loading} className="btn-primary w-full px-6 py-4 disabled:opacity-40">{loading ? "Сохраняем…" : "Сменить пароль"}</button></form>}
+      <h1 className="mt-5 text-2xl font-extrabold sm:text-3xl">{!token ? "Ссылка недействительна" : done ? "Пароль изменён" : "Новый пароль"}</h1>
+      {!token ? (
+        <Link to="/cabinet/forgot-password" className={cn(buttonVariants({ size: "lg" }), "mt-6")}>Запросить новую ссылку</Link>
+      ) : done ? (
+        <Button size="lg" className="mt-6 w-full" onClick={() => navigate("/cabinet/login", { replace: true })}>Перейти ко входу</Button>
+      ) : (
+        <form onSubmit={submit} className="mt-6 space-y-3">
+          <Input type="password" minLength={8} required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Новый пароль" />
+          <Input type="password" minLength={8} required value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Повторите пароль" />
+          {error && <p className="text-sm text-red-400">{error}</p>}
+          <Button type="submit" size="lg" loading={loading} loadingText="Сохраняем…" className="w-full">Сменить пароль</Button>
+        </form>
+      )}
     </FlowShell>
   );
 }
@@ -115,7 +135,7 @@ function Verification({ linkEmail = false }: { linkEmail?: boolean }) {
     : registration
       ? `/cabinet/register?registrationToken=${encodeURIComponent(registration.registrationToken)}&email=${encodeURIComponent(registration.email)}`
       : "/cabinet/dashboard";
-  return <FlowShell><StatusIcon state={status} /><h1 className="mt-5 text-3xl font-extrabold">{linkEmail ? "Привязка почты" : "Подтверждение email"}</h1><p className={`mt-3 text-sm ${status === "error" ? "text-red-400" : "text-fog-500"}`}>{message}</p>{status === "ok" && <button onClick={() => navigate(continuePath, { replace: true })} className="btn-primary mt-6 w-full px-6 py-4">Продолжить</button>}</FlowShell>;
+  return <FlowShell><StatusIcon state={status} /><h1 className="mt-5 text-2xl font-extrabold sm:text-3xl">{linkEmail ? "Привязка почты" : "Подтверждение email"}</h1><p className={`mt-3 text-sm ${status === "error" ? "text-red-400" : "text-fog-500"}`}>{message}</p>{status === "ok" && <Button size="lg" className="mt-6 w-full" onClick={() => navigate(continuePath, { replace: true })}>Продолжить</Button>}</FlowShell>;
 }
 
 export function VerifyEmail() { return <Verification />; }
@@ -156,7 +176,7 @@ export function Onboarding() {
       setLoading(false);
     }
   };
-  return <FlowShell><div className="icon-tile mx-auto h-16 w-16 rounded-2xl"><ShieldCheck className="h-7 w-7" /></div><h1 className="mt-5 text-3xl font-extrabold">Настройка аккаунта</h1><p className="mt-2 text-sm text-fog-500">Почту, пароль и 2FA можно настроить позже в профиле.</p>{!state.client?.email && <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email (необязательно)" className="input-glass mt-6" />}<input type="password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Пароль (необязательно)" className="input-glass mt-3" /><button disabled={!config || loading} onClick={next} className="btn-primary mt-4 w-full px-6 py-4 disabled:opacity-40">{loading ? "Сохраняем…" : "Продолжить"}</button>{notice && <p className="mt-3 rounded-xl border border-mint-400/30 bg-mint-500/10 px-3 py-2 text-sm font-medium text-mint-300">{notice}</p>}{error && <p className="mt-3 text-sm text-red-400">{error}</p>}</FlowShell>;
+  return <FlowShell><form onSubmit={(event) => { event.preventDefault(); void next(); }}><div className="icon-tile mx-auto h-16 w-16 rounded-2xl"><ShieldCheck className="h-7 w-7" /></div><h1 className="mt-5 text-2xl font-extrabold sm:text-3xl">Настройка аккаунта</h1><p className="mt-2 text-sm text-fog-500">Почту, пароль и 2FA можно настроить позже в профиле.</p>{!state.client?.email && <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email (необязательно)" className="mt-6" />}<Input type="password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Пароль (необязательно)" className="mt-3" /><Button type="submit" size="lg" loading={loading} loadingText="Сохраняем…" disabled={!config} className="mt-4 w-full">Продолжить</Button>{notice && <p className="mt-3 rounded-xl border border-mint-400/30 bg-mint-500/10 px-3 py-2 text-sm font-medium text-mint-300">{notice}</p>}{error && <p className="mt-3 text-sm text-red-400">{error}</p>}</form></FlowShell>;
 }
 
 export function PaymentWait() {
@@ -184,7 +204,7 @@ export function PaymentWait() {
     void check();
     return () => { active = false; window.clearTimeout(timeout); };
   }, [paymentId, refreshProfile, state.token]);
-  return <FlowShell><StatusIcon state={status} /><h1 className="mt-5 text-3xl font-extrabold">{status === "loading" ? "Ожидаем оплату…" : status === "ok" ? "Оплата прошла" : "Платёж не прошёл"}</h1><p className="mt-2 text-sm text-fog-500">{status === "loading" ? "Страница обновится автоматически после подтверждения платёжной системой." : status === "ok" ? "Баланс и подписки уже обновлены." : "Попробуйте ещё раз или выберите другой способ оплаты."}</p>{status === "loading" && providerUrl && <a href={providerUrl} target="_blank" rel="noopener noreferrer" className="btn-primary mt-6 w-full px-6 py-4">Открыть оплату снова</a>}<Link to={status === "error" ? returnPath : "/cabinet/dashboard"} className="btn-ghost mt-3 w-full px-6 py-4">Вернуться в кабинет</Link></FlowShell>;
+  return <FlowShell><StatusIcon state={status} /><h1 className="mt-5 text-2xl font-extrabold sm:text-3xl">{status === "loading" ? "Ожидаем оплату…" : status === "ok" ? "Оплата прошла" : "Платёж не прошёл"}</h1><p className="mt-2 text-sm text-fog-500">{status === "loading" ? "Страница обновится автоматически после подтверждения платёжной системой." : status === "ok" ? "Баланс и подписки уже обновлены." : "Попробуйте ещё раз или выберите другой способ оплаты."}</p>{status === "loading" && providerUrl && <a href={providerUrl} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ size: "lg" }), "mt-6 w-full")}>Открыть оплату снова</a>}<Link to={status === "error" ? returnPath : "/cabinet/dashboard"} className={cn(buttonVariants({ variant: "ghost", size: "lg" }), "mt-3 w-full")}>Вернуться в кабинет</Link></FlowShell>;
 }
 
 type YooMoneyForm = { receiver: string; sum: number; label: string; paymentType: string; successURL: string };
@@ -203,5 +223,5 @@ export function YooMoneyPay() {
     void api.yoomoneyFormPaymentParams(state.token, id).then(setForm).catch((cause) => setError(cause instanceof Error ? cause.message : "Не удалось загрузить платёж"));
   }, [form, params, state.token]);
   useEffect(() => { if (form && formRef.current && !submitted.current) { submitted.current = true; formRef.current.submit(); } }, [form]);
-  return <FlowShell><div className="icon-tile mx-auto h-16 w-16 rounded-2xl"><Wallet className="h-7 w-7" /></div><h1 className="mt-5 text-3xl font-extrabold">Открываем ЮMoney…</h1><p className={`mt-2 text-sm ${error ? "text-red-400" : "text-fog-500"}`}>{error || "Безопасная форма оплаты откроется автоматически."}</p>{form && <form ref={formRef} action="https://yoomoney.ru/quickpay/confirm" method="POST" className="hidden"><input name="quickpay-form" value="button" readOnly /><input name="receiver" value={form.receiver} readOnly /><input name="sum" value={form.sum} readOnly /><input name="label" value={form.label} readOnly /><input name="paymentType" value={form.paymentType} readOnly /><input name="successURL" value={form.successURL} readOnly /></form>}</FlowShell>;
+  return <FlowShell><div className="icon-tile mx-auto h-16 w-16 rounded-2xl"><Wallet className="h-7 w-7" /></div><h1 className="mt-5 text-2xl font-extrabold sm:text-3xl">Открываем ЮMoney…</h1><p className={`mt-2 text-sm ${error ? "text-red-400" : "text-fog-500"}`}>{error || "Безопасная форма оплаты откроется автоматически."}</p>{form && <form ref={formRef} action="https://yoomoney.ru/quickpay/confirm" method="POST" className="hidden"><input name="quickpay-form" value="button" readOnly /><input name="receiver" value={form.receiver} readOnly /><input name="sum" value={form.sum} readOnly /><input name="label" value={form.label} readOnly /><input name="paymentType" value={form.paymentType} readOnly /><input name="successURL" value={form.successURL} readOnly /></form>}</FlowShell>;
 }

@@ -166,7 +166,7 @@ export default function Keys() {
 
   if (!active) return (
     <div className="flex flex-col gap-5">
-      <div><h1 className="text-3xl font-extrabold tracking-tight">Ключи доступа</h1><p className="mt-1 text-fog-500">Получите доступ за пару минут</p></div>
+      <div><h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Ключи доступа</h1><p className="mt-1 text-fog-500">Получите доступ за пару минут</p></div>
       <section className="glass-strong liquid mx-auto w-full max-w-xl rounded-4xl p-7 text-center sm:p-9">
         <div className="icon-tile mx-auto h-16 w-16 rounded-2xl"><KeyRound className="h-7 w-7" /></div>
         <h2 className="mt-5 text-xl font-extrabold">Ключа пока нет</h2>
@@ -180,7 +180,7 @@ export default function Keys() {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <h1 className="text-3xl font-extrabold tracking-tight">Ключи доступа</h1>
+        <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Ключи доступа</h1>
         <p className="mt-1 text-fog-500">Получите доступ за пару минут</p>
       </div>
 

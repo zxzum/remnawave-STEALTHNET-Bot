@@ -96,7 +96,7 @@ export default function Referrals() {
   return (
     <div className="flex flex-col gap-5 lg:grid lg:grid-cols-2 lg:items-start">
       <div className="order-1 lg:col-span-2">
-        <h1 className="text-3xl font-extrabold tracking-tight">Рефералы</h1>
+        <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Рефералы</h1>
         <p className="mt-1 text-fog-500">Приглашайте друзей и получайте процент с их пополнений.</p>
       </div>
 

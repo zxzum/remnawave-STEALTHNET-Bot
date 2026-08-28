@@ -8,7 +8,7 @@ import { Modal, ModalDescription, ModalTitle } from "../components/ui/modal";
 import { OptionCard } from "../components/ui/option-card";
 import { Stepper } from "../components/ui/stepper";
 import { Checkbox } from "../components/ui/checkbox";
-import { Button } from "../components/ui/button";
+import { Button, buttonVariants } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Separator } from "../components/ui/separator";
 import { IconTile } from "../components/ui/icon-tile";
@@ -744,10 +744,10 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
           onPointerDown={prefetchConversion}
           onClick={onPay}
           className={cn(
-            "mt-3 flex w-full items-center justify-center gap-2 rounded-2xl px-5 py-3.5 text-sm font-bold transition-all",
+            "mt-3 flex w-full items-center justify-center gap-2 rounded-2xl text-sm font-bold transition-all",
             plan.popular
-              ? "btn-primary"
-              : "bg-white/90 text-ink-950 shadow-[0_8px_24px_-8px_rgba(255,255,255,0.4)] hover:bg-white",
+              ? buttonVariants({ variant: "primary", size: "lg" })
+              : "bg-white/90 px-5 py-3.5 text-ink-950 shadow-[0_8px_24px_-8px_rgba(255,255,255,0.4)] hover:bg-white",
           )}
         >
           <CreditCard className="h-4 w-4" /> Оплатить
@@ -778,7 +778,7 @@ export default function Tariffs() {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <h1 className="text-3xl font-extrabold tracking-tight">Тарифы</h1>
+        <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Тарифы</h1>
         <p className="mt-1 text-fog-500">Выберите подходящий тариф и оплатите.</p>
       </div>
 

@@ -20,6 +20,8 @@ import {
 import { Background } from "../components/Layout";
 import { Toasts } from "../components/ui/Toasts";
 import { CopyIconButton } from "../components/ui/CopyButton";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { useApp } from "../store/AppContext";
 
 /* ---------------- Каркас ---------------- */
@@ -96,13 +98,13 @@ function PasswordInput({
   const [show, setShow] = useState(false);
   return (
     <div className="relative">
-      <input
+      <Input
         type={show ? "text" : "password"}
         value={value}
         autoFocus={autoFocus}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="input-glass pr-12"
+        className="pr-12"
       />
       <button
         type="button"
@@ -260,41 +262,41 @@ export function Login() {
       <div className="icon-tile mx-auto h-16 w-16 rounded-2xl">
         <UserRound className="h-7 w-7" />
       </div>
-      <h1 className="mt-5 text-center text-3xl font-extrabold tracking-tight">Вход в кабинет</h1>
+      <h1 className="mt-5 text-center text-2xl font-extrabold tracking-tight sm:text-3xl">Вход в кабинет</h1>
       <p className="mt-1.5 text-center text-sm text-fog-500">Введите email и пароль от аккаунта</p>
 
       {state.pending2FAToken ? (
-        <>
+        <form onSubmit={(event) => { event.preventDefault(); void handle2FA(); }}>
           <label className="mt-7 block text-sm font-semibold">Код двухфакторной аутентификации</label>
-          <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="000000" className="input-glass mt-2 text-center font-mono text-2xl font-bold tracking-[0.5em]" autoFocus />
-          <button disabled={code.length !== 6 || loading} onClick={handle2FA} className="btn-primary mt-4 w-full px-6 py-4 text-base disabled:cursor-not-allowed disabled:opacity-40">
+          <Input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="000000" className="mt-2 text-center font-mono text-2xl font-bold tracking-[0.5em]" autoFocus />
+          <Button type="submit" size="lg" loading={loading} disabled={code.length !== 6} className="mt-4 w-full">
             Подтвердить
-          </button>
-        </>
+          </Button>
+        </form>
       ) : (
-        <>
+        <form onSubmit={(event) => { event.preventDefault(); void handleLogin(); }}>
           <label className="mt-7 block text-sm font-semibold">Email</label>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" className="input-glass mt-2" autoFocus />
+          <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" className="mt-2" autoFocus />
           <label className="mt-4 block text-sm font-semibold">Пароль</label>
           <div className="mt-2"><PasswordInput value={password} onChange={setPassword} placeholder="Ваш пароль" /></div>
           <div className="mt-2 text-right">
             <Link to="/cabinet/forgot-password" className="text-xs font-semibold text-fog-500 transition-colors hover:text-accent-400">Забыли пароль?</Link>
           </div>
-          <button disabled={!valid || loading} onClick={handleLogin} className="btn-primary mt-4 w-full px-6 py-4 text-base disabled:cursor-not-allowed disabled:opacity-40">
-            {loading ? "Входим…" : "Войти"}
-          </button>
-        </>
+          <Button type="submit" size="lg" loading={loading} loadingText="Входим…" disabled={!valid} className="mt-4 w-full">
+            Войти
+          </Button>
+        </form>
       )}
 
       {error && <p className="mt-3 text-center text-sm font-semibold text-red-400">{error}</p>}
 
       <Divider />
 
-      <button disabled={!config?.telegramBotUsername || telegram.pending} onClick={telegram.start} className="btn-ghost w-full px-6 py-4 text-sm disabled:opacity-40">
+      <Button variant="ghost" size="lg" disabled={!config?.telegramBotUsername || telegram.pending} onClick={telegram.start} className="w-full">
         <Send className="h-4 w-4" /> {telegram.pending ? "Ожидаем подтверждение…" : "Войти через Telegram"}
-      </button>
-      {config?.googleLoginEnabled && <button onClick={() => external.redirect("google")} className="btn-ghost mt-2 w-full px-6 py-4 text-sm">Войти через Google</button>}
-      {config?.appleLoginEnabled && <button onClick={() => external.redirect("apple")} className="btn-ghost mt-2 w-full px-6 py-4 text-sm">Войти через Apple</button>}
+      </Button>
+      {config?.googleLoginEnabled && <Button variant="ghost" size="lg" onClick={() => external.redirect("google")} className="mt-2 w-full">Войти через Google</Button>}
+      {config?.appleLoginEnabled && <Button variant="ghost" size="lg" onClick={() => external.redirect("apple")} className="mt-2 w-full">Войти через Apple</Button>}
 
       <p className="mt-6 text-center text-sm text-fog-500">
         Нет аккаунта?{" "}
@@ -464,17 +466,17 @@ export function Register() {
               <div className="icon-tile mx-auto h-16 w-16 rounded-2xl">
                 <UserPlus className="h-7 w-7" />
               </div>
-              <h1 className="mt-5 text-center text-3xl font-extrabold tracking-tight">Регистрация</h1>
+              <h1 className="mt-5 text-center text-2xl font-extrabold tracking-tight sm:text-3xl">Регистрация</h1>
               <p className="mt-1.5 text-center text-sm text-fog-500">Создайте аккаунт в кабинете</p>
 
               <label className="mt-7 block text-sm font-semibold">Email</label>
-              <input
+              <Input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={sent || loading}
                 placeholder="you@example.com"
-                className="input-glass mt-2"
+                className="mt-2"
                 autoFocus
               />
 
@@ -511,21 +513,24 @@ export function Register() {
                 </span>
               </label>
 
-              <button
+              <Button
                 type="submit"
-                disabled={!config || !emailValid || !agreed || sent || loading}
-                className="btn-primary mt-5 w-full px-6 py-4 text-base disabled:cursor-not-allowed disabled:opacity-40"
+                size="lg"
+                loading={loading}
+                loadingText="Отправляем…"
+                disabled={!config || !emailValid || !agreed || sent}
+                className="mt-5 w-full"
               >
-                {sent ? "Проверьте почту" : !config ? "Загрузка…" : loading ? "Отправляем…" : "Продолжить"}
-              </button>
+                {sent ? "Проверьте почту" : !config ? "Загрузка…" : "Продолжить"}
+              </Button>
 
               <Divider />
 
-              <button type="button" disabled={!config?.telegramBotUsername || telegram.pending} onClick={telegram.start} className="btn-ghost w-full px-6 py-4 text-sm disabled:opacity-40">
+              <Button type="button" variant="ghost" size="lg" disabled={!config?.telegramBotUsername || telegram.pending} onClick={telegram.start} className="w-full">
                 <Send className="h-4 w-4" /> {telegram.pending ? "Ожидаем подтверждение…" : "Зарегистрироваться через Telegram"}
-              </button>
-              {config?.googleLoginEnabled && <button type="button" onClick={() => external.redirect("google")} className="btn-ghost mt-2 w-full px-6 py-4 text-sm">Продолжить через Google</button>}
-              {config?.appleLoginEnabled && <button type="button" onClick={() => external.redirect("apple")} className="btn-ghost mt-2 w-full px-6 py-4 text-sm">Продолжить через Apple</button>}
+              </Button>
+              {config?.googleLoginEnabled && <Button type="button" variant="ghost" size="lg" onClick={() => external.redirect("google")} className="mt-2 w-full">Продолжить через Google</Button>}
+              {config?.appleLoginEnabled && <Button type="button" variant="ghost" size="lg" onClick={() => external.redirect("apple")} className="mt-2 w-full">Продолжить через Apple</Button>}
 
               <p className="mt-6 text-center text-sm text-fog-500">
                 Уже есть аккаунт?{" "}
@@ -551,13 +556,16 @@ export function Register() {
               </div>
               {pw2.length > 0 && pw1 !== pw2 && <p className="mt-2 text-xs font-semibold text-red-400">Пароли не совпадают</p>}
 
-              <button
+              <Button
                 type="submit"
-                disabled={pw1.length < 8 || pw1 !== pw2 || loading}
-                className="btn-primary mt-5 w-full px-6 py-4 text-base disabled:cursor-not-allowed disabled:opacity-40"
+                size="lg"
+                loading={loading}
+                loadingText="Создаём аккаунт…"
+                disabled={pw1.length < 8 || pw1 !== pw2}
+                className="mt-5 w-full"
               >
-                {loading ? "Создаём аккаунт…" : <>Далее <ChevronRight className="h-4 w-4" /></>}
-              </button>
+                Далее <ChevronRight className="h-4 w-4" />
+              </Button>
               {error && <p className="mt-3 text-center text-sm font-semibold text-red-400">{error}</p>}
             </form>
           )}
@@ -589,21 +597,23 @@ export function Register() {
                 {twoFA && <CopyIconButton text={twoFA.secret} label="Ключ скопирован" className="h-8 w-8 rounded-lg" />}
               </div>
 
-              <input
+              <Input
                 value={code}
                 onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
                 placeholder="000000"
                 inputMode="numeric"
-                className="input-glass mt-3 text-center font-mono text-2xl font-bold tracking-[0.5em]"
+                className="mt-3 text-center font-mono text-2xl font-bold tracking-[0.5em]"
               />
 
-              <button
+              <Button
                 type="submit"
-                disabled={code.length !== 6 || loading || !twoFA}
-                className="btn-primary mt-4 w-full px-6 py-4 text-base disabled:cursor-not-allowed disabled:opacity-40"
+                size="lg"
+                loading={loading}
+                disabled={code.length !== 6 || !twoFA}
+                className="mt-4 w-full"
               >
                 Подтвердить и завершить
-              </button>
+              </Button>
               {error && <p className="mt-3 text-center text-sm font-semibold text-red-400">{error}</p>}
               <button
                 type="button"
@@ -625,11 +635,11 @@ export function Register() {
               >
                 <Check className="h-9 w-9" strokeWidth={3} />
               </motion.div>
-              <h1 className="mt-5 text-3xl font-extrabold tracking-tight">Настройка завершена!</h1>
+              <h1 className="mt-5 text-2xl font-extrabold tracking-tight sm:text-3xl">Настройка завершена!</h1>
               <p className="mt-2 text-sm text-fog-500">Ваш аккаунт полностью готов к работе</p>
-              <button onClick={goCabinet} className="btn-primary mt-7 w-full px-6 py-4 text-base">
+              <Button onClick={goCabinet} size="lg" className="mt-7 w-full">
                 Перейти в кабинет <ChevronRight className="h-4 w-4" />
-              </button>
+              </Button>
             </div>
           )}
         </motion.div>
