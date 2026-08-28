@@ -30,7 +30,6 @@ type ConfigCheck = (c: PublicConfig) => boolean;
 
 const DISABLED_BY_TOUR_ATTR: Record<string, ConfigCheck> = {
   "custom-build": (c) => !c.customBuildConfig,
-  "extra-options": (c) => !c.sellOptionsEnabled,
   "proxy": (c) => !c.showProxyEnabled,
   "singbox": (c) => !c.showSingboxEnabled,
   "gifts": (c) => !c.giftSubscriptionsEnabled,
@@ -38,7 +37,6 @@ const DISABLED_BY_TOUR_ATTR: Record<string, ConfigCheck> = {
 
 const DISABLED_BY_ROUTE: Record<string, ConfigCheck> = {
   "/cabinet/custom-build": (c) => !c.customBuildConfig,
-  "/cabinet/extra-options": (c) => !c.sellOptionsEnabled,
   "/cabinet/proxy": (c) => !c.showProxyEnabled,
   "/cabinet/singbox": (c) => !c.showSingboxEnabled,
   "/cabinet/gifts": (c) => !c.giftSubscriptionsEnabled,
@@ -49,7 +47,6 @@ const ROUTE_TO_NAV_ATTR: Record<string, string> = {
   "/cabinet/dashboard": "dashboard",
   "/cabinet/tariffs": "tariffs",
   "/cabinet/custom-build": "custom-build",
-  "/cabinet/extra-options": "extra-options",
   "/cabinet/proxy": "proxy",
   "/cabinet/singbox": "singbox",
   "/cabinet/referral": "referrals",

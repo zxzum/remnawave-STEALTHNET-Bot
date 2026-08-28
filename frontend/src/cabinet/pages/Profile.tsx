@@ -23,7 +23,6 @@ import {
   QrCode,
   Bitcoin,
   Layers3,
-  PackagePlus,
   Gift,
   Headphones,
   Users,
@@ -709,7 +708,6 @@ function ServiceLinks() {
   const { config } = useApp();
   const links = [
     config?.customBuildConfig?.enabled && { to: "/cabinet/custom-build", label: "Собери тариф", icon: Layers3 },
-    config?.sellOptionsEnabled && { to: "/cabinet/extra-options", label: "Доп. опции", icon: PackagePlus },
     config?.showProxyEnabled && { to: "/cabinet/proxy", label: "Прокси", icon: Globe },
     config?.showSingboxEnabled && { to: "/cabinet/singbox", label: "Sing-box", icon: ShieldCheck },
     config?.giftSubscriptionsEnabled && { to: "/cabinet/gifts", label: "Подарки", icon: Gift },

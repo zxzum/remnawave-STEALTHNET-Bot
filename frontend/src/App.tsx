@@ -21,7 +21,7 @@ import CabinetKeys from "@/cabinet/pages/Keys";
 import CabinetTariffs from "@/cabinet/pages/Tariffs";
 import CabinetReferrals from "@/cabinet/pages/Referrals";
 import CabinetProfile from "@/cabinet/pages/Profile";
-import { CustomBuild, ExtraOptions, Gifts, ProxyService, SingboxService, Tickets } from "@/cabinet/pages/Services";
+import { CustomBuild, Gifts, ProxyService, SingboxService, Tickets } from "@/cabinet/pages/Services";
 import { Layout as ClientLayout } from "@/cabinet/components/Layout";
 import { AppProvider as ClientAppProvider, useApp as useClientApp } from "@/cabinet/store/AppContext";
 
@@ -417,7 +417,6 @@ function AppRoutes() {
           <Route path="profile" element={<CabinetProfile />} />
           <Route path="tickets" element={<CabinetDesignPage defaultPage={<RequireClientFeature feature="tickets"><Tickets /></RequireClientFeature>} auroraPage={<RequireClientFeature feature="tickets"><AuroraTickets /></RequireClientFeature>} />} />
           <Route path="custom-build" element={<RequireClientFeature feature="customBuild"><CustomBuild /></RequireClientFeature>} />
-          <Route path="extra-options" element={<RequireClientFeature feature="extraOptions"><ExtraOptions /></RequireClientFeature>} />
           <Route path="proxy" element={<RequireClientFeature feature="proxy"><ProxyService /></RequireClientFeature>} />
           <Route path="singbox" element={<RequireClientFeature feature="singbox"><SingboxService /></RequireClientFeature>} />
           <Route path="gifts" element={<RequireClientFeature feature="gifts"><Gifts /></RequireClientFeature>} />

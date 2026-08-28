@@ -19,7 +19,6 @@ const CABINET_ROUTES = [
   { value: "/cabinet/referral", label: "Рефералы" },
   { value: "/cabinet/profile", label: "Профиль" },
   { value: "/cabinet/custom-build", label: "Кастомная сборка" },
-  { value: "/cabinet/extra-options", label: "Доп. опции" },
   { value: "/cabinet/proxy", label: "Прокси" },
   { value: "/cabinet/singbox", label: "SingBox" },
   { value: "/cabinet/tickets", label: "Поддержка" },
@@ -40,7 +39,6 @@ const TOUR_TARGETS = [
   { id: "language-currency", target: '[data-tour="language-currency"]', label: "Язык и валюта", icon: "🌐", defaultPlacement: "top", description: "Настройки языка и валюты", previewImage: "/tour-targets/language-currency.png", defaultRoute: "/cabinet/profile" },
   { id: "password-change", target: '[data-tour="password-change"]', label: "Смена пароля", icon: "🔐", defaultPlacement: "top", description: "Карточка безопасности", previewImage: "/tour-targets/password-change.png", defaultRoute: "/cabinet/profile" },
   { id: "custom-build", target: '[data-tour="custom-build"]', label: "Кастомная сборка", icon: "🛠️", defaultPlacement: "right", description: "Кастомная конфигурация VPN", previewImage: "/tour-targets/custom-build.png", defaultRoute: null },
-  { id: "extra-options", target: '[data-tour="extra-options"]', label: "Дополнительные опции", icon: "⚡", defaultPlacement: "right", description: "Прокси, доп. устройства и др.", previewImage: "/tour-targets/extra-options.png", defaultRoute: null },
   { id: "proxy", target: '[data-tour="proxy"]', label: "Прокси", icon: "🌐", defaultPlacement: "right", description: "Прокси-доступ", previewImage: "/tour-targets/proxy.png", defaultRoute: null },
   { id: "singbox", target: '[data-tour="singbox"]', label: "SingBox", icon: "🔐", defaultPlacement: "right", description: "Доступ через SingBox", previewImage: "/tour-targets/singbox.png", defaultRoute: null },
   { id: "messages", target: '[data-tour="floating-chat"]', label: "Сообщения", icon: "💬", defaultPlacement: "left", description: "Плавающий чат (AI + поддержка)", previewImage: null, defaultRoute: null },
@@ -59,7 +57,6 @@ type ConfigCheck = (c: PublicConfig) => boolean;
 
 const DISABLED_TARGET_CHECKS: Record<string, ConfigCheck> = {
   "custom-build": (c) => !c.customBuildConfig,
-  "extra-options": (c) => !c.sellOptionsEnabled,
   "proxy": (c) => !c.showProxyEnabled,
   "singbox": (c) => !c.showSingboxEnabled,
   "gifts": (c) => !c.giftSubscriptionsEnabled,
