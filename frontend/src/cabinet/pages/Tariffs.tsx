@@ -130,6 +130,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
             show({
               title: "Оплата прошла",
               description: "Подписка уже активирована. Если был пробный период, он автоматически конвертирован.",
+              onDone: () => navigate("/cabinet/dashboard?payment=success"),
             });
           }
           return;
