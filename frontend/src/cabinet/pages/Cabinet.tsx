@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import * as Dialog from "@radix-ui/react-dialog";
-import { Gift, KeyRound, ShoppingBag, Smartphone, X, ChevronRight, Monitor, Send, Package, PackagePlus, RefreshCw } from "lucide-react";
+import { Gift, KeyRound, ShoppingBag, Smartphone, ChevronRight, Monitor, Send, Package, PackagePlus, RefreshCw } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import { useClientAuth } from "@/contexts/client-auth";
 import { TrialsPickerDialog } from "@/components/cabinet/trials-picker-dialog";
@@ -10,6 +9,7 @@ import { AnimatedNumber } from "../components/ui/animated-number";
 import { Button, buttonVariants } from "../components/ui/button";
 import { EmptyState } from "../components/ui/empty-state";
 import { IconTile } from "../components/ui/icon-tile";
+import { Modal, ModalBody, ModalDescription, ModalTitle } from "../components/ui/modal";
 import { Progress } from "../components/ui/progress";
 import { Separator } from "../components/ui/separator";
 import { cn } from "../lib/cn";
@@ -201,57 +201,37 @@ function BindTelegramDialog({ open, onClose }: { open: boolean; onClose: () => v
   const { linkTelegram } = useApp();
   const [linking, setLinking] = useState(false);
   return (
-    <Dialog.Root open={open} onOpenChange={(v) => !v && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Overlay asChild>
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="fixed inset-0 z-50 bg-ink-950/70 backdrop-blur-md"
-          />
-        </Dialog.Overlay>
-        <Dialog.Content asChild>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.94, y: 24 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            transition={{ type: "spring", stiffness: 320, damping: 28 }}
-            className="glass-strong fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-4xl p-6 text-center"
-          >
-            <Dialog.Close className="absolute top-4 right-4 grid h-8 w-8 place-items-center rounded-xl text-fog-500 transition-colors hover:bg-white/8 hover:text-white">
-              <X className="h-4 w-4" />
-            </Dialog.Close>
-            <div className="icon-tile mx-auto h-14 w-14 rounded-2xl">
-              <Send className="h-6 w-6" />
-            </div>
-            <Dialog.Title className="mt-4 text-xl font-extrabold">Привязать Telegram?</Dialog.Title>
-            <Dialog.Description className="mt-2 text-sm leading-relaxed text-fog-500">
-              Свяжите аккаунт с Telegram-ботом — подписки, баланс и рефералы будут в одном месте, а вход станет проще.
-            </Dialog.Description>
-            <button
-              disabled={linking}
-              onClick={async () => {
-                setLinking(true);
-                try {
-                  await linkTelegram();
-                  onClose();
-                } finally {
-                  setLinking(false);
-                }
-              }}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-5 py-3.5 text-sm font-bold text-ink-950 shadow-[0_8px_24px_-8px_rgba(255,255,255,0.4)] transition-all hover:bg-fog-100 active:scale-95 disabled:cursor-wait disabled:opacity-60"
-            >
-              <Send className="h-4 w-4" /> {linking ? "Открываем…" : "Привязать Telegram"}
-            </button>
-            <button
-              onClick={onClose}
-              className="mt-2 w-full rounded-xl py-2.5 text-sm font-semibold text-fog-500 transition-colors hover:text-fog-100"
-            >
-              Позже
-            </button>
-          </motion.div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <Modal open={open} onOpenChange={(v) => !v && onClose()} className="max-w-sm">
+      <ModalBody className="p-6 text-center">
+        <div className="icon-tile mx-auto h-14 w-14 rounded-2xl">
+          <Send className="h-6 w-6" />
+        </div>
+        <ModalTitle className="mt-4 text-xl font-extrabold">Привязать Telegram?</ModalTitle>
+        <ModalDescription className="mt-2 text-sm leading-relaxed text-fog-500">
+          Свяжите аккаунт с Telegram-ботом — подписки, баланс и рефералы будут в одном месте, а вход станет проще.
+        </ModalDescription>
+        <Button
+          size="lg"
+          className="mt-5 w-full"
+          loading={linking}
+          loadingText="Открываем…"
+          onClick={async () => {
+            setLinking(true);
+            try {
+              await linkTelegram();
+              onClose();
+            } finally {
+              setLinking(false);
+            }
+          }}
+        >
+          <Send /> Привязать Telegram
+        </Button>
+        <Button variant="link" className="mt-2 w-full" onClick={onClose}>
+          Позже
+        </Button>
+      </ModalBody>
+    </Modal>
   );
 }
 
@@ -281,46 +261,40 @@ function EmailHintDialog() {
   };
 
   return (
-    <Dialog.Root open={open} onOpenChange={(value) => !value && close()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-ink-950/70 backdrop-blur-md" />
-        <Dialog.Content className="glass-strong fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-4xl p-6 text-center">
-          <Dialog.Title className="text-xl font-extrabold">Почта — по желанию</Dialog.Title>
-          <Dialog.Description className="mt-3 text-sm leading-relaxed text-fog-400">
-            Вы уже можете пользоваться кабинетом. Если захотите входить и с сайта, привяжите почту и пароль позже в «Профиль» → «Безопасность».
-          </Dialog.Description>
-          <button onClick={close} className="btn-primary mt-5 w-full px-5 py-3.5 text-sm">Понятно</button>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <Modal open={open} onOpenChange={(value) => !value && close()} className="max-w-sm">
+      <ModalBody className="p-6 text-center">
+        <ModalTitle className="text-xl font-extrabold">Почта — по желанию</ModalTitle>
+        <ModalDescription className="mt-3 text-sm leading-relaxed text-fog-400">
+          Вы уже можете пользоваться кабинетом. Если захотите входить и с сайта, привяжите почту и пароль позже в «Профиль» → «Безопасность».
+        </ModalDescription>
+        <Button size="lg" className="mt-5 w-full" onClick={close}>Понятно</Button>
+      </ModalBody>
+    </Modal>
   );
 }
 
 function RegistrationSuccessDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
-    <Dialog.Root open={open} onOpenChange={(value) => !value && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-ink-950/70 backdrop-blur-md" />
-        <Dialog.Content className="glass-strong fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-4xl p-6 text-center">
-          <div className="icon-tile mx-auto h-14 w-14 rounded-2xl"><Send className="h-6 w-6" /></div>
-          <Dialog.Title className="mt-4 text-xl font-extrabold">Аккаунт успешно создан</Dialog.Title>
-          <Dialog.Description className="mt-3 text-sm leading-relaxed text-fog-400">
-            Рекомендуем привязать Telegram в настройках профиля, чтобы упростить вход и управление подпиской.
-          </Dialog.Description>
-          <Link to="/cabinet/profile" onClick={onClose} className="btn-primary mt-5 flex w-full items-center justify-center gap-2 px-5 py-3.5 text-sm">
-            <Send className="h-4 w-4" /> Открыть настройки
-          </Link>
-          <button onClick={onClose} className="mt-2 w-full rounded-xl py-2.5 text-sm font-semibold text-fog-500 transition-colors hover:text-fog-100">
-            Позже
-          </button>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <Modal open={open} onOpenChange={(value) => !value && onClose()} className="max-w-sm">
+      <ModalBody className="p-6 text-center">
+        <div className="icon-tile mx-auto h-14 w-14 rounded-2xl"><Send className="h-6 w-6" /></div>
+        <ModalTitle className="mt-4 text-xl font-extrabold">Аккаунт успешно создан</ModalTitle>
+        <ModalDescription className="mt-3 text-sm leading-relaxed text-fog-400">
+          Рекомендуем привязать Telegram в настройках профиля, чтобы упростить вход и управление подпиской.
+        </ModalDescription>
+        <Link to="/cabinet/profile" onClick={onClose} className={cn(buttonVariants({ size: "lg" }), "mt-5 w-full")}>
+          <Send /> Открыть настройки
+        </Link>
+        <Button variant="link" className="mt-2 w-full" onClick={onClose}>
+          Позже
+        </Button>
+      </ModalBody>
+    </Modal>
   );
 }
 
 export default function Cabinet() {
-  const { availableTrials, config, reload, subscriptions, tariffGroups, toast } = useApp();
+  const { availableTrials, config, reload, subscriptions, tariffGroups } = useApp();
   const { state } = useClientAuth();
   const [params, setParams] = useSearchParams();
   const [selectedId, setSelectedId] = useState<string | undefined>(subscriptions[0]?.id);
@@ -344,9 +318,9 @@ export default function Cabinet() {
       open={trialOpen}
       token={state.token}
       onOpenChange={(open) => { if (!open) closeTrial(); }}
-      onActivated={async ({ message }) => {
-        await reload();
-        toast({ title: message, variant: "success" });
+      onActivated={async () => {
+        // Успех показывает глобальное окно (useSuccess в самом диалоге) — здесь только обновляем данные
+        await reload({ soft: true });
       }}
     />
   ) : null;
