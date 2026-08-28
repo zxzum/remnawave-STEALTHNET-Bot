@@ -658,7 +658,7 @@ function PaymentsHistory() {
 
       <Modal open={open} onOpenChange={setOpen} className="max-w-lg">
         {/* крестик закрытия встроен в Modal */}
-        <ModalBody className="flex flex-col p-0">
+        <ModalBody className="flex flex-col p-0 sm:p-0">
           <div className="flex items-center gap-3 border-b border-white/8 p-5 pr-16">
             <div className="icon-tile h-10 w-10 rounded-xl">
               <History className="h-5 w-5" />
