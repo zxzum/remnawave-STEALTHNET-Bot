@@ -3,6 +3,8 @@ import { motion } from "framer-motion";
 import { Percent, Users, Wallet, Link2, Globe, Send, Share2, Info, ClipboardCopy, MessageSquareText } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import { CopyIconButton } from "../components/ui/CopyButton";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { useClientAuth } from "@/contexts/client-auth";
 import { api } from "@/lib/api";
 import { formatCurrency } from "../model";
@@ -44,13 +46,15 @@ function LinkRow({
         <p className="truncate font-mono text-sm text-fog-300">{link}</p>
       </div>
       <CopyIconButton text={link} label="Ссылка скопирована" />
-      <button
+      <Button
+        variant="outline"
+        size="icon"
         onClick={share}
         aria-label="Поделиться"
-        className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-accent-400/25 bg-accent-500/12 text-accent-400 transition-all hover:bg-accent-500/25 hover:shadow-neon-blue active:scale-90"
+        className="shrink-0 rounded-xl border-accent-400/25 bg-accent-500/12 text-accent-400 hover:bg-accent-500/25 hover:shadow-neon-blue"
       >
         <Share2 className="h-4 w-4" />
-      </button>
+      </Button>
     </div>
   );
 }
@@ -63,6 +67,23 @@ export default function Referrals() {
   const [wallet, setWallet] = useState("");
   const [withdrawing, setWithdrawing] = useState(false);
   const withdrawMin = config?.withdrawalMinAmount ?? 3000;
+
+  // Заявка на вывод — форма сабмитится и по Enter в полях
+  const submitWithdrawal = async () => {
+    if (!state.token || withdrawing) return;
+    setWithdrawing(true);
+    try {
+      const result = await api.createWithdrawal(state.token, { amount: Math.floor(Number(withdrawAmount)), walletTrc20: wallet });
+      toast({ title: result.message, variant: "success" });
+      setWithdrawAmount("");
+      setWallet("");
+      await reload({ soft: true });
+    } catch (cause) {
+      toast({ title: "Не удалось создать заявку", description: cause instanceof Error ? cause.message : undefined, variant: "error" });
+    } finally {
+      setWithdrawing(false);
+    }
+  };
   const stats = [
     { icon: Percent, value: `${referral.percent}%`, label: "Процент", hint: "от пополнений (1 уровень)", tile: "bg-accent-500/15 border-accent-400/25 text-accent-400" },
     { icon: Users, value: `${referral.invited}`, label: "Приглашено", hint: "активных рефералов", tile: "bg-violet-glow/15 border-violet-glow/25 text-violet-glow" },
@@ -121,20 +142,16 @@ export default function Referrals() {
           <LinkRow icon={Send} tile="bg-accent-500/15 border-accent-400/25 text-accent-400" label="Бот" link={referral.botLink} />
         </div>
 
-        <motion.button
-          whileTap={{ scale: 0.97 }}
-          onClick={() => copy(readyText, "Готовый текст скопирован")}
-          className="btn-primary mt-4 w-full px-5 py-3.5 text-sm"
-        >
+        <Button size="md" className="mt-4 w-full" onClick={() => copy(readyText, "Готовый текст скопирован")}>
           <MessageSquareText className="h-4 w-4" />
           Скопировать готовый текст со ссылками
-        </motion.button>
+        </Button>
         <p className="mt-2 flex items-center gap-1.5 text-[11px] text-fog-600">
           <ClipboardCopy className="h-3 w-3" /> Внутри — короткий текст-приглашение и обе ссылки сразу
         </p>
       </motion.section>
 
-      {config?.withdrawalsEnabled !== false && <motion.section initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="glass order-5 rounded-4xl p-5 sm:p-6"><h2 className="font-extrabold">Вывести вознаграждение</h2><p className="mt-1 text-xs text-fog-500">Минимум {withdrawMin.toLocaleString("ru-RU")} ₽ · кошелёк USDT TRC20</p><div className="mt-4 grid gap-3"><input type="number" min={withdrawMin} value={withdrawAmount} onChange={(event) => setWithdrawAmount(event.target.value)} placeholder="Сумма, ₽" className="input-glass" /><input value={wallet} onChange={(event) => setWallet(event.target.value.trim())} placeholder="TRC20-кошелёк" className="input-glass" /><button disabled={withdrawing || Number(withdrawAmount) < withdrawMin || !/^T[A-Za-z0-9]{33}$/.test(wallet)} onClick={async () => { if (!state.token) return; setWithdrawing(true); try { const result = await api.createWithdrawal(state.token, { amount: Math.floor(Number(withdrawAmount)), walletTrc20: wallet }); toast({ title: result.message, variant: "success" }); setWithdrawAmount(""); setWallet(""); await reload(); } catch (cause) { toast({ title: "Не удалось создать заявку", description: cause instanceof Error ? cause.message : undefined, variant: "error" }); } finally { setWithdrawing(false); } }} className="btn-primary px-5 py-3 text-sm disabled:opacity-40"><Wallet className="h-4 w-4" /> Отправить заявку</button></div></motion.section>}
+      {config?.withdrawalsEnabled !== false && <motion.section initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="glass order-5 rounded-4xl p-5 sm:p-6"><h2 className="font-extrabold">Вывести вознаграждение</h2><p className="mt-1 text-xs text-fog-500">Минимум {withdrawMin.toLocaleString("ru-RU")} ₽ · кошелёк USDT TRC20</p><form className="mt-4 grid gap-3" onSubmit={(event) => { event.preventDefault(); void submitWithdrawal(); }}><Input type="number" min={withdrawMin} value={withdrawAmount} onChange={(event) => setWithdrawAmount(event.target.value)} placeholder="Сумма, ₽" /><Input value={wallet} onChange={(event) => setWallet(event.target.value.trim())} placeholder="TRC20-кошелёк" /><Button type="submit" loading={withdrawing} disabled={withdrawing || Number(withdrawAmount) < withdrawMin || !/^T[A-Za-z0-9]{33}$/.test(wallet)}><Wallet /> Отправить заявку</Button></form></motion.section>}
 
       {/* stats — на мобильных под ссылками, компактная полоса */}
       <motion.div

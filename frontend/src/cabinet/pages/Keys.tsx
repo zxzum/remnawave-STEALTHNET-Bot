@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import * as Accordion from "@radix-ui/react-accordion";
-import * as Dialog from "@radix-ui/react-dialog";
 import {
   KeyRound,
   Lock,
@@ -15,22 +14,21 @@ import {
   ShoppingBag,
   Gift,
   ExternalLink,
-  X,
 } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import { CopyButton } from "../components/ui/CopyButton";
+import { Button, buttonVariants } from "../components/ui/button";
+import { Modal, ModalBody, ModalDescription, ModalTitle } from "../components/ui/modal";
 import { cn } from "../lib/cn";
 import { useClientAuth } from "@/contexts/client-auth";
 import { api } from "@/lib/api";
 
-const appColors: Record<string, { tile: string; btn: string }> = {
+const appColors: Record<string, { tile: string }> = {
   blue: {
     tile: "bg-accent-500/15 border-accent-400/25 text-accent-400",
-    btn: "btn-primary",
   },
   violet: {
     tile: "bg-violet-glow/15 border-violet-glow/25 text-violet-glow",
-    btn: "btn-ghost border-violet-glow/30 hover:border-violet-glow/50",
   },
 };
 
@@ -86,9 +84,10 @@ function DeeplinkButtons({ apps, keyUrl }: { apps: ReturnType<typeof useApp>["cl
     <>
       <div className="grid gap-3 min-[420px]:grid-cols-2">
         {apps.filter((app) => app.canConnect).map((app, index) => (
-          <motion.button
+          <Button
           key={app.id}
-          whileTap={{ scale: 0.96 }}
+          size="md"
+          variant={index === 0 ? "primary" : "ghost"}
           onClick={() => {
             sessionStorage.setItem("stealthnet-connect-pending", keyUrl);
             openAppLink(app.deeplink(keyUrl));
@@ -98,40 +97,35 @@ function DeeplinkButtons({ apps, keyUrl }: { apps: ReturnType<typeof useApp>["cl
               variant: "info",
             });
           }}
-          className={cn(index === 0 ? "btn-primary" : "btn-ghost border-violet-glow/30 hover:border-violet-glow/50", "flex-col gap-1.5 rounded-3xl px-3 py-4 text-sm")}
+          className={cn(index === 0 ? "" : "border-violet-glow/30 hover:border-violet-glow/50", "h-auto flex-col gap-1.5 whitespace-normal rounded-3xl px-3 py-4 text-sm")}
         >
           <span className="flex items-center gap-2 text-base font-bold">
             <Zap className="h-4 w-4" />
             Подключиться в {app.name}
           </span>
           <span className="text-xs font-medium opacity-70">Ключ подставится сам — без копирования</span>
-          </motion.button>
+          </Button>
         ))}
       </div>
-      <Dialog.Root open={helpOpen} onOpenChange={setHelpOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-ink-950/70 backdrop-blur-sm" />
-          <Dialog.Content className="glass-strong fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-4xl p-6">
-            <Dialog.Close className="absolute top-4 right-4 rounded-lg p-2 text-fog-500 hover:bg-white/10 hover:text-white" aria-label="Закрыть">
-              <X className="h-5 w-5" />
-            </Dialog.Close>
-            <Dialog.Title className="pr-8 text-xl font-extrabold">Не получилось добавить подписку?</Dialog.Title>
-            <Dialog.Description className="mt-2 text-sm leading-relaxed text-fog-400">
-              Ничего страшного — добавьте подписку вручную через ссылку.
-            </Dialog.Description>
-            <ol className="mt-5 space-y-3 text-sm text-fog-300">
-              <li><b className="text-white">1.</b> Скопируйте ссылку ниже.</li>
-              <li><b className="text-white">2.</b> Откройте HAPP или INCY и нажмите «+».</li>
-              <li><b className="text-white">3.</b> Вставьте ссылку из буфера обмена.</li>
-              <li><b className="text-white">4.</b> Выберите сервер «Авто».</li>
-              <li><b className="text-white">5.</b> Нажмите кнопку подключения и пользуйтесь VPN.</li>
-            </ol>
-            <div className="glass-inset mt-5 break-all rounded-2xl p-3 font-mono text-xs text-fog-300">{keyUrl}</div>
-            <CopyButton text={keyUrl} label="Скопировать ссылку" className="mt-3" />
-            <Dialog.Close className="btn-ghost mt-3 w-full justify-center">Закрыть</Dialog.Close>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <Modal open={helpOpen} onOpenChange={setHelpOpen} className="max-w-md">
+        <ModalBody className="p-6">
+          {/* крестик закрытия встроен в Modal */}
+          <ModalTitle className="pr-8 text-xl font-extrabold">Не получилось добавить подписку?</ModalTitle>
+          <ModalDescription className="mt-2 text-sm leading-relaxed text-fog-400">
+            Ничего страшного — добавьте подписку вручную через ссылку.
+          </ModalDescription>
+          <ol className="mt-5 space-y-3 text-sm text-fog-300">
+            <li><b className="text-white">1.</b> Скопируйте ссылку ниже.</li>
+            <li><b className="text-white">2.</b> Откройте HAPP или INCY и нажмите «+».</li>
+            <li><b className="text-white">3.</b> Вставьте ссылку из буфера обмена.</li>
+            <li><b className="text-white">4.</b> Выберите сервер «Авто».</li>
+            <li><b className="text-white">5.</b> Нажмите кнопку подключения и пользуйтесь VPN.</li>
+          </ol>
+          <div className="glass-inset mt-5 break-all rounded-2xl p-3 font-mono text-xs text-fog-300">{keyUrl}</div>
+          <CopyButton text={keyUrl} label="Скопировать ссылку" className="mt-3" />
+          <Button variant="ghost" className="mt-3 w-full" onClick={() => setHelpOpen(false)}>Закрыть</Button>
+        </ModalBody>
+      </Modal>
     </>
   );
 }
@@ -177,8 +171,8 @@ export default function Keys() {
         <div className="icon-tile mx-auto h-16 w-16 rounded-2xl"><KeyRound className="h-7 w-7" /></div>
         <h2 className="mt-5 text-xl font-extrabold">Ключа пока нет</h2>
         <p className="mt-2 text-sm leading-relaxed text-fog-500">Сначала выберите и оплатите тариф — после этого здесь появится ключ для подключения VPN.</p>
-        {availableTrials.length > 0 && <Link to="/cabinet/dashboard?trial=1" className="btn-primary mt-4 px-6 py-4"><Gift className="h-5 w-5" />Активировать пробный период</Link>}
-        <Link to="/cabinet/tariffs" className="btn-primary mt-6 px-6 py-4"><ShoppingBag className="h-5 w-5" />Перейти к тарифам</Link>
+        {availableTrials.length > 0 && <Link to="/cabinet/dashboard?trial=1" className={cn(buttonVariants({ size: "md" }), "mt-4")}><Gift className="h-5 w-5" />Активировать пробный период</Link>}
+        <Link to="/cabinet/tariffs" className={cn(buttonVariants({ size: "md" }), "mt-6")}><ShoppingBag className="h-5 w-5" />Перейти к тарифам</Link>
       </section>
     </div>
   );
@@ -254,55 +248,44 @@ export default function Keys() {
           <div className="mt-4">
             <CopyButton text={keyUrl} />
           </div>
-          <button type="button" onClick={() => setReissueOpen(true)} className="btn-ghost mt-3 w-full justify-center px-5 py-3.5 text-sm font-bold">
+          <Button type="button" variant="ghost" onClick={() => setReissueOpen(true)} className="mt-3 w-full">
             Обновить ссылку
-          </button>
+          </Button>
         </motion.section>
       </AnimatePresence>
 
-      <Dialog.Root open={reissueOpen} onOpenChange={setReissueOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay asChild>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 z-50 bg-ink-950/70 backdrop-blur-md" />
-          </Dialog.Overlay>
-          <Dialog.Content asChild>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.94, y: 24 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              transition={{ type: "spring", stiffness: 320, damping: 28 }}
-              className="glass-strong fixed top-1/2 left-1/2 z-50 max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-4xl p-6"
-            >
-              <Dialog.Title className="pr-8 text-xl font-extrabold">Обновить ссылку?</Dialog.Title>
-              <Dialog.Description className="mt-3 text-sm leading-relaxed text-fog-300">
-                После обновления старая ссылка и конфигурации перестанут работать. Новую ссылку нужно сразу добавить в приложение.
-              </Dialog.Description>
-              <div className="mt-3 rounded-2xl border border-amber-glow/25 bg-amber-glow/10 px-4 py-3 text-sm leading-relaxed text-amber-100">
-                <p className="font-bold text-amber-200">Важно: выполняйте обновление только при подключённом Wi-Fi.</p>
-                <p className="mt-1">
-                  Это нужно, чтобы сразу добавить подписку в Happ/INCY. Без Wi-Fi новая подписка не добавится и не будет работать, а старая перестанет работать.
-                </p>
-              </div>
-              <p className="mt-3 text-sm leading-relaxed text-fog-300">
-                Рекомендуем выполнить обновление через сайт <span className="font-semibold text-fog-100">bot.lazeika.xyz/cabinet</span>: основная подписка будет остановлена, и доступ к Telegram пропадёт. В браузере кабинет останется доступен без VPN.
-              </p>
-              {showEmailHint && (
-                <p className="mt-3 rounded-2xl border border-accent-400/20 bg-accent-500/10 px-4 py-3 text-sm leading-relaxed text-fog-200">
-                  Чтобы войти через браузер, сначала привяжите почту в «Профиль» → «Безопасность».
-                </p>
-              )}
-              <a href={siteUrl} target="_blank" rel="noopener noreferrer" className="btn-ghost mt-4 w-full justify-center px-5 py-3.5 text-sm font-bold">
-                <ExternalLink className="h-4 w-4" /> Открыть кабинет на сайте
-              </a>
-              <div className="mt-3 flex gap-2.5">
-                <Dialog.Close className="btn-ghost flex-1 justify-center px-4 py-3" disabled={reissuing}>Отмена</Dialog.Close>
-                <button type="button" onClick={() => void confirmReissue()} disabled={reissuing} className="btn-primary flex-1 justify-center px-4 py-3 disabled:opacity-50">
-                  {reissuing ? "Обновляем…" : "Да, обновить"}
-                </button>
-              </div>
-            </motion.div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      {/* Крестик скрыт намеренно: закрытие — только «Отмена», чтобы прочитали предупреждение */}
+      <Modal open={reissueOpen} onOpenChange={setReissueOpen} className="max-w-md" hideClose>
+        <ModalBody className="p-6">
+          <ModalTitle className="text-xl font-extrabold">Обновить ссылку?</ModalTitle>
+          <ModalDescription className="mt-3 text-sm leading-relaxed text-fog-300">
+            После обновления старая ссылка и конфигурации перестанут работать. Новую ссылку нужно сразу добавить в приложение.
+          </ModalDescription>
+          <div className="mt-3 rounded-2xl border border-amber-glow/25 bg-amber-glow/10 px-4 py-3 text-sm leading-relaxed text-amber-100">
+            <p className="font-bold text-amber-200">Важно: выполняйте обновление только при подключённом Wi-Fi.</p>
+            <p className="mt-1">
+              Это нужно, чтобы сразу добавить подписку в Happ/INCY. Без Wi-Fi новая подписка не добавится и не будет работать, а старая перестанет работать.
+            </p>
+          </div>
+          <p className="mt-3 text-sm leading-relaxed text-fog-300">
+            Рекомендуем выполнить обновление через сайт <span className="font-semibold text-fog-100">bot.lazeika.xyz/cabinet</span>: основная подписка будет остановлена, и доступ к Telegram пропадёт. В браузере кабинет останется доступен без VPN.
+          </p>
+          {showEmailHint && (
+            <p className="mt-3 rounded-2xl border border-accent-400/20 bg-accent-500/10 px-4 py-3 text-sm leading-relaxed text-fog-200">
+              Чтобы войти через браузер, сначала привяжите почту в «Профиль» → «Безопасность».
+            </p>
+          )}
+          <a href={siteUrl} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: "ghost", size: "md" }), "mt-4 w-full")}>
+            <ExternalLink className="h-4 w-4" /> Открыть кабинет на сайте
+          </a>
+          <div className="mt-3 flex gap-2.5">
+            <Button variant="ghost" className="flex-1" disabled={reissuing} onClick={() => setReissueOpen(false)}>Отмена</Button>
+            <Button className="flex-1" loading={reissuing} loadingText="Обновляем…" onClick={() => void confirmReissue()}>
+              Да, обновить
+            </Button>
+          </div>
+        </ModalBody>
+      </Modal>
 
       {/* Deep links */}
       <DeeplinkButtons apps={apps} keyUrl={keyUrl} />
@@ -348,7 +331,7 @@ export default function Keys() {
             </Accordion.Header>
             <Accordion.Content className="overflow-hidden data-[state=closed]:animate-[accordion-up_0.25s_ease-out] data-[state=open]:animate-[accordion-down_0.25s_ease-out]">
               <div className="flex flex-wrap gap-3 px-5 pb-5">
-                {app.downloads.map((download) => <a key={download.url} href={download.url} target="_blank" rel="noopener noreferrer" className="btn-ghost flex-1 px-4 py-3 text-sm"><Download className="h-4 w-4" /> {download.label}</a>)}
+                {app.downloads.map((download) => <a key={download.url} href={download.url} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: "ghost", size: "md" }), "flex-1")}><Download className="h-4 w-4" /> {download.label}</a>)}
                 {app.downloads.length === 0 && <p className="text-sm text-fog-500">Ссылки на загрузку пока не настроены.</p>}
               </div>
             </Accordion.Content>
