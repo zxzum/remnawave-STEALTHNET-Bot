@@ -83,7 +83,7 @@ const DEFAULTS: Array<[string, string]> = [
   ["sell_options_traffic_max_purchases", "1"],
   [
     "sell_options_traffic_products",
-    '[{"id":"whitelist_50","name":"+50 ГБ белых списков","trafficGb":50,"price":150,"currency":"rub","trafficMode":"LOCAL_SQUAD"},{"id":"whitelist_100","name":"+100 ГБ белых списков","trafficGb":100,"price":200,"currency":"rub","trafficMode":"LOCAL_SQUAD"},{"id":"vpn_100","name":"+100 ГБ обычного трафика","trafficGb":100,"price":50,"currency":"rub","trafficMode":"REMNAWAVE"}]',
+    '[{"id":"whitelist_50","name":"+50 ГБ белых списков","trafficGb":50,"price":100,"currency":"rub","trafficMode":"LOCAL_SQUAD"},{"id":"whitelist_100","name":"+100 ГБ белых списков","trafficGb":100,"price":180,"currency":"rub","trafficMode":"LOCAL_SQUAD"},{"id":"vpn_100","name":"+100 ГБ обычного интернета","trafficGb":100,"price":50,"currency":"rub","trafficMode":"REMNAWAVE"}]',
   ],
 ];
 

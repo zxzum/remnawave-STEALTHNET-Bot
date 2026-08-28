@@ -19,19 +19,15 @@ import {
   ArrowLeft,
   RefreshCw,
   Tag,
-  Wallet,
-  Loader2,
-  Zap,
   Sparkles,
   Flame,
-  QrCode,
-  Bitcoin,
 } from "lucide-react";
 import { cn } from "../lib/cn";
 import { useApp } from "../store/AppContext";
 import { quoteTariff, resolvePaymentUrl, type TariffPlan } from "../model";
 import { preparePaymentRedirect } from "@/lib/open-payment-url";
 import { ExtraOptions } from "./Services";
+import { PaymentMethods } from "../components/PaymentMethods";
 
 function durationPrice(plan: TariffPlan, days: number, extraDevices: number) {
   return quoteTariff(plan, days, extraDevices).total;
@@ -259,12 +255,6 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
   }));
   const payCryptoBot = () => state.token && openPayment("Crypto Bot", () => api.cryptopayCreatePayment(state.token!, purchasePayload));
   const payRollyPay = () => state.token && openPayment("RollyPay", () => api.rollypayCreatePayment(state.token!, purchasePayload));
-  const plategaMethods = config?.plategaMethods ?? [];
-  const sbpMethod = plategaMethods.find((method) => /сбп|sbp|qr/i.test(method.label));
-  const cardMethod = plategaMethods.find((method) => /карт|card/i.test(method.label));
-  const cryptoMethod = plategaMethods.find((method) => /крип|crypto/i.test(method.label));
-  const namedMethodIds = new Set([sbpMethod?.id, cardMethod?.id, cryptoMethod?.id]);
-  const otherPlategaMethods = plategaMethods.filter((method) => !namedMethodIds.has(method.id));
 
   return (
     <Dialog.Root
@@ -310,7 +300,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                         {plan.emojiLine}
                       </Dialog.Description>
                     </div>
-                    <Dialog.Close className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-fog-500 transition-colors hover:bg-white/8 hover:text-white">
+                    <Dialog.Close aria-label="Закрыть" className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-fog-500 transition-colors hover:bg-white/8 hover:text-white">
                       <X className="h-5 w-5" />
                     </Dialog.Close>
                   </div>
@@ -472,6 +462,8 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                 >
                   <div className="flex items-center gap-3">
                     <button
+                      type="button"
+                      aria-label="Вернуться к настройкам"
                       onClick={() => setStep("config")}
                       className="grid h-9 w-9 place-items-center rounded-xl text-fog-400 transition-colors hover:bg-white/8 hover:text-white"
                     >
@@ -616,112 +608,22 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                     </button>
                   </div>
 
-                  {/* payment methods */}
                   <p className="mt-6 mb-2 flex items-center gap-2 text-sm font-bold">
-                    <Wallet className="h-4 w-4 text-fog-500" /> Способ оплаты
+                    <CreditCard className="h-4 w-4 text-fog-500" /> Способ оплаты
                   </p>
-                  <div className="flex flex-col gap-2.5">
-                    {user.balance > 0 && (
-                      <motion.button
-                        whileTap={{ scale: 0.98 }}
-                        disabled={paying}
-                        onClick={payBalance}
-                        className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-orange-500 to-orange-600 p-4 text-left font-bold text-white shadow-[0_0_28px_-8px_rgba(249,115,22,0.7)] transition-filter hover:brightness-110"
-                      >
-                        {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wallet className="h-5 w-5" />}
-                        <span className="flex-1">{paying ? "Оплата…" : "Оплатить с баланса"}</span>
-                        <span className="rounded-lg bg-black/25 px-2.5 py-1 text-sm">
-                          {user.balance.toLocaleString("ru-RU")} ₽
-                        </span>
-                      </motion.button>
-                    )}
-
-                    {/* Platega — основной способ, акцентный блок */}
-                    {plategaMethods.length > 0 && <div className="rounded-3xl border border-accent-400/40 bg-accent-500/8 p-4 shadow-neon-blue">
-                      <div className="mb-3 flex items-center gap-2.5">
-                        <div className="icon-tile h-10 w-10 rounded-xl">
-                          <CreditCard className="h-5 w-5" />
-                        </div>
-                        <div className="flex-1">
-                          <p className="font-bold">Platega</p>
-                          <p className="text-[11px] text-fog-500">Банковские платежи и крипта</p>
-                        </div>
-                        <span className="rounded-full bg-accent-500/20 px-2.5 py-1 text-[10px] font-extrabold tracking-wider text-accent-400 uppercase">
-                          Рекомендуем
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2.5">
-                        {sbpMethod && <motion.button
-                          whileTap={{ scale: 0.96 }}
-                          disabled={paying}
-                          onClick={() => payPlatega(sbpMethod.id)}
-                          className="btn-primary flex-col gap-0.5 rounded-2xl px-3 py-3.5 text-sm"
-                        >
-                          <span className="flex items-center gap-1.5 font-bold">
-                            {paying ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />} {paying ? "Оплата…" : "СБП"}
-                          </span>
-                          <span className="text-[10px] font-medium opacity-75">по QR-коду</span>
-                        </motion.button>}
-                        {cardMethod && <motion.button
-                          whileTap={{ scale: 0.96 }}
-                          disabled={paying}
-                          onClick={() => payPlatega(cardMethod.id)}
-                          className="btn-primary flex-col gap-0.5 rounded-2xl px-3 py-3.5 text-sm"
-                        >
-                          <span className="flex items-center gap-1.5 font-bold">
-                            {paying ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />} {paying ? "Оплата…" : "Карта"}
-                          </span>
-                          <span className="text-[10px] font-medium opacity-75">RUB · любой банк</span>
-                        </motion.button>}
-                      </div>
-                      {cryptoMethod && <button
-                        disabled={paying}
-                        onClick={() => payPlatega(cryptoMethod.id)}
-                        className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-xl py-1.5 text-xs font-semibold text-fog-400 transition-colors hover:text-accent-400"
-                      >
-                        {paying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bitcoin className="h-3.5 w-3.5" />} {paying ? "Оплата…" : "Оплатить криптой через Platega"}
-                      </button>}
-                      {otherPlategaMethods.length > 0 && <div className="mt-2.5 grid grid-cols-1 gap-2">
-                        {otherPlategaMethods.map((method) => (
-                          <button
-                            key={method.id}
-                            disabled={paying}
-                            onClick={() => payPlatega(method.id)}
-                            className="rounded-xl border border-accent-400/20 bg-accent-500/8 px-3 py-2 text-sm font-semibold transition-colors hover:bg-accent-500/15"
-                          >
-                            {paying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} {paying ? "Оплата…" : method.label}
-                          </button>
-                        ))}
-                      </div>}
-                    </div>}
-
-                    {config?.cryptopayEnabled && <button
-                      disabled={paying}
-                      onClick={payCryptoBot}
-                      className="glass group flex items-center gap-3 rounded-2xl p-4 text-left transition-all hover:border-amber-glow/30"
-                    >
-                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-amber-glow/25 bg-amber-glow/10 text-amber-glow">
-                        {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <Zap className="h-5 w-5" />}
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-bold">{paying ? "Оплата…" : "Crypto Bot"}</p>
-                        <p className="text-xs text-fog-500">USDT · TON · BTC</p>
-                      </div>
-                    </button>}
-                    {config?.rollypayEnabled && plan.currency.toUpperCase() === "RUB" && <button
-                      disabled={paying}
-                      onClick={payRollyPay}
-                      className="glass group flex items-center gap-3 rounded-2xl p-4 text-left transition-all hover:border-emerald-400/30"
-                    >
-                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-emerald-400/25 bg-emerald-400/10 text-emerald-300">
-                        {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <CreditCard className="h-5 w-5" />}
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-bold">{paying ? "Оплата…" : "RollyPay"}</p>
-                        <p className="text-xs text-fog-500">Оплата в рублях</p>
-                      </div>
-                    </button>}
-                  </div>
+                  {/* Platega — основной способ, акцентный блок */}
+                  <PaymentMethods
+                    amount={price}
+                    currency={plan.currency}
+                    balance={user.balance}
+                    plategaMethods={config?.plategaMethods ?? []}
+                    loading={paying}
+                    disabled={!state.token}
+                    onBalance={payBalance}
+                    onPlatega={payPlatega}
+                    onCryptoBot={config?.cryptopayEnabled ? payCryptoBot : undefined}
+                    onRollyPay={config?.rollypayEnabled && plan.currency.toUpperCase() === "RUB" ? payRollyPay : undefined}
+                  />
                 </motion.div>
               )}
             </AnimatePresence>
@@ -741,33 +643,36 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.08, duration: 0.35 }}
       className={cn(
-        "relative flex flex-col rounded-3xl border p-5 transition-all duration-300",
+        "relative flex flex-col rounded-3xl border p-5 transition-colors duration-200",
         plan.popular
-          ? "border-accent-400/40 bg-accent-500/8 shadow-neon-blue"
+          ? "border-accent-400/35 bg-accent-500/[0.06]"
           : "glass-inset hover:border-white/16",
       )}
     >
       {plan.popular && (
-        <span className="absolute -top-3 left-5 flex items-center gap-1 rounded-full bg-gradient-to-r from-accent-500 to-accent-600 px-3 py-1 text-[11px] font-extrabold text-white shadow-neon-blue">
+        <span className="absolute -top-3 left-5 flex items-center gap-1 rounded-full border border-accent-400/25 bg-ink-900 px-3 py-1 text-[11px] font-extrabold text-accent-300">
           <Flame className="h-3 w-3" /> Лучший выбор
         </span>
       )}
 
-      <h3 className="text-lg font-extrabold">{plan.name}</h3>
+      <h3 className="text-xl font-extrabold tracking-tight">{plan.name}</h3>
+      <p className="mt-1 text-sm font-semibold text-fog-300">
+        {plan.whitelistGB !== null ? "Для обычного интернета и белых списков" : "Для обычного интернета"}
+      </p>
       <p className="mt-1.5 whitespace-pre-wrap text-xs leading-relaxed text-fog-500">{plan.emojiLine}</p>
       <div className="mt-3 grid grid-cols-2 gap-2">
-        <span className="chip chip-fluid">
-          <CalendarDays className="h-3.5 w-3.5" /> от {Math.min(...plan.durationOptions.map((option) => option.days))} дн.
+        <span className="chip chip-fluid normal-case tracking-normal">
+          <CalendarDays className="h-3.5 w-3.5" /> от {Math.min(...plan.durationOptions.map((option) => option.days))} дней
         </span>
-        <span className="chip chip-fluid">
-          <Smartphone className="h-3.5 w-3.5" /> {plan.baseDevices} устр.
+        <span className="chip chip-fluid normal-case tracking-normal">
+          <Smartphone className="h-3.5 w-3.5" /> {plan.baseDevices} {plan.baseDevices === 1 ? "устройство" : "устройства"}
         </span>
-        <span className="chip chip-fluid col-span-2">
-          <Wifi className="h-3.5 w-3.5" /> {plan.traffic}
+        <span className="chip chip-fluid col-span-2 normal-case tracking-normal">
+          <Wifi className="h-3.5 w-3.5" /> Обычный интернет · {plan.traffic}
         </span>
         {plan.whitelistGB !== null && (
-          <span className="chip chip-amber chip-fluid col-span-2">
-            <Signal className="h-3.5 w-3.5" /> Белые списки: {plan.whitelistGB.toFixed(0)} ГБ
+          <span className="chip chip-amber chip-fluid col-span-2 normal-case tracking-normal">
+            <Signal className="h-3.5 w-3.5" /> Белые списки · {plan.whitelistGB.toFixed(0)} ГБ / мес.
           </span>
         )}
       </div>
@@ -775,7 +680,7 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
       <div className="my-4 h-px bg-white/8" />
 
       <div className="mt-auto">
-        <p className="text-[11px] font-semibold text-fog-600">от {formatMoney(perDay, plan.currency)}/день</p>
+        <p className="text-[11px] font-semibold text-fog-600">от {formatMoney(perDay, plan.currency)} в день</p>
         <p className="text-2xl font-extrabold tracking-tight whitespace-nowrap">
           <span className="text-sm font-semibold text-fog-500">от </span>
           {formatMoney(startingOption.price, plan.currency)}
@@ -790,7 +695,7 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
               : "bg-white/90 text-ink-950 shadow-[0_8px_24px_-8px_rgba(255,255,255,0.4)] hover:bg-white",
           )}
         >
-          <CreditCard className="h-4 w-4" /> Оплатить
+          <CreditCard className="h-4 w-4" /> Выбрать тариф
         </motion.button>
       </div>
     </motion.div>

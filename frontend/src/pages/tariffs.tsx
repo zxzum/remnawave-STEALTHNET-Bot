@@ -57,6 +57,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { splitTariffsByArchive } from "@/lib/tariff-label";
 
 const BYTES_PER_GB = 1024 * 1024 * 1024;
 
@@ -274,68 +275,72 @@ function SortableTariffRow({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-foreground/[0.03] dark:bg-white/[0.02] backdrop-blur-md px-4 py-3 hover:border-white/20 hover:-translate-y-px transition-[border-color,transform]",
+        "grid gap-3 rounded-xl border border-white/10 bg-foreground/[0.03] px-4 py-3 backdrop-blur-md transition-[border-color,transform] hover:-translate-y-px hover:border-white/20 sm:grid-cols-[minmax(0,1fr)_auto]",
         isDragging && "opacity-90 shadow-lg z-10",
         t.archivedAt && "opacity-60"
       )}
     >
-      <div className="flex items-center gap-3 flex-wrap min-w-0 flex-1">
+      <div className="flex min-w-0 items-start gap-3">
         <button
           type="button"
-          className="h-8 w-8 shrink-0 cursor-grab active:cursor-grabbing rounded-lg bg-foreground/[0.04] dark:bg-white/[0.04] border border-white/10 text-muted-foreground hover:bg-foreground/[0.06] dark:hover:bg-white/[0.06] flex items-center justify-center transition-colors"
+          aria-label="Изменить порядок тарифа"
+          className="flex h-8 w-8 shrink-0 cursor-grab items-center justify-center rounded-lg border border-white/10 bg-foreground/[0.04] text-muted-foreground transition-colors hover:bg-foreground/[0.06] active:cursor-grabbing"
           {...attributes}
           {...listeners}
           title="Перетащите для изменения порядка"
         >
           <GripVertical className="h-3.5 w-3.5" />
         </button>
-        <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary/15 to-primary/5 border border-white/10 flex items-center justify-center shrink-0">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-primary/10">
           <CreditCard className="h-4 w-4 text-primary" />
         </div>
-        <span className="font-semibold truncate">{t.name}</span>
-        {t.archivedAt && <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500">Архив</span>}
-        {t.description?.trim() ? (
-          <span className="text-muted-foreground text-xs max-w-[200px] truncate" title={t.description}>
-            {t.description}
-          </span>
-        ) : null}
-        <span className="inline-flex items-center rounded-full bg-foreground/[0.05] dark:bg-white/[0.05] border border-white/10 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-          {t.durationDays} дн.
-        </span>
-        <span className="text-sm font-bold text-emerald-500 dark:text-emerald-400">
-          {formatPrice(t.price ?? 0, t.currency ?? "usd")}
-        </span>
-        <span className="inline-flex items-center rounded-full bg-cyan-500/10 text-cyan-500 dark:text-cyan-400 border border-cyan-500/20 px-2 py-0.5 text-[10px] font-medium">
-          сквадов: {t.internalSquadUuids.length}
-        </span>
-        <span className="inline-flex items-center rounded-full bg-blue-500/10 text-blue-500 dark:text-blue-400 border border-blue-500/20 px-2 py-0.5 text-[10px] font-medium">
-          Remnawave: {formatTraffic(t.trafficLimitBytes)}
-        </span>
-        {t.trafficLimitMode === "LOCAL_SQUAD" && <span className="inline-flex items-center rounded-full bg-cyan-500/10 text-cyan-500 border border-cyan-500/20 px-2 py-0.5 text-[10px] font-medium">Локально: {formatTraffic(t.localTrafficLimitBytes)}</span>}
-        {t.trafficResetMode && t.trafficResetMode !== "no_reset" && (
-          <span className="inline-flex items-center rounded-full bg-amber-500/10 text-amber-500 dark:text-amber-400 border border-amber-500/20 px-2 py-0.5 text-[10px] font-medium">
-            {t.trafficResetMode === "carry_over" ? "перенос остатка" : t.trafficResetMode === "on_purchase" ? "сброс при покупке" : t.trafficResetMode === "monthly" ? "сброс ежемесячно" : t.trafficResetMode === "monthly_rolling" ? "скользящий месяц" : ""}
-          </span>
-        )}
-        {t.deviceLimit != null && (
-          <span className="inline-flex items-center rounded-full bg-violet-500/10 text-violet-500 dark:text-violet-400 border border-violet-500/20 px-2 py-0.5 text-[10px] font-medium">
-            устройств: {t.deviceLimit}
-          </span>
-        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="font-semibold break-words">{t.name}</span>
+            {t.archivedAt && <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500">Архив</span>}
+            {t.description?.trim() ? <span className="break-words text-xs text-muted-foreground">{t.description}</span> : null}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <span className="inline-flex shrink-0 items-center rounded-full border border-white/10 bg-foreground/[0.05] px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+              {t.durationDays} дн.
+            </span>
+            <span className="shrink-0 text-sm font-bold text-emerald-500 dark:text-emerald-400">
+              {formatPrice(t.price ?? 0, t.currency ?? "usd")}
+            </span>
+            <span className="inline-flex shrink-0 items-center rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-500 dark:text-cyan-400">
+              сквадов: {t.internalSquadUuids.length}
+            </span>
+            <span className="inline-flex shrink-0 items-center rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-500 dark:text-blue-400">
+              Remnawave: {formatTraffic(t.trafficLimitBytes)}
+            </span>
+            {t.trafficLimitMode === "LOCAL_SQUAD" && <span className="inline-flex shrink-0 items-center rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-500">Локально: {formatTraffic(t.localTrafficLimitBytes)}</span>}
+            {t.trafficResetMode && t.trafficResetMode !== "no_reset" && (
+              <span className="inline-flex shrink-0 items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500 dark:text-amber-400">
+                {t.trafficResetMode === "carry_over" ? "перенос остатка" : t.trafficResetMode === "on_purchase" ? "сброс при покупке" : t.trafficResetMode === "monthly" ? "сброс ежемесячно" : t.trafficResetMode === "monthly_rolling" ? "скользящий месяц" : ""}
+              </span>
+            )}
+            {t.deviceLimit != null && (
+              <span className="inline-flex shrink-0 items-center rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-500 dark:text-violet-400">
+                устройств: {t.deviceLimit}
+              </span>
+            )}
+          </div>
+        </div>
       </div>
-      <div className="flex items-center gap-1 shrink-0">
-        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={onArchive} title={t.archivedAt ? "Вернуть из архива" : "Архивировать"}>
+      <div className="flex shrink-0 items-center justify-end gap-1 sm:pt-0">
+        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg" onClick={onArchive} title={t.archivedAt ? "Вернуть из архива" : "Архивировать"} aria-label={t.archivedAt ? "Вернуть из архива" : "Архивировать"}>
           {t.archivedAt ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
         </Button>
-        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={onEdit} title="Редактировать">
+        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg" onClick={onEdit} title="Редактировать" aria-label="Редактировать">
           <Pencil className="h-3.5 w-3.5" />
         </Button>
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 rounded-lg text-red-500 dark:text-red-400 hover:bg-red-500/10"
+          className="h-9 w-9 rounded-lg text-red-500 hover:bg-red-500/10 dark:text-red-400"
           onClick={onDelete}
           title="Удалить"
+          aria-label="Удалить"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
@@ -750,6 +755,7 @@ export function TariffsPage() {
 
   const [categoryModal, setCategoryModal] = useState<"add" | { edit: TariffCategoryWithTariffs } | null>(null);
   const [showCsvDialog, setShowCsvDialog] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [tariffModal, setTariffModal] = useState<
     | { kind: "add"; categoryId: string }
     | { kind: "edit"; category: TariffCategoryWithTariffs; tariff: TariffRecord }
@@ -820,13 +826,28 @@ export function TariffsPage() {
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
 
-  const handleCategoryDragEnd = async (event: DragEndEvent) => {
+  const activeCategories = categories.flatMap((category) => {
+    const tariffs = splitTariffsByArchive(category.tariffs).active;
+    return tariffs.length > 0 || category.tariffs.length === 0 ? [{ ...category, tariffs }] : [];
+  });
+  const archivedCategories = categories
+    .map((category) => ({ ...category, tariffs: splitTariffsByArchive(category.tariffs).archived }))
+    .filter((category) => category.tariffs.length > 0);
+  const archivedCount = archivedCategories.reduce((total, category) => total + category.tariffs.length, 0);
+
+  const handleCategoryDragEnd = async (event: DragEndEvent, visibleCategories = activeCategories) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const oldIndex = categories.findIndex((c) => c.id === active.id);
-    const newIndex = categories.findIndex((c) => c.id === over.id);
+    const oldIndex = visibleCategories.findIndex((c) => c.id === active.id);
+    const newIndex = visibleCategories.findIndex((c) => c.id === over.id);
     if (oldIndex === -1 || newIndex === -1) return;
-    const reordered = arrayMove(categories, oldIndex, newIndex);
+    const reorderedVisible = arrayMove(visibleCategories, oldIndex, newIndex);
+    const visibleIds = new Set(visibleCategories.map((category) => category.id));
+    const categoriesById = new Map(categories.map((category) => [category.id, category]));
+    let visibleIndex = 0;
+    const reordered = categories.map((category) => visibleIds.has(category.id)
+      ? categoriesById.get(reorderedVisible[visibleIndex++].id) ?? category
+      : category);
     setCategories(reordered);
     if (!token) return;
     try {
@@ -854,7 +875,9 @@ export function TariffsPage() {
     const reordered = arrayMove(tariffs, oldIndex, newIndex);
     setCategories((prev) =>
       prev.map((c) =>
-        c.id === category.id ? { ...c, tariffs: reordered } : c
+        c.id === category.id
+          ? { ...c, tariffs: [...reordered, ...splitTariffsByArchive(c.tariffs).archived] }
+          : c
       )
     );
     if (!token) return;
@@ -951,31 +974,31 @@ export function TariffsPage() {
         </Card>
       )}
 
-      {categories.length === 0 && !loading ? (
+      {activeCategories.length === 0 && !loading ? (
         <Card className="bg-background/60 backdrop-blur-3xl border-white/10 rounded-[2rem] py-12 shadow-xl flex flex-col items-center text-center">
           <div className="h-16 w-16 rounded-full bg-white/5 flex items-center justify-center mb-3 border border-white/10">
             <Layers className="h-8 w-8 text-muted-foreground" />
           </div>
           <p className="text-muted-foreground mb-4 max-w-md px-6">
-            Нет категорий. Создайте категорию тарифов, затем добавьте в неё тарифы (1–360 дней, сквады, лимиты).
+            {archivedCategories.length > 0 ? "Все тарифы сейчас в архиве. Верните нужный тариф в продажу ниже." : "Нет активных тарифов. Создайте категорию и добавьте в неё тарифы (срок, сквады, лимиты)."}
           </p>
           <Button onClick={() => setCategoryModal("add")} className="gap-1.5 rounded-xl">
             <Plus className="h-4 w-4" />
             Создать категорию
           </Button>
         </Card>
-      ) : (
+      ) : activeCategories.length > 0 ? (
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
           onDragEnd={handleCategoryDragEnd}
         >
           <SortableContext
-            items={categories.map((c) => c.id)}
+            items={activeCategories.map((c) => c.id)}
             strategy={verticalListSortingStrategy}
           >
             <div className="space-y-4">
-              {categories.map((cat, idx) => (
+              {activeCategories.map((cat, idx) => (
                 <motion.div
                   key={cat.id}
                   initial={{ opacity: 0, y: 8 }}
@@ -999,6 +1022,59 @@ export function TariffsPage() {
             </div>
           </SortableContext>
         </DndContext>
+      ) : null}
+
+      {archivedCategories.length > 0 && (
+        <section className="overflow-hidden rounded-[2rem] border border-amber-500/20 bg-amber-500/[0.03]">
+          <button
+            type="button"
+            aria-expanded={archiveOpen}
+            onClick={() => setArchiveOpen((open) => !open)}
+            className="flex w-full items-center gap-3 px-5 py-4 text-left transition-colors hover:bg-amber-500/[0.04]"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-500"><Archive className="h-5 w-5" /></span>
+            <span className="min-w-0 flex-1"><span className="block font-bold">Архив тарифов</span><span className="mt-0.5 block text-xs text-muted-foreground">{archivedCount} {archivedCount === 1 ? "тариф" : "тарифов"} не показывается клиентам</span></span>
+            <ChevronDown className={cn("h-5 w-5 shrink-0 text-muted-foreground transition-transform", archiveOpen && "rotate-180")} />
+          </button>
+          {archiveOpen && (
+            <div className="space-y-3 border-t border-amber-500/15 p-4">
+              {archivedCategories.map((cat) => {
+                const originalCategory = categories.find((item) => item.id === cat.id) ?? cat;
+                return <div key={cat.id} className="rounded-2xl border border-white/10 bg-background/35 p-3">
+                  <div className="flex flex-wrap items-center gap-2 px-1 pb-3">
+                    <FolderOpen className="h-4 w-4 text-amber-500" />
+                    <span className="font-semibold">{cat.name}</span>
+                    <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-muted-foreground">{cat.tariffs.length}</span>
+                    <Button variant="outline" size="sm" className="ml-auto h-8 gap-1.5 rounded-lg" onClick={() => setTariffModal({ kind: "add", categoryId: cat.id })}>
+                      <Plus className="h-3.5 w-3.5" /> Тариф
+                    </Button>
+                  </div>
+                  <div className="space-y-2">
+                    {cat.tariffs.map((tariff) => (
+                      <div key={tariff.id} className="grid gap-3 rounded-xl border border-white/10 bg-foreground/[0.025] p-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                        <div className="min-w-0">
+                          <p className="break-words font-semibold">{tariff.name}</p>
+                          {tariff.description?.trim() && <p className="mt-1 break-words text-xs text-muted-foreground">{tariff.description}</p>}
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+                            <span className="rounded-full border border-white/10 px-2 py-0.5">{tariff.durationDays} дн.</span>
+                            <span className="font-semibold text-emerald-500 dark:text-emerald-400">{formatPrice(tariff.price ?? 0, tariff.currency ?? "usd")}</span>
+                            <span className="rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5">Remnawave: {formatTraffic(tariff.trafficLimitBytes)}</span>
+                            {tariff.trafficLimitMode === "LOCAL_SQUAD" && <span className="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5">Белые списки: {formatTraffic(tariff.localTrafficLimitBytes)}</span>}
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg" onClick={() => handleArchiveTariff(tariff)} title="Вернуть в продажу" aria-label="Вернуть в продажу"><ArchiveRestore className="h-3.5 w-3.5" /></Button>
+                          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg" onClick={() => setTariffModal({ kind: "edit", category: originalCategory, tariff })} title="Редактировать" aria-label="Редактировать"><Pencil className="h-3.5 w-3.5" /></Button>
+                          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg text-red-500 hover:bg-red-500/10 dark:text-red-400" onClick={() => handleDeleteTariff(tariff.id)} title="Удалить" aria-label="Удалить"><Trash2 className="h-3.5 w-3.5" /></Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>;
+              })}
+            </div>
+          )}
+        </section>
       )}
 
       {/* Модалка категории */}

@@ -18,14 +18,14 @@ const navItems = [
 export function Background() {
   return (
     <div className="pointer-events-none fixed inset-0 overflow-hidden" aria-hidden>
-      <div className="absolute inset-0 bg-[radial-gradient(120%_90%_at_50%_0%,#171031_0%,#070512_55%)]" />
-      <div className="animate-float-slow absolute -top-40 left-1/4 h-[34rem] w-[34rem] rounded-full bg-accent-600/16 blur-[130px]" />
+      <div className="absolute inset-0 bg-[radial-gradient(120%_90%_at_50%_0%,#151827_0%,#0b0d16_60%)]" />
+      <div className="animate-float-slow absolute -top-40 left-1/4 h-[34rem] w-[34rem] rounded-full bg-accent-600/8 blur-[130px]" />
       <div
-        className="animate-float-slow absolute top-1/3 -right-40 h-[30rem] w-[30rem] rounded-full bg-violet-glow/10 blur-[140px]"
+        className="animate-float-slow absolute top-1/3 -right-40 h-[30rem] w-[30rem] rounded-full bg-violet-glow/6 blur-[140px]"
         style={{ animationDelay: "-6s" }}
       />
       <div
-        className="animate-float-slow absolute -bottom-48 -left-32 h-[30rem] w-[30rem] rounded-full bg-mint-500/8 blur-[150px]"
+        className="animate-float-slow absolute -bottom-48 -left-32 h-[30rem] w-[30rem] rounded-full bg-mint-500/5 blur-[150px]"
         style={{ animationDelay: "-3s" }}
       />
       {/* subtle grid */}
@@ -45,7 +45,7 @@ function Avatar({ size = "md" }: { size?: "md" | "lg" }) {
     <div
       className={cn(
         "grid shrink-0 place-items-center rounded-full font-extrabold text-ink-950",
-        "bg-gradient-to-br from-mint-400 to-emerald-500 shadow-neon-mint",
+        "bg-mint-400/90",
         size === "md" ? "h-11 w-11 text-sm" : "h-14 w-14 text-lg",
       )}
     >
@@ -83,7 +83,7 @@ function Sidebar() {
                 cn(
                   "group relative flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200",
                   isActive
-                    ? "bg-accent-500/15 text-accent-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_20px_-6px_rgba(77,124,254,0.5)]"
+                    ? "bg-accent-500/10 text-accent-300"
                     : "text-fog-500 hover:bg-white/5 hover:text-fog-100",
                 )
               }
@@ -93,7 +93,7 @@ function Sidebar() {
                   {isActive && (
                     <motion.span
                       layoutId="nav-pill"
-                      className="absolute left-0 h-6 w-1 rounded-full bg-accent-400 shadow-[0_0_12px_2px_rgba(109,155,255,0.7)]"
+                      className="absolute left-0 h-6 w-1 rounded-full bg-accent-400"
                     />
                   )}
                   <Icon className="h-[18px] w-[18px]" strokeWidth={2.2} />
@@ -127,7 +127,7 @@ function Sidebar() {
             cn(
               "group relative flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm font-semibold transition-all duration-200",
               isActive
-                ? "border-accent-400/30 bg-accent-500/15 text-accent-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_20px_-6px_rgba(77,124,254,0.5)]"
+                ? "border-accent-400/25 bg-accent-500/10 text-accent-300"
                 : "border-white/8 bg-white/4 text-fog-300 hover:border-white/16 hover:bg-white/8 hover:text-fog-100",
             )
           }
@@ -137,7 +137,7 @@ function Sidebar() {
               {isActive && (
                 <motion.span
                   layoutId="nav-pill"
-                  className="absolute left-0 h-6 w-1 rounded-full bg-accent-400 shadow-[0_0_12px_2px_rgba(109,155,255,0.7)]"
+                  className="absolute left-0 h-6 w-1 rounded-full bg-accent-400"
                 />
               )}
               <UserRound className="h-[18px] w-[18px]" strokeWidth={2.2} />
@@ -166,10 +166,10 @@ function BottomNav() {
   const activeIndex = Math.max(0, items.findIndex(({ to }) => location.pathname === to));
   return (
     <nav className="fixed inset-x-3 bottom-3 z-40 min-w-0 max-w-full max-[420px]:inset-x-2 lg:hidden" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-      <div className="bottom-nav-glass glass-strong mx-auto w-full min-w-0 max-w-md rounded-4xl border border-violet-glow/50 bg-ink-950/80 p-3 shadow-[0_18px_50px_-14px_rgba(0,0,0,0.92),0_0_28px_-10px_rgba(139,92,246,0.65)] ring-1 ring-white/10">
+      <div className="bottom-nav-glass glass-strong mx-auto w-full min-w-0 max-w-md rounded-4xl border border-white/10 bg-ink-950/80 p-3 shadow-[0_18px_50px_-14px_rgba(0,0,0,0.92)] ring-1 ring-white/5">
         <div className="relative grid grid-cols-4">
           <motion.span
-            className="pointer-events-none absolute inset-y-0 left-0 w-1/4 rounded-3xl border border-accent-400/60 bg-gradient-to-br from-accent-500/30 via-violet-glow/20 to-violet-glow/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_26px_-4px_rgba(167,139,250,0.95)]"
+            className="pointer-events-none absolute inset-y-0 left-0 w-1/4 rounded-3xl border border-accent-400/40 bg-accent-500/10"
             animate={{ x: `${activeIndex * 100}%` }}
             transition={{ type: "spring", stiffness: 420, damping: 34 }}
           />
@@ -181,7 +181,7 @@ function BottomNav() {
             className={({ isActive }) =>
               cn(
                 "relative flex flex-1 flex-col items-center gap-1 rounded-3xl py-2.5 text-xs font-semibold transition-colors",
-                isActive ? "text-accent-400 drop-shadow-[0_0_10px_rgba(196,181,253,0.75)]" : "text-fog-100",
+                isActive ? "text-accent-300" : "text-fog-100",
               )
             }
           >

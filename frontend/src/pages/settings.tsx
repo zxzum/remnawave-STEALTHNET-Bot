@@ -4653,7 +4653,7 @@ export function SettingsPage() {
                             <td className="p-2">
                               <select className="h-9 rounded-md border px-2 w-full bg-background" value={p.trafficMode ?? "ANY"} onChange={(e) => setSettings((s) => { if (!s?.sellOptionsTrafficProducts) return s; const arr = [...s.sellOptionsTrafficProducts]; arr[i] = { ...arr[i], trafficMode: e.target.value as "LOCAL_SQUAD" | "REMNAWAVE" | "ANY" }; return { ...s, sellOptionsTrafficProducts: arr }; })}>
                                 <option value="LOCAL_SQUAD">Белые списки</option>
-                                <option value="REMNAWAVE">Обычный VPN</option>
+                                <option value="REMNAWAVE">Обычный интернет</option>
                                 <option value="ANY">Любой</option>
                               </select>
                             </td>
@@ -4664,7 +4664,7 @@ export function SettingsPage() {
                     </table>
                   </div>
                   <div className="mt-3">
-                    <Button type="button" variant="outline" size="sm" onClick={() => setSettings((s) => (s ? { ...s, sellOptionsTrafficProducts: [...(s.sellOptionsTrafficProducts ?? []), { id: `traffic_${Date.now()}`, name: "", trafficGb: 5, price: 0, currency: "rub", trafficMode: "LOCAL_SQUAD" }] } : s))}>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setSettings((s) => (s ? { ...s, sellOptionsTrafficProducts: [...(s.sellOptionsTrafficProducts ?? []), { id: `traffic_${Date.now()}`, name: "+50 ГБ белых списков", trafficGb: 50, price: 100, currency: "rub", trafficMode: "LOCAL_SQUAD" }] } : s))}>
                       <Plus className="h-4 w-4 mr-1" /> {t("admin.settings.options_add")}
                     </Button>
                   </div>

@@ -8,13 +8,16 @@ import {
   mapSubscription,
   mapTariffGroups,
   canBuyTrafficOption,
+  groupPlategaMethods,
+  trafficOptionLabel,
+  trafficOptionUnitPrice,
   quoteTariff,
   resolveOptionalNav,
   resolvePaymentUrl,
   isExpiredTrial,
   shouldOfferTelegramLink,
 } from "./model.ts";
-import { formatTariffOptionLabel } from "../lib/tariff-label.ts";
+import { formatTariffOptionLabel, splitTariffsByArchive } from "../lib/tariff-label.ts";
 
 test("prefers Crypto Bot Mini App URL only inside Telegram", () => {
   const urls = {
@@ -127,6 +130,36 @@ test("shows traffic packages only for limits they can extend", () => {
   assert.equal(canBuyTrafficOption({ trafficMode: "LOCAL_SQUAD" }, localUnlimited), true);
   assert.equal(canBuyTrafficOption({ trafficMode: "LOCAL_SQUAD" }, remnawaveOnly), false);
   assert.equal(canBuyTrafficOption({ trafficMode: "ANY" }, null), true);
+});
+
+test("keeps payment choices compact while preserving extra provider methods", () => {
+  const methods = [
+    { id: 1, label: "СБП" },
+    { id: 2, label: "Карты РФ" },
+    { id: 3, label: "Криптовалюта" },
+    { id: 4, label: "Другой способ" },
+  ];
+  const grouped = groupPlategaMethods(methods);
+  assert.equal(grouped.sbp?.id, 1);
+  assert.equal(grouped.card?.id, 2);
+  assert.equal(grouped.crypto?.id, 3);
+  assert.deepEqual(grouped.other, [methods[3]]);
+});
+
+test("explains traffic package scope and unit price", () => {
+  assert.equal(trafficOptionLabel("LOCAL_SQUAD"), "Белые списки");
+  assert.equal(trafficOptionLabel("REMNAWAVE"), "Обычный интернет");
+  assert.equal(trafficOptionLabel("ANY"), "Для любой подписки");
+  assert.equal(trafficOptionUnitPrice(100, 50), 0.5);
+});
+
+test("splits archived tariffs into a separate admin section", () => {
+  const active = { id: "active", name: "Активный", archivedAt: null };
+  const archived = { id: "archived", name: "Старый", archivedAt: "2026-08-01T00:00:00.000Z" };
+  assert.deepEqual(splitTariffsByArchive([active, archived]), {
+    active: [active],
+    archived: [archived],
+  });
 });
 
 test("marks archived tariffs in selection labels", () => {
