@@ -71,18 +71,6 @@ test("isolates cabinet styles from admin while retaining portal styles", async (
   assert.match(css, /cabinet-dialog-close 180ms/);
 });
 
-test("tariff and option payment dialogs share the same restrained motion shell", async () => {
-  const tariffs = await readFile(new URL("./pages/Tariffs.tsx", import.meta.url), "utf8");
-  const services = await readFile(new URL("./pages/Services.tsx", import.meta.url), "utf8");
-  for (const source of [tariffs, services]) {
-    assert.match(source, /initial=\{\{ opacity: 0, y: 60, scale: 0\.96 \}\}/);
-    assert.match(source, /transition=\{\{ type: "spring", stiffness: 300, damping: 30 \}\}/);
-    assert.match(source, /max-h-\[92dvh\]/);
-  }
-  assert.match(tariffs, /<PaymentMethods/);
-  assert.match(services, /<PaymentMethods/);
-});
-
 test("contains no prototype mock imports", async () => {
   const files = ["Auth", "Cabinet", "Keys", "Tariffs", "Referrals", "Profile"];
   for (const file of files) {
@@ -233,53 +221,6 @@ test("optional client services use new cabinet screens and production APIs", asy
     "getPublicSingboxTariffs", "giftCreateCode", "giftRedeemCode", "getTickets",
     "createTicket", "replyTicket",
   ]) assert.match(services, new RegExp(`api\\.${call}`));
-});
-
-test("extra options keep payment methods behind one compact checkout action", async () => {
-  const services = await readFile(new URL("./pages/Services.tsx", import.meta.url), "utf8");
-  const tariffs = await readFile(new URL("./pages/Tariffs.tsx", import.meta.url), "utf8");
-  const paymentMethods = await readFile(new URL("./components/PaymentMethods.tsx", import.meta.url), "utf8");
-  assert.match(services, /function OptionPaymentDialog/);
-  assert.match(services, /Перейти к оплате/);
-  assert.doesNotMatch(services, /\(config\?\.plategaMethods \?\? \[\]\)\.map/);
-  assert.match(services, /<PaymentMethods/);
-  assert.match(tariffs, /<PaymentMethods/);
-  assert.match(paymentMethods, /groupPlategaMethods/);
-  assert.match(paymentMethods, /СБП/);
-  assert.match(tariffs, /config\?\.sellOptions\?\.some/);
-});
-
-test("keeps traffic purchase inline and preserves the approved payment hierarchy", async () => {
-  const app = await readFile(new URL("../App.tsx", import.meta.url), "utf8");
-  const cabinet = await readFile(new URL("./pages/Cabinet.tsx", import.meta.url), "utf8");
-  const tariffs = await readFile(new URL("./pages/Tariffs.tsx", import.meta.url), "utf8");
-  const paymentMethods = await readFile(new URL("./components/PaymentMethods.tsx", import.meta.url), "utf8");
-  assert.doesNotMatch(app, /<Route\s+path="traffic"/);
-  assert.match(tariffs, /<ExtraOptions trafficOnly \/>/);
-  assert.match(tariffs, /window\.location\.hash === "#traffic"/);
-  assert.match(tariffs, /getElementById\("traffic"\)\?\.scrollIntoView/);
-  assert.match(cabinet, /to="\/cabinet\/tariffs#traffic"/);
-  assert.match(cabinet, /className="btn-primary h-14 w-full px-6 text-base"/);
-  assert.match(cabinet, /className="btn-ghost h-14 w-full px-6 text-base"/);
-  assert.match(paymentMethods, /border-orange-300\/20 bg-orange-500\/90/);
-  assert.match(paymentMethods, /btn-primary min-h-12/);
-  assert.match(paymentMethods, /btn-ghost mt-2\.5 min-h-11 w-full/);
-});
-
-test("cabinet traffic top-up explains the selected subscription before purchase", async () => {
-  const services = await readFile(new URL("./pages/Services.tsx", import.meta.url), "utf8");
-  assert.match(services, /Для подписки/);
-  assert.match(services, /Пакет добавится к текущему лимиту/);
-  assert.match(services, /activeSubscriptions/);
-  assert.match(services, /trafficOptionLabel/);
-});
-
-test("admin separates archived tariffs from the active catalog", async () => {
-  const tariffs = await readFile(new URL("../pages/tariffs.tsx", import.meta.url), "utf8");
-  assert.match(tariffs, /splitTariffsByArchive/);
-  assert.match(tariffs, /Архив тарифов/);
-  assert.match(tariffs, /archiveOpen/);
-  assert.match(tariffs, /activeCategories/);
 });
 
 test("keys tolerate empty application configuration", async () => {

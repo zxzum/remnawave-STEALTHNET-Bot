@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Gift, KeyRound, ShoppingBag, Smartphone, X, ChevronRight, Monitor, Send, Package, PackagePlus, RefreshCw } from "lucide-react";
+import { Gift, KeyRound, ShoppingBag, Smartphone, X, ChevronRight, Monitor, Send, Package, RefreshCw } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import { useClientAuth } from "@/contexts/client-auth";
 import { TrialsPickerDialog } from "@/components/cabinet/trials-picker-dialog";
@@ -325,7 +325,7 @@ function RegistrationSuccessDialog({ open, onClose }: { open: boolean; onClose: 
 }
 
 export default function Cabinet() {
-  const { availableTrials, config, reload, subscriptions, tariffGroups, toast } = useApp();
+  const { availableTrials, reload, subscriptions, tariffGroups, toast } = useApp();
   const { state } = useClientAuth();
   const [params, setParams] = useSearchParams();
   const [selectedId, setSelectedId] = useState<string | undefined>(subscriptions[0]?.id);
@@ -398,17 +398,16 @@ export default function Cabinet() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.35, duration: 0.4 }}
           >
-            <Link to="/cabinet/tariffs" onClick={(event) => { if (renewalPlan) { event.preventDefault(); setRenewOpen(true); } }} className="btn-primary h-14 w-full px-6 text-base">
+            <Link to="/cabinet/tariffs" onClick={(event) => { if (renewalPlan) { event.preventDefault(); setRenewOpen(true); } }} className="btn-primary px-6 py-4 text-base">
               <RefreshCw className="h-5 w-5" />
               Продлить подписку
             </Link>
-            {config?.sellOptions?.some((option) => option.kind === "traffic") && <Link to="/cabinet/tariffs#traffic" className="btn-ghost h-14 w-full px-6 text-base"><PackagePlus className="h-5 w-5" />Докупить трафик</Link>}
-            <Link to={`/cabinet/subscribe?sub=${main.id}`} className="btn-ghost h-14 w-full px-6 text-base">
+            <Link to={`/cabinet/subscribe?sub=${main.id}`} className="btn-ghost px-6 py-4 text-base">
               <KeyRound className="h-5 w-5" />
               Открыть ключи доступа
             </Link>
-            {availableTrials.length > 0 && <Link to="/cabinet/dashboard?trial=1" className="btn-ghost h-14 w-full px-6 text-base"><Gift className="h-5 w-5" />Активировать пробный период</Link>}
-            <Link to="/cabinet/tariffs" className="btn-ghost h-14 w-full px-6 text-base">
+            {availableTrials.length > 0 && <Link to="/cabinet/dashboard?trial=1" className="btn-ghost px-6 py-4 text-base"><Gift className="h-5 w-5" />Активировать пробный период</Link>}
+            <Link to="/cabinet/tariffs" className="btn-ghost px-6 py-4 text-base">
               <ShoppingBag className="h-5 w-5" />
               Все тарифы
             </Link>

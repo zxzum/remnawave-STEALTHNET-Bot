@@ -35,7 +35,6 @@ import { ClientSubscriptionsTab } from "@/components/admin/client-subscriptions-
 import { ClientTimeline } from "@/components/admin/client-timeline";
 import { fmtMsk, fmtMskDate } from "@/lib/datetime";
 import { usePageVisibility } from "@/hooks/use-page-visibility";
-import { formatTariffOptionLabel } from "@/lib/tariff-label";
 
 function formatTrafficBytes(bytes: number | null | undefined): string {
   if (bytes == null || bytes <= 0) return "0 B";
@@ -120,7 +119,7 @@ export function ClientsPage() {
   const [filterTariffId, setFilterTariffId] = useState("");
   const [filterSubscriptionType, setFilterSubscriptionType] = useState<"all" | "trial" | "regular" | "gifted" | "received">("all");
   const [tariffCategories, setTariffCategories] = useState<TariffCategoryWithTariffs[]>([]);
-  const filterTariffs = tariffCategories.flatMap((category) => (category.tariffs ?? []).map((tariff) => ({ id: tariff.id, name: tariff.name, archivedAt: tariff.archivedAt })));
+  const filterTariffs = tariffCategories.flatMap((category) => (category.tariffs ?? []).map((tariff) => ({ id: tariff.id, name: tariff.name })));
 
   // ─── Bulk-actions state ───────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -510,7 +509,7 @@ export function ClientsPage() {
             aria-label="Фильтр по тарифу"
           >
             <option value="">Любой тариф</option>
-            {filterTariffs.map((tariff) => <option key={tariff.id} value={tariff.id}>{formatTariffOptionLabel(tariff)}</option>)}
+            {filterTariffs.map((tariff) => <option key={tariff.id} value={tariff.id}>{tariff.name}</option>)}
           </select>
           <select
             value={pageSize}
@@ -1333,7 +1332,7 @@ function ClientEditModal({
                         <option value="">Выберите тариф</option>
                         {tariffCategories.map((category) => (
                           <optgroup key={category.id} label={category.name}>
-                            {(category.tariffs ?? []).map((tariff) => <option key={tariff.id} value={tariff.id}>{formatTariffOptionLabel(tariff)}</option>)}
+                            {(category.tariffs ?? []).map((tariff) => <option key={tariff.id} value={tariff.id}>{tariff.name}</option>)}
                           </optgroup>
                         ))}
                       </select>
@@ -1418,7 +1417,7 @@ function ClientEditModal({
                             const minPrice = opts.length > 0 ? Math.min(...opts.map((o) => o.price)) : tr.price;
                             return (
                               <option key={tr.id} value={tr.id}>
-                                {formatTariffOptionLabel(tr)}
+                                {tr.name}
                                 {tr.trafficLimitBytes != null && Number(tr.trafficLimitBytes) > 0
                                   ? ` · ${formatTrafficBytes(Number(tr.trafficLimitBytes))}`
                                   : ""}

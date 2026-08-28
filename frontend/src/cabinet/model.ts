@@ -387,43 +387,6 @@ export function quoteTariff(plan: TariffPlan, days: number, extraDevices: number
   return { base, extras, total: Math.round((base + extras) * 100) / 100, discountPercent };
 }
 
-export function canBuyTrafficOption(
-  option: { trafficMode?: "LOCAL_SQUAD" | "REMNAWAVE" | "ANY" },
-  subscription: Pick<CabinetSubscription, "trafficLimitGB" | "whitelistGB" | "trafficLimitMode"> | null | undefined,
-): boolean {
-  const mode = option.trafficMode ?? "ANY";
-  if (mode === "ANY") return true;
-  if (!subscription) return false;
-  if (mode === "REMNAWAVE") return subscription.trafficLimitGB !== null && subscription.trafficLimitGB > 0;
-  return subscription.trafficLimitMode === "LOCAL_SQUAD" || subscription.whitelistGB !== null;
-}
-
-export type PlategaMethod = { id: number; label: string };
-
-export function groupPlategaMethods(methods: PlategaMethod[]) {
-  const used = new Set<number>();
-  const take = (pattern: RegExp) => {
-    const method = methods.find((candidate) => !used.has(candidate.id) && pattern.test(candidate.label));
-    if (method) used.add(method.id);
-    return method;
-  };
-  const sbp = take(/сбп|sbp|qr/i);
-  const card = take(/карт|card/i);
-  const crypto = take(/крипт|crypto/i);
-  return { sbp, card, crypto, other: methods.filter((method) => !used.has(method.id)) };
-}
-
-export function trafficOptionLabel(mode: "LOCAL_SQUAD" | "REMNAWAVE" | "ANY" | undefined): string {
-  if (mode === "LOCAL_SQUAD") return "Белые списки";
-  if (mode === "REMNAWAVE") return "Обычный интернет";
-  return "Для любой подписки";
-}
-
-export function trafficOptionUnitPrice(trafficGb: number, price: number): number {
-  if (!Number.isFinite(trafficGb) || trafficGb <= 0 || !Number.isFinite(price)) return 0;
-  return Math.round((price / trafficGb) * 100) / 100;
-}
-
 export function resolvePaymentUrl(urls: PaymentUrls, inTelegram: boolean): string | null {
   const candidates = [inTelegram ? urls.miniAppPayUrl : urls.webAppPayUrl, urls.paymentUrl, urls.payUrl, urls.webAppPayUrl];
   for (const candidate of candidates) {

@@ -19,9 +19,8 @@ import { Label } from "@/components/ui/label";
 import { Plus, Trash2, Pencil, Loader2, Gift } from "lucide-react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { formatTariffOptionLabel } from "@/lib/tariff-label";
 
-type FlatTariff = { id: string; name: string; archivedAt?: string | null; categoryName: string; internalSquadUuids: string[] };
+type FlatTariff = { id: string; name: string; categoryName: string; internalSquadUuids: string[] };
 
 export function TrialsPage() {
   const { state } = useAuth();
@@ -46,7 +45,7 @@ export function TrialsPage() {
       const flat: FlatTariff[] = [];
       for (const c of catsRes.items as TariffCategoryWithTariffs[]) {
         for (const t of c.tariffs) {
-          flat.push({ id: t.id, name: t.name, archivedAt: t.archivedAt, categoryName: c.name, internalSquadUuids: t.internalSquadUuids });
+          flat.push({ id: t.id, name: t.name, categoryName: c.name, internalSquadUuids: t.internalSquadUuids });
         }
       }
       setTariffsFlat(flat);
@@ -416,7 +415,7 @@ function TrialFormDialog({
             {tariffs.length === 0 && <option value="">— Сначала создайте тариф —</option>}
             {tariffs.map((t) => (
               <option key={t.id} value={t.id}>
-                {t.categoryName} — {formatTariffOptionLabel(t)}
+                {t.categoryName} — {t.name}
               </option>
             ))}
           </select>
