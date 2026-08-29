@@ -71,6 +71,16 @@ export function reminderKeyClaimWhere(
   };
 }
 
+export function expiryNotificationOwnerWhere(): Prisma.ClientWhereInput {
+  return {
+    isBlocked: false,
+    OR: [
+      { email: { not: null } },
+      { telegramId: { not: null }, telegramUnreachable: false },
+    ],
+  };
+}
+
 const ONBOARDING_REMINDER_DELAYS_MS = [15 * 60_000, 6 * 60 * 60_000, 24 * 60 * 60_000];
 
 export function onboardingReminderDue(client: {
@@ -162,7 +172,7 @@ export async function notifyExpiringSubscriptions(now = new Date()): Promise<num
       deletionRequestedAt: null,
       purchasedAsGift: false,
       expireAt: { gt: now, lte: new Date(now.getTime() + maxOffset * 60_000) },
-      owner: { OR: [{ telegramId: { not: null } }, { email: { not: null } }] },
+      owner: expiryNotificationOwnerWhere(),
     },
     select: {
       id: true,
@@ -171,7 +181,7 @@ export async function notifyExpiringSubscriptions(now = new Date()): Promise<num
       tariffId: true,
       trial: { select: { name: true } },
       tariff: { select: { name: true } },
-      owner: { select: { telegramId: true, email: true, trialUsed: true } },
+      owner: { select: { telegramId: true, email: true, trialUsed: true, telegramUnreachable: true } },
     },
   });
   let sent = 0;
@@ -204,7 +214,7 @@ async function processExpiringSubscription(
     tariffId: string | null;
     trial: { name: string } | null;
     tariff: { name: string } | null;
-    owner: { telegramId: string | null; email: string | null; trialUsed: boolean };
+    owner: { telegramId: string | null; email: string | null; trialUsed: boolean; telegramUnreachable: boolean };
   },
   now: Date,
   ctx: {
@@ -228,7 +238,7 @@ async function processExpiringSubscription(
     const displayName = kind === "trial"
       ? subscription.trial?.name ?? subscription.tariff?.name ?? "Пробный период"
       : subscription.tariff?.name ?? "Подписка";
-    const telegramOffset = subscription.owner.telegramId
+    const telegramOffset = subscription.owner.telegramId && !subscription.owner.telegramUnreachable
       ? expiryReminderOffset(subscription.expireAt, now, kind === "trial" ? trialOffsets : paidOffsets)
       : null;
     if (telegramOffset && subscription.owner.telegramId) {
