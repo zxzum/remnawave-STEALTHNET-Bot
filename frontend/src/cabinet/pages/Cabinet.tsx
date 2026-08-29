@@ -367,7 +367,8 @@ export default function Cabinet() {
         <p className="mt-1 text-fog-500">Ваша подписка и подключённые устройства</p>
       </div>
 
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+      {/* Правая колонка фиксированной ширины (300–320px), чтобы «Быстрые действия» не растягивались */}
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_320px]">
         <AnimatePresence mode="wait">
           {main && <MainSubscriptionCard key={main.id} sub={main} />}
         </AnimatePresence>
@@ -380,33 +381,34 @@ export default function Cabinet() {
             transition={{ delay: 0.3, duration: 0.4 }}
           >
             <h3 className="text-base font-extrabold">Быстрые действия</h3>
-            {/* Лестница акцентов из референса: primary → secondary → outline → link, контент по центру */}
+            {/* Лестница акцентов из референса: primary → secondary → outline → link, контент по центру.
+                Все ступени одной высоты 46px (h-[46px] перекрывает h-13/h-11 через twMerge). */}
             <div className="mt-4 flex flex-col gap-2.5">
               <Link
                 to="/cabinet/tariffs"
                 onClick={(event) => { if (renewalPlan) { event.preventDefault(); setRenewOpen(true); } }}
-                className={cn(buttonVariants({ variant: "primary", size: "lg" }), "w-full")}
+                className={cn(buttonVariants({ variant: "primary", size: "lg" }), "h-[46px] w-full")}
               >
                 <Zap />
                 Продлить подписку
               </Link>
               {config?.sellOptions?.some((option) => option.kind === "traffic") && (
-                <Link to="/cabinet/tariffs#traffic" className={cn(buttonVariants({ variant: "secondary", size: "md" }), "w-full")}>
+                <Link to="/cabinet/tariffs#traffic" className={cn(buttonVariants({ variant: "secondary", size: "md" }), "h-[46px] w-full")}>
                   <Gauge />
                   Докупить трафик
                 </Link>
               )}
-              <Link to={`/cabinet/subscribe?sub=${main.id}`} className={cn(buttonVariants({ variant: "outline", size: "md" }), "w-full")}>
+              <Link to={`/cabinet/subscribe?sub=${main.id}`} className={cn(buttonVariants({ variant: "outline", size: "md" }), "h-[46px] w-full")}>
                 <KeyRound />
                 Открыть ключи доступа
               </Link>
               {/* link вместо ghost: token ghost рисует подложку, а по референсу 4-я ступень — прозрачный текст */}
-              <Link to="/cabinet/tariffs" className={cn(buttonVariants({ variant: "link", size: "md" }), "w-full")}>
+              <Link to="/cabinet/tariffs" className={cn(buttonVariants({ variant: "link", size: "md" }), "h-[46px] w-full")}>
                 <Layers />
                 Все тарифы
               </Link>
               {availableTrials.length > 0 && (
-                <Link to="/cabinet/dashboard?trial=1" className={cn(buttonVariants({ variant: "link", size: "md" }), "w-full")}>
+                <Link to="/cabinet/dashboard?trial=1" className={cn(buttonVariants({ variant: "link", size: "md" }), "h-[46px] w-full")}>
                   <Gift />
                   Активировать пробный период
                 </Link>

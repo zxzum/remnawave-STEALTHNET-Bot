@@ -94,14 +94,17 @@ function Sidebar() {
             >
               {({ isActive }) => (
                 <>
-                  {/* Плашка статична у каждого пункта — без layoutId, чтобы не летала между ссылками */}
-                  <span
-                    aria-hidden
-                    className={cn(
-                      "absolute left-0 h-6 w-1 rounded-full bg-accent-400 shadow-[0_0_12px_2px_rgba(109,155,255,0.7)] transition-opacity duration-200",
-                      isActive ? "opacity-100" : "opacity-0",
-                    )}
-                  />
+                  {/* Пилл летит внутри своей группы: свой layoutId на группу навигации
+                      (раньше один id на обе группы давал двойную анимацию), монтируется
+                      только у активного пункта — ровно один motion.span на группу. */}
+                  {isActive && (
+                    <motion.span
+                      aria-hidden
+                      layoutId="nav-pill-main"
+                      className="absolute left-0 h-6 w-1 rounded-full bg-accent-400 shadow-[0_0_12px_2px_rgba(109,155,255,0.7)]"
+                      transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                    />
+                  )}
                   <Icon className="h-[18px] w-[18px]" strokeWidth={2.2} />
                   {label}
                 </>
@@ -144,14 +147,16 @@ function Sidebar() {
         >
           {({ isActive }) => (
             <>
-              {/* Та же статичная плашка: проявляется только прозрачностью, без полёта */}
-              <span
-                aria-hidden
-                className={cn(
-                  "absolute left-0 h-6 w-1 rounded-full bg-accent-400 shadow-[0_0_12px_2px_rgba(109,155,255,0.7)] transition-opacity duration-200",
-                  isActive ? "opacity-100" : "opacity-0",
-                )}
-              />
+              {/* Нижняя группа («Профиль») — отдельный layoutId: в группе один пункт,
+                  поэтому пилл просто появляется здесь и не конфликтует с верхней группой */}
+              {isActive && (
+                <motion.span
+                  aria-hidden
+                  layoutId="nav-pill-aux"
+                  className="absolute left-0 h-6 w-1 rounded-full bg-accent-400 shadow-[0_0_12px_2px_rgba(109,155,255,0.7)]"
+                  transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                />
+              )}
               <UserRound className="h-[18px] w-[18px]" strokeWidth={2.2} />
               Профиль
             </>
