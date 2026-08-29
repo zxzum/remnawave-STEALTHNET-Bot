@@ -168,6 +168,20 @@ test("checkout preserves the approved Platega block and uses production payment 
   assert.doesNotMatch(tariffs, /SALE10|Здесь будет редирект|Прототип/);
 });
 
+test("tariff cards show the admin checklist and the min-term price", async () => {
+  const tariffs = await readFile(new URL("./pages/Tariffs.tsx", import.meta.url), "utf8");
+  // Чек-лист вместо описания и чипов: каждая строка emojiLine — пункт с Check
+  assert.match(tariffs, /emojiLine\.split\("\\n"\)/);
+  assert.match(tariffs, /<Check className="mt-0\.5 h-4 w-4 shrink-0 text-mint-400" \/>/);
+  assert.doesNotMatch(tariffs, /chip chip-fluid/);
+  // Цена без «от» — формат «4 ₽/день» над «120 ₽/30 дн.» от опции минимального срока
+  assert.match(tariffs, /option\.days < best\.days \? option : best/);
+  assert.match(tariffs, /\/\{minTermOption\.days\} дн\.<\/span>/);
+  assert.doesNotMatch(tariffs, /от \{formatMoney\(perDay/);
+  // Свечение popular-карточки не срезается overflow-hidden аккордеона
+  assert.match(tariffs, /px-4 pt-8 pb-5/);
+});
+
 test("eligible standalone trials use UUID-preserving extension checkout", async () => {
   const tariffs = await readFile(new URL("./pages/Tariffs.tsx", import.meta.url), "utf8");
   assert.match(tariffs, /trialExtensionId/);

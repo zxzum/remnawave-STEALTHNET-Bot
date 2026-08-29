@@ -19,9 +19,8 @@ import {
   Box,
   ChevronDown,
   CalendarDays,
-  Wifi,
   Signal,
-  Smartphone,
+  Check,
   CreditCard,
   Globe,
   Loader2,
@@ -726,8 +725,14 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
 }
 
 function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; index: number }) {
-  const startingOption = plan.durationOptions.reduce((best, option) => option.price < best.price ? option : best, plan.durationOptions[0]);
-  const perDay = startingOption.price / startingOption.days;
+  // Цена на карточке — от опции МИНИМАЛЬНОГО срока (не от самой дешёвой):
+  // формат «4 ₽/день» над «120 ₽/30 дн.». Пустых durationOptions не бывает у валидного тарифа,
+  // но guard нужен — reduce без начального значения на пустом массиве бросает.
+  const minTermOption = plan.durationOptions.length
+    ? plan.durationOptions.reduce((best, option) => option.days < best.days ? option : best)
+    : null;
+  // Чек-лист вместо описания: каждая строка админского emojiLine — отдельный пункт (refs/29)
+  const checklist = plan.emojiLine.split("\n").map((line) => line.trim()).filter(Boolean);
   return (
     <motion.div
       initial={{ opacity: 0, y: 14 }}
@@ -747,32 +752,29 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
       )}
 
       <h3 className="text-lg font-extrabold">{plan.name}</h3>
-      <p className="mt-1.5 whitespace-pre-wrap text-xs leading-relaxed text-fog-500">{plan.emojiLine}</p>
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <span className="chip chip-fluid">
-          <CalendarDays className="h-3.5 w-3.5" /> от {Math.min(...plan.durationOptions.map((option) => option.days))} дн.
-        </span>
-        <span className="chip chip-fluid">
-          <Smartphone className="h-3.5 w-3.5" /> {plan.baseDevices} устр.
-        </span>
-        <span className="chip chip-fluid col-span-2">
-          <Wifi className="h-3.5 w-3.5" /> {plan.traffic}
-        </span>
-        {plan.whitelistGB !== null && (
-          <span className="chip chip-amber chip-fluid col-span-2">
-            <Signal className="h-3.5 w-3.5" /> Белые списки: {plan.whitelistGB.toFixed(0)} ГБ
-          </span>
-        )}
-      </div>
+      {checklist.length > 0 && (
+        <ul className="mt-3 space-y-2">
+          {checklist.map((line, lineIndex) => (
+            <li key={`${lineIndex}:${line}`} className="flex items-start gap-2 text-sm leading-snug text-fog-200">
+              <Check className="mt-0.5 h-4 w-4 shrink-0 text-mint-400" />
+              <span>{line}</span>
+            </li>
+          ))}
+        </ul>
+      )}
 
       <div className="my-4 h-px bg-white/8" />
 
       <div className="mt-auto">
-        <p className="text-[11px] font-semibold text-fog-600">от {formatMoney(perDay, plan.currency)}/день</p>
-        <p className="text-2xl font-extrabold tracking-tight whitespace-nowrap">
-          <span className="text-sm font-semibold text-fog-500">от </span>
-          {formatMoney(startingOption.price, plan.currency)}
-        </p>
+        {minTermOption && (
+          <>
+            <p className="text-[11px] font-semibold text-fog-600">{formatMoney(minTermOption.price / minTermOption.days, plan.currency)}/день</p>
+            <p className="text-2xl font-extrabold tracking-tight whitespace-nowrap">
+              {formatMoney(minTermOption.price, plan.currency)}
+              <span className="text-sm font-semibold text-fog-500">/{minTermOption.days} дн.</span>
+            </p>
+          </>
+        )}
         <motion.button
           whileTap={{ scale: 0.96 }}
           onClick={onPay}
@@ -840,16 +842,18 @@ export default function Tariffs() {
         {tariffGroups.map((group) => (
           <Accordion.Item key={group.id} value={group.id} className="glass overflow-hidden rounded-4xl">
             <Accordion.Header>
-              <Accordion.Trigger className="group flex w-full items-center gap-4 p-5 text-left sm:p-6">
-                <div className="icon-tile h-11 w-11 rounded-xl">
-                  <Box className="h-5 w-5" />
+              <Accordion.Trigger className="group flex w-full items-center gap-4 p-4 text-left sm:p-5">
+                <div className="icon-tile h-9 w-9 rounded-xl">
+                  <Box className="h-4 w-4" />
                 </div>
-                <h2 className="flex-1 text-base font-extrabold sm:text-lg">{group.title}</h2>
-                <ChevronDown className="h-5 w-5 text-fog-600 transition-transform duration-300 group-data-[state=open]:rotate-180" />
+                <h2 className="flex-1 text-sm font-extrabold sm:text-base">{group.title}</h2>
+                <ChevronDown className="h-4 w-4 text-fog-600 transition-transform duration-300 group-data-[state=open]:rotate-180" />
               </Accordion.Trigger>
             </Accordion.Header>
             <Accordion.Content className="overflow-hidden data-[state=closed]:animate-[accordion-up_0.25s_ease-out] data-[state=open]:animate-[accordion-down_0.25s_ease-out]">
-              <div className="grid grid-cols-1 gap-3 px-4 pt-3 pb-5 sm:grid-cols-2 sm:px-5 xl:grid-cols-3">
+              {/* pt-8, а не pt-3: бейдж «Лучший выбор» на -top-3 + spread shadow-neon-blue
+                  не должен срезаться overflow-hidden у Accordion.Content */}
+              <div className="grid grid-cols-1 gap-3 px-4 pt-8 pb-5 sm:grid-cols-2 sm:px-5 xl:grid-cols-3">
                 {group.plans.map((plan, i) => (
                   <PlanRow key={plan.id} plan={plan} index={i} onPay={() => setSelected(plan)} />
                 ))}
