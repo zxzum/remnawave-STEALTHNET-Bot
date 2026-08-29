@@ -119,6 +119,7 @@ test("offers Telegram linking only to authenticated unlinked clients", () => {
 test("shows overflow only for enabled optional services", () => {
   assert.deepEqual(resolveOptionalNav({ showProxyEnabled: true }), ["proxy"]);
   assert.deepEqual(resolveOptionalNav({}), []);
+  assert.deepEqual(resolveOptionalNav({ sellOptionsEnabled: true }), []);
 });
 
 test("shows traffic packages only for limits they can extend", () => {

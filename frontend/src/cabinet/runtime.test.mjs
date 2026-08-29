@@ -152,12 +152,17 @@ test("Mini App refreshes its account from Telegram even with a saved token", asy
 
 test("checkout preserves the approved Platega block and uses production payment APIs", async () => {
   const tariffs = await readFile(new URL("./pages/Tariffs.tsx", import.meta.url), "utf8");
-  assert.match(tariffs, /Platega — основной способ, акцентный блок/);
+  const prefetch = await readFile(new URL("./components/ui/prefetch.ts", import.meta.url), "utf8");
+  assert.match(tariffs, /plategaMethods\.length > 0/);
+  assert.match(tariffs, /payPlatega\(sbpMethod\.id\)/);
+  assert.match(tariffs, /Рекомендуем/);
   assert.match(tariffs, /api\.clientCheckPromoCode/);
   assert.match(tariffs, /api\.clientPayByBalance/);
   assert.match(tariffs, /api\.clientCreatePlategaPayment/);
   assert.match(tariffs, /api\.cryptopayCreatePayment/);
-  assert.match(tariffs, /api\.clientTariffConversionPreview/);
+  assert.match(tariffs, /void prefetchConversionPreview\(/);
+  assert.match(prefetch, /export const prefetchConversionPreview/);
+  assert.match(prefetch, /\(\) => api\.clientTariffConversionPreview\(token, args\)/);
   assert.match(tariffs, /removeExtrasOnActivate/);
   assert.match(tariffs, /replaceTrialSubId/);
   assert.doesNotMatch(tariffs, /SALE10|Здесь будет редирект|Прототип/);
@@ -261,7 +266,8 @@ test("keys tolerate empty application configuration", async () => {
 
 test("subscription link renewal is clear and opens the regular website", async () => {
   const keys = await readFile(new URL("./pages/Keys.tsx", import.meta.url), "utf8");
-  assert.match(keys, /whitespace-nowrap text-base leading-tight font-extrabold tracking-tight sm:text-lg/);
+  const modal = await readFile(new URL("./components/ui/modal.tsx", import.meta.url), "utf8");
+  assert.match(keys, /whitespace-nowrap text-sm leading-tight font-extrabold tracking-tight sm:text-base/);
   assert.match(keys, />Ключ доступа</);
   assert.match(keys, />VPN-подписка</);
   assert.doesNotMatch(keys, /\{active\.protocol\}/);
@@ -273,9 +279,12 @@ test("subscription link renewal is clear and opens the regular website", async (
   assert.match(keys, /доступ к Telegram пропадёт/);
   assert.match(keys, /привяжите почту в «Профиль» → «Безопасность»/);
   assert.match(keys, /showEmailHint &&/);
-  assert.match(keys, /max-h-\[calc\(100dvh-2rem\)\] .*overflow-y-auto/);
-  assert.match(keys, /Обновить ссылку\s*<\/button>/);
-  assert.match(keys, /initial=\{\{ opacity: 0, scale: 0\.94, y: 24 \}\}/);
+  assert.match(keys, /<Modal open=\{reissueOpen\}[^>]*>/);
+  assert.match(modal, /max-h-\[[^\]]*dvh[^\]]*\]/);
+  assert.match(modal, /min-h-0 flex-1 overflow-y-auto/);
+  assert.match(keys, /variant="secondary" size="md" onClick=\{\(\) => setReissueOpen\(true\)\}/);
+  assert.match(keys, />\s*Обновить ссылку\s*<\/Button>/);
+  assert.match(keys, /initial=\{\{ opacity: 0, y: 12 \}\}/);
   assert.match(keys, /text-sm leading-relaxed text-fog-300/);
   assert.match(keys, /href=\{siteUrl\}[^>]*>\s*<ExternalLink[^>]*\/> Открыть кабинет на сайте/);
 });
@@ -386,8 +395,13 @@ test("registration resend locks submitted email and shows backend errors", async
 
 test("password registration cannot submit while a request is loading", async () => {
   const auth = await readFile(new URL("./pages/Auth.tsx", import.meta.url), "utf8");
+  const button = await readFile(new URL("./components/ui/button.tsx", import.meta.url), "utf8");
   const passwordStep = auth.slice(auth.indexOf('{step === "password"'), auth.indexOf('{step === "twofa"'));
-  assert.match(passwordStep, /disabled=\{pw1\.length < 8 \|\| pw1 !== pw2 \|\| loading\}/);
+  assert.match(passwordStep, /type="submit"/);
+  assert.match(passwordStep, /loading=\{loading\}/);
+  assert.match(passwordStep, /loadingText="Создаём аккаунт…"/);
+  assert.match(passwordStep, /disabled=\{pw1\.length < 8 \|\| pw1 !== pw2\}/);
+  assert.match(button, /disabled=\{disabled \|\| loading\}/);
 });
 
 test("refreshes the client profile on cabinet load and tab return", async () => {
