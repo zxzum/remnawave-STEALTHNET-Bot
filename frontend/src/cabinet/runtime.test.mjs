@@ -170,6 +170,12 @@ test("checkout preserves the approved Platega block and uses production payment 
   assert.match(paymentMethods, /shadow-\[var\(--shadow-neon-blue\)/);
   assert.match(tariffs, /<PaymentMethodsBlock/);
   assert.match(tariffs, /onPlatega=\{payPlatega\}/);
+  // Диалог трафика (Services) живёт на той же общей сетке: разметка в ui/payment-methods,
+  // пейлоады и платёжные вызовы остаются на странице
+  const services = await readFile(new URL("./pages/Services.tsx", import.meta.url), "utf8");
+  assert.match(services, /<PaymentMethodsBlock/);
+  assert.match(services, /onPlatega=\{\(id\) => payPlatega\(id\)\}/);
+  assert.doesNotMatch(services, /Оплатить криптой через Platega|bg-amber-glow\/8/);
   assert.match(tariffs, /api\.clientCheckPromoCode/);
   assert.match(tariffs, /api\.clientPayByBalance/);
   assert.match(tariffs, /api\.clientCreatePlategaPayment/);

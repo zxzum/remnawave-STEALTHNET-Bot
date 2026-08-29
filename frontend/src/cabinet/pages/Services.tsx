@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
-  Bitcoin, Box, CalendarDays, Copy, CreditCard, Gift, Headphones, KeyRound,
-  Layers3, MessageCircle, Network, PackagePlus, QrCode, Send, Server, ShieldCheck,
+  Box, CalendarDays, Copy, CreditCard, Gift, Headphones, KeyRound,
+  Layers3, MessageCircle, Network, PackagePlus, Send, Server, ShieldCheck,
   Signal, Smartphone, Ticket, Wallet, Wifi, Zap,
 } from "lucide-react";
 import { useClientAuth } from "@/contexts/client-auth";
@@ -11,8 +11,8 @@ import { api, type PublicSellOption, type TicketMessageDto } from "@/lib/api";
 import { preparePaymentRedirect } from "@/lib/open-payment-url";
 import { Button } from "../components/ui/button";
 import { Input, Select, Textarea } from "../components/ui/input";
-import { IconTile } from "../components/ui/icon-tile";
 import { Modal, ModalDescription, ModalTitle } from "../components/ui/modal";
+import { PaymentMethodsBlock } from "../components/ui/payment-methods";
 import { useSuccess } from "../components/ui/success-dialog";
 import { prefetchPublicConfig } from "../components/ui/prefetch";
 import { canBuyTrafficOption, groupPlategaMethods, isWhitelistTrafficOption, resolvePaymentUrl, sortTrafficOptions, trafficOptionLabel, trafficOptionUnitPrice } from "../model";
@@ -27,8 +27,8 @@ function money(value: number, currency: string) {
   }
 }
 
-function PageTitle({ icon: Icon, title, subtitle }: { icon: typeof Box; title: string; subtitle: string }) {
-  return <div className="flex items-center gap-4"><div className="icon-tile h-12 w-12 rounded-2xl"><Icon className="h-5 w-5" /></div><div><h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">{title}</h1><p className="mt-1 text-sm text-fog-500">{subtitle}</p></div></div>;
+function PageTitle({ icon: Icon, title, subtitle, compact = false }: { icon: typeof Box; title: string; subtitle: string; /** compact — плотная шапка секции («Докупить трафик»); остальные страницы остаются крупными */ compact?: boolean }) {
+  return <div className={cn("flex items-center", compact ? "gap-3" : "gap-4")}><div className={cn("icon-tile", compact ? "h-9 w-9 rounded-xl" : "h-12 w-12 rounded-2xl")}><Icon className={compact ? "h-4 w-4" : "h-5 w-5"} /></div><div><h1 className={cn("font-extrabold tracking-tight", compact ? "text-lg sm:text-xl" : "text-2xl sm:text-3xl")}>{title}</h1><p className={cn("mt-1 text-fog-500", compact ? "text-xs" : "text-sm")}>{subtitle}</p></div></div>;
 }
 
 type PurchasePayload = {
@@ -120,7 +120,8 @@ function TrafficCard({ option, onBuy }: { option: TrafficSellOption; onBuy: () =
       className={cn(
         "relative mt-2 flex flex-col rounded-3xl border p-5 transition-all duration-300",
         whitelist
-          ? "border-amber-glow/40 bg-amber-glow/8 shadow-[0_0_36px_-12px_rgba(255,181,69,0.55)]"
+          ? /* Плотная залитая подложка в amber-тоне, а не стеклянный полупрозрачный слой */
+            "border-amber-glow/40 bg-[linear-gradient(150deg,#2b1f0d,#1b1207_58%,#130d05)] shadow-[inset_0_2px_12px_rgb(2_4_12/0.55),0_0_36px_-12px_rgba(255,181,69,0.55)]"
           : "glass-inset hover:border-white/16",
       )}
     >
@@ -222,16 +223,11 @@ function TrafficOptionDialog({
 
   return (
     <Modal open={open} onOpenChange={onOpenChange} className="max-w-lg">
-      <div className="no-scrollbar min-h-0 overflow-y-auto p-6">
-        {/* header — крестик встроен в Modal */}
-        <div className="flex items-start gap-4 pr-10">
-          <IconTile size="lg" tone={whitelist ? "amber" : "violet"}>
-            {whitelist ? <Signal className="h-6 w-6" /> : <Wifi className="h-6 w-6" />}
-          </IconTile>
-          <div className="min-w-0 flex-1">
-            <ModalTitle className="text-2xl font-extrabold tracking-tight">{option.name}</ModalTitle>
-            <ModalDescription className="mt-0.5 text-xs">{trafficOptionLabel(option.trafficMode)}</ModalDescription>
-          </div>
+      <div className="no-scrollbar min-h-0 overflow-y-auto p-5">
+        {/* header — компактный, как в PlanDialog: без тайла, крестик встроен в Modal */}
+        <div className="pr-10">
+          <ModalTitle className="text-lg font-extrabold tracking-tight">{option.name}</ModalTitle>
+          <ModalDescription className="mt-0.5 text-xs text-fog-500">{trafficOptionLabel(option.trafficMode)}</ModalDescription>
         </div>
 
         {/* компактная сводка — цена + назначение одной строкой */}
@@ -246,125 +242,20 @@ function TrafficOptionDialog({
         </div>
 
         <p className="mt-5 mb-2 text-xs font-semibold text-fog-500">Способ оплаты</p>
-        <div className="flex flex-col gap-2.5">
-          {user.balance > 0 && (
-            <Button
-              variant="secondary"
-              size="lg"
-              className="w-full justify-between"
-              loading={paying}
-              loadingText="Оплата…"
-              disabled={user.balance < option.price}
-              onClick={payBalance}
-            >
-              <span className="flex items-center gap-2">
-                <Wallet /> С баланса
-              </span>
-              <span className="font-bold">{user.balance.toLocaleString("ru-RU")} ₽</span>
-            </Button>
-          )}
-
-          {/* Platega — основной способ, акцентный блок */}
-          {plategaMethods.length > 0 && <div className="rounded-2xl border border-accent-400/40 bg-accent-500/8 p-4 shadow-neon-blue">
-            <div className="mb-3 flex items-center gap-2.5">
-              <IconTile size="sm">
-                <CreditCard className="h-4 w-4" />
-              </IconTile>
-              <div className="flex-1">
-                <p className="text-sm font-bold">Platega</p>
-                <p className="text-[11px] text-fog-500">Банковские платежи и крипта</p>
-              </div>
-              <span className="rounded-full bg-accent-500/20 px-2.5 py-1 text-[10px] font-extrabold tracking-wider text-accent-400 uppercase">
-                Рекомендуем
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-2.5">
-              {sbpMethod && <Button
-                size="lg"
-                loading={paying}
-                loadingText="Оплата…"
-                onClick={() => payPlatega(sbpMethod.id)}
-              >
-                <span className="flex flex-col items-center">
-                  <span className="flex items-center gap-1.5 font-bold">
-                    <QrCode /> СБП
-                  </span>
-                  <span className="text-[10px] font-medium opacity-75">по QR-коду</span>
-                </span>
-              </Button>}
-              {cardMethod && <Button
-                size="lg"
-                loading={paying}
-                loadingText="Оплата…"
-                onClick={() => payPlatega(cardMethod.id)}
-              >
-                <span className="flex flex-col items-center">
-                  <span className="flex items-center gap-1.5 font-bold">
-                    <CreditCard /> Карта
-                  </span>
-                  <span className="text-[10px] font-medium opacity-75">RUB · любой банк</span>
-                </span>
-              </Button>}
-            </div>
-            {cryptoMethod && <Button
-              variant="link"
-              size="sm"
-              className="mt-2.5 w-full"
-              loading={paying}
-              loadingText="Оплата…"
-              onClick={() => payPlatega(cryptoMethod.id)}
-            >
-              <Bitcoin /> Оплатить криптой через Platega
-            </Button>}
-            {otherPlategaMethods.length > 0 && <div className="mt-2.5 flex flex-col gap-2">
-              {otherPlategaMethods.map((method) => (
-                <Button
-                  key={method.id}
-                  variant="outline"
-                  size="sm"
-                  loading={paying}
-                  loadingText="Оплата…"
-                  onClick={() => payPlatega(method.id)}
-                >
-                  {method.label}
-                </Button>
-              ))}
-            </div>}
-          </div>}
-
-          {config?.cryptopayEnabled && <Button
-            variant="secondary"
-            size="lg"
-            className="w-full justify-start hover:border-amber-glow/30"
-            loading={paying}
-            loadingText="Оплата…"
-            onClick={payCryptoBot}
-          >
-            <IconTile size="sm" tone="amber">
-              <Zap className="h-4 w-4" />
-            </IconTile>
-            <span className="flex flex-col items-start">
-              <span>Crypto Bot</span>
-              <span className="text-xs font-medium text-fog-500">USDT · TON · BTC</span>
-            </span>
-          </Button>}
-          {config?.rollypayEnabled && option.currency.toUpperCase() === "RUB" && <Button
-            variant="secondary"
-            size="lg"
-            className="w-full justify-start hover:border-emerald-400/30"
-            loading={paying}
-            loadingText="Оплата…"
-            onClick={payRollyPay}
-          >
-            <IconTile size="sm" className="border-emerald-400/25 bg-emerald-400/10 text-emerald-300">
-              <CreditCard className="h-4 w-4" />
-            </IconTile>
-            <span className="flex flex-col items-start">
-              <span>RollyPay</span>
-              <span className="text-xs font-medium text-fog-500">Оплата в рублях</span>
-            </span>
-          </Button>}
-        </div>
+        {/* Способы оплаты — общая сетка кита (как на тарифах); пейлоады и API остаются здесь */}
+        <PaymentMethodsBlock
+          amount={option.price}
+          currency={option.currency}
+          balance={user.balance}
+          onBalancePay={payBalance}
+          platega={{ sbp: sbpMethod, card: cardMethod, crypto: cryptoMethod, other: otherPlategaMethods }}
+          loading={paying}
+          onPlatega={(id) => payPlatega(id)}
+          onCryptoBot={payCryptoBot}
+          onRollyPay={payRollyPay}
+          cryptoEnabled={config?.cryptopayEnabled}
+          rollyEnabled={config?.rollypayEnabled && option.currency.toUpperCase() === "RUB"}
+        />
       </div>
     </Modal>
   );
@@ -391,7 +282,7 @@ export function ExtraOptions({ trafficOnly = false }: { trafficOnly?: boolean } 
     const pool = trafficOnly ? subscriptions.filter((item) => item.status === "active") : subscriptions;
     if (!pool.some((item) => item.id === target)) setTarget(pool[0]?.id ?? "");
   }, [subscriptions, target, trafficOnly]);
-  return <div className="flex flex-col gap-5"><PageTitle icon={PackagePlus} title={trafficOnly ? "Докупить трафик" : "Дополнительные опции"} subtitle={trafficOnly ? "Пакеты трафика для выбранной подписки." : "Трафик, устройства и серверы для выбранной подписки."} />
+  return <div className="flex flex-col gap-5"><PageTitle compact icon={PackagePlus} title={trafficOnly ? "Докупить трафик" : "Дополнительные опции"} subtitle={trafficOnly ? "Пакеты трафика для выбранной подписки." : "Трафик, устройства и серверы для выбранной подписки."} />
     {selectableSubscriptions.length > 1 && <Select value={target} onChange={(event) => setTarget(event.target.value)}><option value="">Выберите подписку</option>{selectableSubscriptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select>}
     {trafficOnly ? (
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
