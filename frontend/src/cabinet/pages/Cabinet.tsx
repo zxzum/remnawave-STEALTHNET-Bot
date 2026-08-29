@@ -28,21 +28,6 @@ function formatGb(value: number) {
   return `${value.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} ГБ`;
 }
 
-export function PageHeader() {
-  const { user } = useApp();
-  return (
-    <header className="flex items-center gap-4 lg:hidden">
-      <div className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-gradient-to-br from-mint-400 to-emerald-500 text-lg font-extrabold text-ink-950 shadow-neon-mint">
-        {user.initials}
-      </div>
-      <div>
-        <h1 className="text-xl font-extrabold tracking-tight">{user.name}</h1>
-        <p className="text-sm text-fog-500">ID: {user.telegramId}</p>
-      </div>
-    </header>
-  );
-}
-
 function MainSubscriptionCard({ sub }: { sub: Subscription }) {
   const { disconnectDevice } = useApp();
   const limit = sub.trafficLimitGB ?? 0;
@@ -332,7 +317,6 @@ export default function Cabinet() {
   if (!main) {
     return (
       <div className="flex flex-col gap-4">
-        <PageHeader />
         <div><h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Кабинет</h1><p className="mt-1 text-fog-500">Ваша подписка и подключённые устройства</p></div>
         <section className="glass-strong liquid mx-auto w-full max-w-xl rounded-4xl p-6 text-center sm:p-8">
           <EmptyState
@@ -363,8 +347,6 @@ export default function Cabinet() {
 
   return (
     <div className="flex flex-col gap-4">
-      <PageHeader />
-
       <div>
         <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Кабинет</h1>
         <p className="mt-1 text-fog-500">Ваша подписка и подключённые устройства</p>
@@ -401,18 +383,18 @@ export default function Cabinet() {
                   Докупить трафик
                 </Link>
               )}
-              <Link to={`/cabinet/subscribe?sub=${main.id}`} className={cn(buttonVariants({ variant: "outline", size: "md" }), "h-[46px] w-full")}>
+              <Link to={`/cabinet/subscribe?sub=${main.id}`} className={cn(buttonVariants({ variant: "outline", size: "md" }), "h-[46px] w-full hover:border-white/30 hover:bg-white/10")}>
                 <KeyRound />
                 Открыть ключи доступа
               </Link>
               {/* link вместо ghost: token ghost рисует постоянную подложку, а по референсу 4-я ступень —
                   прозрачный текст; hover-подложку добавляем сами, чтобы все кнопки лестницы реагировали на наведение */}
-              <Link to="/cabinet/tariffs" className={cn(buttonVariants({ variant: "link", size: "md" }), "h-[46px] w-full hover:bg-white/6")}>
+              <Link to="/cabinet/tariffs" className={cn(buttonVariants({ variant: "link", size: "md" }), "h-[46px] w-full hover:bg-white/10")}>
                 <Layers />
                 Все тарифы
               </Link>
               {availableTrials.length > 0 && (
-                <Link to="/cabinet/dashboard?trial=1" className={cn(buttonVariants({ variant: "link", size: "md" }), "h-[46px] w-full hover:bg-white/6")}>
+                <Link to="/cabinet/dashboard?trial=1" className={cn(buttonVariants({ variant: "link", size: "md" }), "h-[46px] w-full hover:bg-white/10")}>
                   <Gift />
                   Активировать пробный период
                 </Link>

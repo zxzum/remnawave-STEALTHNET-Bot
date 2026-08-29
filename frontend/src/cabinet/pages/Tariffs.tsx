@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import * as Accordion from "@radix-ui/react-accordion";
@@ -672,11 +672,22 @@ export default function Tariffs() {
   const { state } = useClientAuth();
   const token = state.token;
   const [selected, setSelected] = useState<TariffPlan | null>(null);
+  // Видимость диалога — отдельно от выбранного плана. План при закрытии НЕ сбрасываем:
+  // PlanDialog при plan=null ранним return'ом демонтируется целиком и обрывает
+  // exit-анимацию (framer на десктопе, пружину vaul на мобиле) — окно «хлопалось»
+  // мгновенно. Устаревший план в закрытой модалке безвреден, при открытии подменяется.
+  const [planOpen, setPlanOpen] = useState(false);
   const firstGroupId = tariffGroups[0]?.id;
   const [openGroups, setOpenGroups] = useState<string[]>([]);
-  const visibleGroups = firstGroupId
-    ? [firstGroupId, ...openGroups.filter((id) => id !== firstGroupId)]
-    : openGroups;
+  // Первая группа открыта по умолчанию один раз; дальше все группы свободно
+  // сворачиваются/разворачиваются (раньше первая была принудительно открыта всегда)
+  const groupsSeeded = useRef(false);
+  useEffect(() => {
+    if (!groupsSeeded.current && firstGroupId) {
+      groupsSeeded.current = true;
+      setOpenGroups([firstGroupId]);
+    }
+  }, [firstGroupId]);
 
   useEffect(() => {
     if (window.location.hash === "#traffic") document.getElementById("traffic")?.scrollIntoView({ block: "start" });
@@ -708,14 +719,14 @@ export default function Tariffs() {
 
       <Accordion.Root
         type="multiple"
-        value={visibleGroups}
-        onValueChange={(groups: string[]) => setOpenGroups(firstGroupId ? [firstGroupId, ...groups.filter((id: string) => id !== firstGroupId)] : groups)}
+        value={openGroups}
+        onValueChange={setOpenGroups}
         className="flex flex-col gap-4"
       >
         {tariffGroups.map((group) => (
           <Accordion.Item key={group.id} value={group.id} className="glass overflow-hidden rounded-4xl">
             <Accordion.Header>
-              <Accordion.Trigger className="group flex w-full items-center gap-4 p-4 text-left sm:p-5">
+              <Accordion.Trigger className="group flex w-full items-center gap-4 px-4 pt-4 pb-2 text-left sm:px-5 sm:pt-5 sm:pb-3">
                 <div className="icon-tile h-9 w-9 rounded-xl">
                   <Box className="h-4 w-4" />
                 </div>
@@ -724,11 +735,12 @@ export default function Tariffs() {
               </Accordion.Trigger>
             </Accordion.Header>
             <Accordion.Content className="overflow-hidden data-[state=closed]:animate-[accordion-up_0.25s_ease-out] data-[state=open]:animate-[accordion-down_0.25s_ease-out]">
-              {/* pt-6: бейдж «Лучший выбор» на -top-3 (12px) всё ещё помещается в overflow-hidden
-                  Accordion.Content, а лишняя пустота между шапкой группы и карточками убрана */}
-              <div className="grid grid-cols-1 gap-3 px-4 pt-6 pb-5 sm:grid-cols-2 sm:px-5 xl:grid-cols-3">
+              {/* pt-5 = ровно 20px: glow popular-карточки (shadow-neon-blue, blur 24 / spread −4 →
+                  20px вверх) доходит до края overflow-hidden без среза, бейдж -top-3 (12px) помещается.
+                  Меньше нельзя — свечение «Лучшего выбора» обрежется сверху. */}
+              <div className="grid grid-cols-1 gap-3 px-4 pt-5 pb-5 sm:grid-cols-2 sm:px-5 xl:grid-cols-3">
                 {group.plans.map((plan, i) => (
-                  <PlanRow key={plan.id} plan={plan} index={i} onPay={() => setSelected(plan)} />
+                  <PlanRow key={plan.id} plan={plan} index={i} onPay={() => { setSelected(plan); setPlanOpen(true); }} />
                 ))}
               </div>
             </Accordion.Content>
@@ -742,7 +754,7 @@ export default function Tariffs() {
         </section>
       )}
 
-      <PlanDialog plan={selected} open={selected !== null} onOpenChange={(v) => !v && setSelected(null)} />
+      <PlanDialog plan={selected} open={planOpen} onOpenChange={setPlanOpen} />
     </div>
   );
 }

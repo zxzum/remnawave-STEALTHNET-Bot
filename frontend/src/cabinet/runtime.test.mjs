@@ -198,8 +198,8 @@ test("tariff cards show the admin checklist and the min-term price", async () =>
   assert.match(tariffs, /option\.days < best\.days \? option : best/);
   assert.match(tariffs, /\/\{minTermOption\.days\} дн\.<\/span>/);
   assert.doesNotMatch(tariffs, /от \{formatMoney\(perDay/);
-  // Свечение popular-карточки не срезается overflow-hidden аккордеона (бейдж -top-3 помещается в pt-6)
-  assert.match(tariffs, /px-4 pt-6 pb-5/);
+  // Свечение popular-карточки не срезается overflow-hidden аккордеона (glow 20px = pt-5, бейдж -top-3 помещается)
+  assert.match(tariffs, /px-4 pt-5 pb-5/);
 });
 
 test("tariff cards carry spec badges, whitelist accent and 46px pay buttons", async () => {
@@ -508,9 +508,34 @@ test("device rows show app and OS under the accented device name", async () => {
 
 test("quick actions ladder has hover on every step including link steps", async () => {
   const cabinet = await readFile(new URL("./pages/Cabinet.tsx", import.meta.url), "utf8");
-  // Прозрачные link-ступени получают hover-подложку, как у остальных кнопок лестницы
-  const linkSteps = cabinet.match(/variant: "link", size: "md" \}\), "h-\[46px\] w-full hover:bg-white\/6"/g) ?? [];
-  assert.ok(linkSteps.length >= 2, "обе link-ступени (Все тарифы / Пробный период) с hover:bg-white/6");
+  // Прозрачные link-ступени и outline-ступень — с явно видимым hover (6% белого на стекле не читается)
+  const linkSteps = cabinet.match(/variant: "link", size: "md" \}\), "h-\[46px\] w-full hover:bg-white\/10"/g) ?? [];
+  assert.ok(linkSteps.length >= 2, "обе link-ступени (Все тарифы / Пробный период) с hover:bg-white/10");
+  assert.match(cabinet, /variant: "outline", size: "md" \}\), "h-\[46px\] w-full hover:border-white\/30 hover:bg-white\/10"/);
+});
+
+test("plan dialog stays mounted while closing so the exit animation plays", async () => {
+  const tariffs = await readFile(new URL("./pages/Tariffs.tsx", import.meta.url), "utf8");
+  // Видимость диалога отделена от выбранного плана: иначе ранний return PlanDialog
+  // демонтирует Modal мгновенно и обрывает exit-анимацию (vaul/framer)
+  assert.match(tariffs, /<PlanDialog plan=\{selected\} open=\{planOpen\} onOpenChange=\{setPlanOpen\} \/>/);
+  assert.doesNotMatch(tariffs, /open=\{selected !== null\}/);
+});
+
+test("tariff accordion groups collapse freely, first group only seeded open once", async () => {
+  const tariffs = await readFile(new URL("./pages/Tariffs.tsx", import.meta.url), "utf8");
+  // Первая группа больше не принудительно открыта — юзер может свернуть всё
+  assert.doesNotMatch(tariffs, /visibleGroups/);
+  assert.match(tariffs, /value=\{openGroups\}/);
+  assert.match(tariffs, /onValueChange=\{setOpenGroups\}/);
+  // Анимация разворачивания на месте
+  assert.match(tariffs, /animate-\[accordion-down_0\.25s_ease-out\]/);
+});
+
+test("mobile user header lives only in the profile page", async () => {
+  const cabinet = await readFile(new URL("./pages/Cabinet.tsx", import.meta.url), "utf8");
+  // Шапка с аватаром/ID убрана с дашборда — остаётся только в Профиле (Profile.tsx)
+  assert.doesNotMatch(cabinet, /PageHeader/);
 });
 
 test("traffic package card is compact, icon-left, without the muddy gradient", async () => {
