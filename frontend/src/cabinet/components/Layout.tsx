@@ -94,15 +94,18 @@ function Sidebar() {
             >
               {({ isActive }) => (
                 <>
-                  {/* Пилл летит внутри своей группы: свой layoutId на группу навигации
-                      (раньше один id на обе группы давал двойную анимацию), монтируется
-                      только у активного пункта — ровно один motion.span на группу. */}
+                  {/* Пилл перелетает между пунктами и группами. Единый layoutId на обе группы безопасен:
+                      span монтируется только у активного пункта, поэтому в дереве всегда максимум ОДИН
+                      элемент с этим id (двойная анимация раунда 2 была из-за двух одновременно
+                      смонтированных пиллов, а не из-за общего id). */}
                   {isActive && (
                     <motion.span
                       aria-hidden
-                      layoutId="nav-pill-main"
+                      layoutId="nav-pill"
                       className="absolute left-0 h-6 w-1 rounded-full bg-accent-400 shadow-[0_0_12px_2px_rgba(109,155,255,0.7)]"
-                      transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ layout: { type: "spring", stiffness: 500, damping: 40 }, opacity: { duration: 0.15 } }}
                     />
                   )}
                   <Icon className="h-[18px] w-[18px]" strokeWidth={2.2} />
@@ -147,14 +150,16 @@ function Sidebar() {
         >
           {({ isActive }) => (
             <>
-              {/* Нижняя группа («Профиль») — отдельный layoutId: в группе один пункт,
-                  поэтому пилл просто появляется здесь и не конфликтует с верхней группой */}
+              {/* Тот же layoutId "nav-pill": перелёт из верхней группы в «Профиль».
+                  Безопасно благодаря единственности монтажа (см. комментарий выше). */}
               {isActive && (
                 <motion.span
                   aria-hidden
-                  layoutId="nav-pill-aux"
+                  layoutId="nav-pill"
                   className="absolute left-0 h-6 w-1 rounded-full bg-accent-400 shadow-[0_0_12px_2px_rgba(109,155,255,0.7)]"
-                  transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ layout: { type: "spring", stiffness: 500, damping: 40 }, opacity: { duration: 0.15 } }}
                 />
               )}
               <UserRound className="h-[18px] w-[18px]" strokeWidth={2.2} />
