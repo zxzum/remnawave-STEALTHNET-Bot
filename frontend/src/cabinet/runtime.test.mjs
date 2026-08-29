@@ -220,7 +220,7 @@ test("admin settings no longer expose the archived design selector", async () =>
 test("optional client services use new cabinet screens and production APIs", async () => {
   const app = await readFile(new URL("../App.tsx", import.meta.url), "utf8");
   const services = await readFile(new URL("./pages/Services.tsx", import.meta.url), "utf8");
-  for (const screen of ["CustomBuild", "ExtraOptions", "ProxyService", "SingboxService", "Gifts", "Tickets"]) {
+  for (const screen of ["CustomBuild", "ProxyService", "SingboxService", "Gifts", "Tickets"]) {
     assert.match(app, new RegExp(`<${screen} \\/>`));
   }
   for (const call of [

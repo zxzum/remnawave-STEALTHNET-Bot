@@ -188,13 +188,12 @@ function RequireClientAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-type ClientFeature = "customBuild" | "extraOptions" | "proxy" | "singbox" | "gifts" | "tickets";
+type ClientFeature = "customBuild" | "proxy" | "singbox" | "gifts" | "tickets";
 function RequireClientFeature({ feature, children }: { feature: ClientFeature; children: ReactNode }) {
   const { config } = useClientApp();
   if (!config) return null;
   const enabled = {
     customBuild: Boolean(config.customBuildConfig?.enabled),
-    extraOptions: Boolean(config.sellOptionsEnabled),
     proxy: Boolean(config.showProxyEnabled),
     singbox: Boolean(config.showSingboxEnabled),
     gifts: Boolean(config.giftSubscriptionsEnabled),

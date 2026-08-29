@@ -460,7 +460,6 @@ export function resolveOptionalNav(config: {
 }): string[] {
   return [
     config.customBuildConfig?.enabled && "custom-build",
-    config.sellOptionsEnabled && "extra-options",
     config.showProxyEnabled && "proxy",
     config.showSingboxEnabled && "singbox",
     config.giftSubscriptionsEnabled && "gifts",
