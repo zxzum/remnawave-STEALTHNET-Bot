@@ -40,6 +40,7 @@ import {
   Plus,
   Loader2,
   Pencil,
+  ArrowUpDown,
 } from "lucide-react";
 
 /**
@@ -102,6 +103,8 @@ export function AdminSecondarySubscriptionsPage() {
     page: 1,
     limit: 20,
     search: initialSearch || undefined,
+    sortBy: "createdAt",
+    sortDir: "desc",
   });
   
   const [searchInput, setSearchInput] = useState(initialSearch);
@@ -201,7 +204,7 @@ export function AdminSecondarySubscriptionsPage() {
 
   const handleResetFilters = () => {
     setSearchInput("");
-    setFilters({ page: 1, limit: 20 });
+    setFilters({ page: 1, limit: 20, sortBy: "createdAt", sortDir: "desc" });
     setSearchParams((prev) => {
       const p = new URLSearchParams(prev);
       p.delete("search");
@@ -370,7 +373,19 @@ export function AdminSecondarySubscriptionsPage() {
             <div className="flex flex-wrap items-center gap-2 mt-2 text-sm font-medium">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 border border-primary/20 px-2.5 py-0.5 text-[11px] font-semibold text-primary backdrop-blur-md">
                 <Gift className="h-3 w-3" />
-                Всего: <span className="tabular-nums">{data?.total || 0}</span>
+                В выборке: <span className="tabular-nums">{data?.total || 0}</span>
+              </span>
+              <span
+                title="Активные подписки с успешным VPN-платежом, без триала и admin_grant"
+                className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-500 dark:text-emerald-400 border border-emerald-500/20 backdrop-blur-md"
+              >
+                Активных оплаченных: <span className="tabular-nums">{data?.stats?.activePaid ?? 0}</span>
+              </span>
+              <span
+                title="Активные подписки, выданные через admin_grant"
+                className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-amber-500 dark:text-amber-400 border border-amber-500/20 backdrop-blur-md"
+              >
+                Активных admin_grant: <span className="tabular-nums">{data?.stats?.activeAdminGrant ?? 0}</span>
               </span>
               {data && data.items.length > 0 && (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-500 dark:text-emerald-400 border border-emerald-500/20 backdrop-blur-md">
@@ -411,8 +426,8 @@ export function AdminSecondarySubscriptionsPage() {
       >
         <Card className="bg-background/60 backdrop-blur-3xl border border-white/10 rounded-[2rem] p-6 shadow-xl">
           <h2 className="text-[11px] font-bold uppercase tracking-[0.25em] text-foreground/80 mb-4">Фильтры</h2>
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
-            <div className="flex-1 space-y-2">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            <div className="space-y-2 sm:col-span-2 xl:col-span-2">
               <Label className="text-xs">Поиск (Email / Telegram / подарочный код / отправитель)</Label>
               <div className="relative">
                 <Search className="absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
@@ -425,11 +440,12 @@ export function AdminSecondarySubscriptionsPage() {
                 />
               </div>
             </div>
-            
-            <div className="w-full sm:w-64 space-y-2">
+
+            <div className="space-y-2">
               <Label className="text-xs">Статус</Label>
               <div className="relative">
                 <select
+                  aria-label="Статус подарка"
                   className="flex h-11 w-full rounded-xl border border-white/10 bg-background/60 hover:border-primary/30 focus:border-primary/50 backdrop-blur-xl px-3 py-1 text-sm shadow-sm text-foreground focus:outline-none transition-colors appearance-none"
                   value={filters.giftStatus || ""}
                   onChange={(e) => handleFilterChange("giftStatus", e.target.value || undefined)}
@@ -444,7 +460,100 @@ export function AdminSecondarySubscriptionsPage() {
               </div>
             </div>
 
-            <div className="flex gap-3">
+            <div className="space-y-2">
+              <Label className="text-xs">Состояние</Label>
+              <select
+                aria-label="Состояние подписки"
+                className="flex h-11 w-full rounded-xl border border-white/10 bg-background/60 hover:border-primary/30 focus:border-primary/50 backdrop-blur-xl px-3 py-1 text-sm shadow-sm text-foreground focus:outline-none transition-colors appearance-none"
+                value={filters.activity || ""}
+                onChange={(e) => handleFilterChange("activity", e.target.value as AdminSecondarySubscriptionFilters["activity"] || undefined)}
+              >
+                <option value="" className="bg-background text-foreground">Все</option>
+                <option value="active" className="bg-background text-foreground">Активные</option>
+                <option value="expired" className="bg-background text-foreground">Истёкшие</option>
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs">Источник</Label>
+              <select
+                aria-label="Источник подписки"
+                className="flex h-11 w-full rounded-xl border border-white/10 bg-background/60 hover:border-primary/30 focus:border-primary/50 backdrop-blur-xl px-3 py-1 text-sm shadow-sm text-foreground focus:outline-none transition-colors appearance-none"
+                value={filters.paymentSource || ""}
+                onChange={(e) => handleFilterChange("paymentSource", e.target.value as AdminSecondarySubscriptionFilters["paymentSource"] || undefined)}
+              >
+                <option value="" className="bg-background text-foreground">Все</option>
+                <option value="paid" className="bg-background text-foreground">Реально оплачены</option>
+                <option value="admin_grant" className="bg-background text-foreground">Выданы admin_grant</option>
+                <option value="trial" className="bg-background text-foreground">Триал</option>
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs flex items-center gap-1"><ArrowUpDown className="h-3 w-3" /> Сортировка</Label>
+              <select
+                aria-label="Сортировка подписок"
+                className="flex h-11 w-full rounded-xl border border-white/10 bg-background/60 hover:border-primary/30 focus:border-primary/50 backdrop-blur-xl px-3 py-1 text-sm shadow-sm text-foreground focus:outline-none transition-colors appearance-none"
+                value={filters.sortBy || "createdAt"}
+                onChange={(e) => handleFilterChange("sortBy", e.target.value as AdminSecondarySubscriptionFilters["sortBy"])}
+              >
+                <option value="createdAt" className="bg-background text-foreground">Дата создания</option>
+                <option value="expireAt" className="bg-background text-foreground">Дата окончания</option>
+                <option value="updatedAt" className="bg-background text-foreground">Дата обновления</option>
+                <option value="subscriptionIndex" className="bg-background text-foreground">Индекс подписки</option>
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs">Направление</Label>
+              <select
+                aria-label="Направление сортировки"
+                className="flex h-11 w-full rounded-xl border border-white/10 bg-background/60 hover:border-primary/30 focus:border-primary/50 backdrop-blur-xl px-3 py-1 text-sm shadow-sm text-foreground focus:outline-none transition-colors appearance-none"
+                value={filters.sortDir || "desc"}
+                onChange={(e) => handleFilterChange("sortDir", e.target.value as "asc" | "desc")}
+              >
+                <option value="desc" className="bg-background text-foreground">По убыванию</option>
+                <option value="asc" className="bg-background text-foreground">По возрастанию</option>
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs">Записей на странице</Label>
+              <select
+                aria-label="Количество записей на странице"
+                className="flex h-11 w-full rounded-xl border border-white/10 bg-background/60 hover:border-primary/30 focus:border-primary/50 backdrop-blur-xl px-3 py-1 text-sm shadow-sm text-foreground focus:outline-none transition-colors appearance-none"
+                value={filters.limit || 20}
+                onChange={(e) => handleFilterChange("limit", Number(e.target.value))}
+              >
+                <option value="20" className="bg-background text-foreground">20</option>
+                <option value="50" className="bg-background text-foreground">50</option>
+                <option value="100" className="bg-background text-foreground">100</option>
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs">Созданы с</Label>
+              <Input
+                aria-label="Дата создания с"
+                type="date"
+                value={filters.dateFrom || ""}
+                onChange={(e) => handleFilterChange("dateFrom", e.target.value || undefined)}
+                className="h-11 rounded-xl bg-background/60 border-white/10"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs">Созданы по</Label>
+              <Input
+                aria-label="Дата создания по"
+                type="date"
+                value={filters.dateTo || ""}
+                onChange={(e) => handleFilterChange("dateTo", e.target.value || undefined)}
+                className="h-11 rounded-xl bg-background/60 border-white/10"
+              />
+            </div>
+
+            <div className="flex items-end gap-3 sm:col-span-2 xl:col-span-2">
               <Button variant="secondary" onClick={handleSearch} className="h-11 rounded-xl bg-foreground/[0.03] dark:bg-white/[0.03] hover:bg-foreground/[0.06] dark:hover:bg-white/[0.08] border border-white/10 transition-colors px-5">
                 <Search className="mr-2 h-4 w-4" />
                 Найти
@@ -641,31 +750,36 @@ export function AdminSecondarySubscriptionsPage() {
           </table>
         </div>
 
-        {data && data.totalPages > 1 && (
-          <div className="flex items-center justify-between p-5 border-t border-white/10 bg-background/40 backdrop-blur-xl relative z-10">
+        {data && (
+          <div className="flex flex-wrap items-center justify-between gap-3 p-5 border-t border-white/10 bg-background/40 backdrop-blur-xl relative z-10">
             <span className="text-sm font-medium text-muted-foreground">
-              Страница {data.page} из {data.totalPages}
+              {data.total === 0
+                ? "Ничего не найдено"
+                : `Показано ${(data.page - 1) * data.limit + 1}–${Math.min(data.page * data.limit, data.total)} из ${data.total}`}
             </span>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="rounded-xl border-white/10 bg-foreground/[0.03] dark:bg-white/[0.03] hover:bg-foreground/[0.06] dark:hover:bg-white/[0.08] shadow-sm transition-colors"
-                disabled={data.page <= 1}
-                onClick={() => setFilters((p) => ({ ...p, page: p.page! - 1 }))}
-              >
-                Назад
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="rounded-xl border-white/10 bg-foreground/[0.03] dark:bg-white/[0.03] hover:bg-foreground/[0.06] dark:hover:bg-white/[0.08] shadow-sm transition-colors"
-                disabled={data.page >= data.totalPages}
-                onClick={() => setFilters((p) => ({ ...p, page: p.page! + 1 }))}
-              >
-                Вперед
-              </Button>
-            </div>
+            {data.totalPages > 1 && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground mr-2">Страница {data.page} из {data.totalPages}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-xl border-white/10 bg-foreground/[0.03] dark:bg-white/[0.03] hover:bg-foreground/[0.06] dark:hover:bg-white/[0.08] shadow-sm transition-colors"
+                  disabled={data.page <= 1}
+                  onClick={() => setFilters((p) => ({ ...p, page: p.page! - 1 }))}
+                >
+                  Назад
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-xl border-white/10 bg-foreground/[0.03] dark:bg-white/[0.03] hover:bg-foreground/[0.06] dark:hover:bg-white/[0.08] shadow-sm transition-colors"
+                  disabled={data.page >= data.totalPages}
+                  onClick={() => setFilters((p) => ({ ...p, page: p.page! + 1 }))}
+                >
+                  Вперед
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </motion.div>
