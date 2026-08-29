@@ -1546,6 +1546,8 @@ export const api = {
     if (filters?.limit) qs.set("limit", String(filters.limit));
     if (filters?.search) qs.set("search", filters.search);
     if (filters?.giftStatus) qs.set("giftStatus", filters.giftStatus);
+    if (filters?.activity) qs.set("activity", filters.activity);
+    if (filters?.paymentSource) qs.set("paymentSource", filters.paymentSource);
     if (filters?.dateFrom) qs.set("dateFrom", filters.dateFrom);
     if (filters?.dateTo) qs.set("dateTo", filters.dateTo);
     if (filters?.sortBy) qs.set("sortBy", filters.sortBy);
@@ -4701,6 +4703,10 @@ export interface AdminSecondarySubscriptionsResponse {
   page: number;
   limit: number;
   totalPages: number;
+  stats: {
+    activePaid: number;
+    activeAdminGrant: number;
+  };
 }
 
 export interface AdminSecondarySubscriptionDetail extends AdminSecondarySubscription {
@@ -4721,9 +4727,11 @@ export interface AdminSecondarySubscriptionFilters {
   limit?: number;
   search?: string;
   giftStatus?: string;
+  activity?: "active" | "expired";
+  paymentSource?: "paid" | "admin_grant" | "trial";
   dateFrom?: string;
   dateTo?: string;
-  sortBy?: string;
+  sortBy?: "createdAt" | "updatedAt" | "subscriptionIndex" | "expireAt";
   sortDir?: "asc" | "desc";
 }
 

@@ -144,7 +144,11 @@ import {
 import { runRule, runAllRules, getEligibleClientIds } from "../auto-broadcast/auto-broadcast.service.js";
 import { testNalogConnection } from "../nalog/nalog.service.js";
 import { adminCreateGiftCode } from "../gift/gift.service.js";
-import { lockTrialAfterSubscription } from "../trial/trial-purchase-lock.service.js";
+import {
+  adminGrantPaymentWhere,
+  lockTrialAfterSubscription,
+  paidVpnPaymentWhere,
+} from "../trial/trial-purchase-lock.service.js";
 import { languageRouter } from "./language.routes.js";
 import { adminGramadsRouter } from "./gramads.routes.js";
 
@@ -6909,6 +6913,49 @@ adminRouter.delete("/admins/:id", asyncRoute(async (req, res) => {
   return res.json({ success: true });
 }));
 
+type SecondarySubscriptionActivity = "active" | "expired";
+type SecondarySubscriptionPaymentSource = "paid" | "admin_grant" | "trial";
+
+export function buildSecondarySubscriptionConditions(options: {
+  activity?: SecondarySubscriptionActivity;
+  paymentSource?: SecondarySubscriptionPaymentSource;
+  now?: Date;
+} = {}): Prisma.SubscriptionWhereInput[] {
+  const conditions: Prisma.SubscriptionWhereInput[] = [];
+  const now = options.now ?? new Date();
+
+  if (options.paymentSource === "paid") {
+    conditions.push({ trialId: null });
+    conditions.push({ payments: { some: paidVpnPaymentWhere } });
+  } else if (options.paymentSource === "admin_grant") {
+    conditions.push({ trialId: null });
+    conditions.push({ payments: { some: adminGrantPaymentWhere } });
+  } else if (options.paymentSource === "trial") {
+    conditions.push({ trialId: { not: null } });
+  }
+
+  if (options.activity === "active") conditions.push({ expireAt: { gt: now } });
+  if (options.activity === "expired") conditions.push({ expireAt: { lte: now } });
+
+  return conditions;
+}
+
+export function getActiveSecondarySubscriptionStatsWhere(now = new Date()): {
+  activePaid: Prisma.SubscriptionWhereInput;
+  activeAdminGrant: Prisma.SubscriptionWhereInput;
+} {
+  const activeBase: Prisma.SubscriptionWhereInput = {
+    deletionRequestedAt: null,
+    remnawaveUuid: { not: null },
+    expireAt: { gt: now },
+    trialId: null,
+  };
+  return {
+    activePaid: { ...activeBase, payments: { some: paidVpnPaymentWhere } },
+    activeAdminGrant: { ...activeBase, payments: { some: adminGrantPaymentWhere } },
+  };
+}
+
 // ────── Secondary Subscriptions Admin API ──────
 
 adminRouter.get("/secondary-subscriptions", asyncRoute(async (req, res) => {
@@ -6921,9 +6968,18 @@ adminRouter.get("/secondary-subscriptions", asyncRoute(async (req, res) => {
   const dateTo = typeof req.query.dateTo === "string" ? req.query.dateTo : "";
   const sortBy = typeof req.query.sortBy === "string" ? req.query.sortBy : "createdAt";
   const sortDir = req.query.sortDir === "asc" ? "asc" as const : "desc" as const;
+  const paymentSource = req.query.paymentSource === "paid"
+    || req.query.paymentSource === "admin_grant"
+    || req.query.paymentSource === "trial"
+    ? req.query.paymentSource
+    : undefined;
+  const activity = req.query.activity === "active" || req.query.activity === "expired"
+    ? req.query.activity
+    : undefined;
+  const now = new Date();
 
   const where: Prisma.SubscriptionWhereInput = { deletionRequestedAt: null };
-  const conditions: Prisma.SubscriptionWhereInput[] = [];
+  const conditions: Prisma.SubscriptionWhereInput[] = buildSecondarySubscriptionConditions({ paymentSource, activity, now });
 
   // Gift status filter
   if (giftStatus === "owned") {
@@ -6995,7 +7051,10 @@ adminRouter.get("/secondary-subscriptions", asyncRoute(async (req, res) => {
   }
   if (dateTo) {
     const d = new Date(dateTo);
-    if (!isNaN(d.getTime())) conditions.push({ createdAt: { lte: d } });
+    if (!isNaN(d.getTime())) {
+      d.setUTCDate(d.getUTCDate() + 1);
+      conditions.push({ createdAt: { lt: d } });
+    }
   }
 
   if (conditions.length > 0) where.AND = conditions;
@@ -7005,10 +7064,15 @@ adminRouter.get("/secondary-subscriptions", asyncRoute(async (req, res) => {
     createdAt: { createdAt: sortDir },
     updatedAt: { updatedAt: sortDir },
     subscriptionIndex: { subscriptionIndex: sortDir },
+    expireAt: { expireAt: sortDir },
   };
-  const orderBy = allowedSorts[sortBy] ?? { createdAt: sortDir };
+  const orderBy: Prisma.SubscriptionOrderByWithRelationInput[] = [
+    allowedSorts[sortBy] ?? { createdAt: sortDir },
+    { id: "asc" },
+  ];
+  const statsWhere = getActiveSecondarySubscriptionStatsWhere(now);
 
-  const [items, total] = await Promise.all([
+  const [items, total, activePaid, activeAdminGrant] = await Promise.all([
     prisma.subscription.findMany({
       where,
       skip,
@@ -7045,6 +7109,8 @@ adminRouter.get("/secondary-subscriptions", asyncRoute(async (req, res) => {
       },
     }),
     prisma.subscription.count({ where }),
+    prisma.subscription.count({ where: statsWhere.activePaid }),
+    prisma.subscription.count({ where: statsWhere.activeAdminGrant }),
   ]);
 
   // резолвим имена админов одним batch-запросом — не дёргаем БД в цикле.
@@ -7088,6 +7154,7 @@ adminRouter.get("/secondary-subscriptions", asyncRoute(async (req, res) => {
     page,
     limit,
     totalPages: Math.ceil(total / limit),
+    stats: { activePaid, activeAdminGrant },
   });
 }));
 
