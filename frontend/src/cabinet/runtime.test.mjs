@@ -152,10 +152,24 @@ test("Mini App refreshes its account from Telegram even with a saved token", asy
 
 test("checkout preserves the approved Platega block and uses production payment APIs", async () => {
   const tariffs = await readFile(new URL("./pages/Tariffs.tsx", import.meta.url), "utf8");
+  const paymentMethods = await readFile(new URL("./components/ui/payment-methods.tsx", import.meta.url), "utf8");
   const prefetch = await readFile(new URL("./components/ui/prefetch.ts", import.meta.url), "utf8");
-  assert.match(tariffs, /plategaMethods\.length > 0/);
-  assert.match(tariffs, /payPlatega\(sbpMethod\.id\)/);
-  assert.match(tariffs, /Рекомендуем/);
+  // Сетка Platega переехала в ui/payment-methods: пины разметки смотрят туда,
+  // колбэки и платёжные API остаются на странице
+  assert.match(paymentMethods, /platega\.sbp \|\| platega\.card \|\| platega\.crypto/);
+  assert.match(paymentMethods, /onPlatega\(platega\.sbp/);
+  assert.match(paymentMethods, /Рекомендуем/);
+  assert.match(paymentMethods, /по QR-коду/);
+  assert.match(paymentMethods, /RUB · любой банк/);
+  assert.match(paymentMethods, /Банковские платежи и крипта/);
+  assert.match(paymentMethods, /Крипта через Platega/);
+  assert.match(paymentMethods, /USDT · TON · BTC/);
+  // R12: акцентные ячейки (СБП/Карта) — яркий accent-градиент + glow, а не бледная тонировка
+  assert.match(paymentMethods, /tone === "accent"/);
+  assert.match(paymentMethods, /linear-gradient\(120deg,var\(--color-accent-500\)/);
+  assert.match(paymentMethods, /shadow-\[var\(--shadow-neon-blue\)/);
+  assert.match(tariffs, /<PaymentMethodsBlock/);
+  assert.match(tariffs, /onPlatega=\{payPlatega\}/);
   assert.match(tariffs, /api\.clientCheckPromoCode/);
   assert.match(tariffs, /api\.clientPayByBalance/);
   assert.match(tariffs, /api\.clientCreatePlategaPayment/);

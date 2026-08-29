@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import * as Accordion from "@radix-ui/react-accordion";
@@ -11,8 +11,7 @@ import { Checkbox } from "../components/ui/checkbox";
 import { Button, buttonVariants } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Separator } from "../components/ui/separator";
-import { IconTile } from "../components/ui/icon-tile";
-import { AnimatedNumber } from "../components/ui/animated-number";
+import { PaymentMethodsBlock } from "../components/ui/payment-methods";
 import { useSuccess } from "../components/ui/success-dialog";
 import { invalidatePrefetch, prefetchConversionPreview, prefetchPublicConfig } from "../components/ui/prefetch";
 import {
@@ -22,14 +21,8 @@ import {
   Signal,
   Check,
   CreditCard,
-  Globe,
-  Loader2,
   RefreshCw,
-  Wallet,
-  Zap,
   Flame,
-  QrCode,
-  Bitcoin,
 } from "lucide-react";
 import { cn } from "../lib/cn";
 import { useApp } from "../store/AppContext";
@@ -51,71 +44,6 @@ function formatMoney(value: number, currency: string) {
   } catch {
     return `${value.toLocaleString("ru-RU")} ${currency.toUpperCase()}`;
   }
-}
-
-/**
- * Ряд способа оплаты — единая строка h-11: иконка и название слева, подпись/баланс справа.
- * Все методы оплаты (баланс, Platega, CryptoBot, RollyPay) строятся из него — сетка без
- * разнобоя высот и без ссылок-строк по центру.
- */
-function PaymentRow({
-  icon,
-  title,
-  sub,
-  trailing,
-  tone = "default",
-  size = "md",
-  loading,
-  disabled,
-  className,
-  type = "button",
-  ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  icon?: ReactNode;
-  title: ReactNode;
-  /** Подпись под названием («USDT · TON · BTC») */
-  sub?: ReactNode;
-  /** Слот справа (баланс) */
-  trailing?: ReactNode;
-  /** accent — акцентные ячейки Platega (СБП/Карта) */
-  tone?: "default" | "accent";
-  /** sm — ячейка сетки (мельче шрифт), md — ряд на всю ширину */
-  size?: "md" | "sm";
-  loading?: boolean;
-}) {
-  const titleSize = size === "sm" ? "text-xs" : "text-sm";
-  return (
-    <button
-      type={type}
-      disabled={disabled || loading}
-      className={cn(
-        "flex h-11 w-full cursor-pointer items-center gap-2.5 rounded-2xl border px-3 text-left transition-all duration-200 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-400",
-        tone === "accent"
-          ? "border-accent-400/45 bg-accent-500/12 text-white hover:border-accent-400/80 hover:bg-accent-500/20"
-          : "glass text-fog-100 hover:bg-white/8 hover:border-white/20",
-        className,
-      )}
-      {...props}
-    >
-      {loading ? (
-        <>
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-          <span className={cn("truncate font-extrabold", titleSize)}>Оплата…</span>
-        </>
-      ) : (
-        <>
-          {icon}
-          <span className="flex min-w-0 flex-1 flex-col justify-center leading-tight">
-            <span className={cn("truncate font-bold", titleSize)}>{title}</span>
-            {sub != null && (
-              <span className={cn("truncate font-medium text-fog-500", size === "sm" ? "text-[10px]" : "text-[11px]")}>{sub}</span>
-            )}
-          </span>
-          {trailing}
-        </>
-      )}
-    </button>
-  );
 }
 
 /* ---------------- Конфигуратор + оплата ---------------- */
@@ -356,20 +284,8 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
   const payCryptoBot = () => state.token && openPayment("Crypto Bot", () => api.cryptopayCreatePayment(state.token!, purchasePayload));
   const payRollyPay = () => state.token && openPayment("RollyPay", () => api.rollypayCreatePayment(state.token!, purchasePayload));
   const plategaMethods = config?.plategaMethods ?? [];
+  // Группировка методов остаётся на странице — блок оплаты получает готовые группы пропсом
   const { sbp: sbpMethod, card: cardMethod, crypto: cryptoMethod, other: otherPlategaMethods } = groupPlategaMethods(plategaMethods);
-  // Второй ряд Platega-плита: крипта + остальные методы. Нечётный последний тянется на 2 колонки,
-  // чтобы в сетке не оставалось пустой ячейки
-  const plategaSecondary = [
-    ...(cryptoMethod
-      ? [{ key: `crypto-${cryptoMethod.id}`, method: cryptoMethod, title: "Крипта через Platega", icon: <Bitcoin className="h-4 w-4 text-fog-300" /> }]
-      : []),
-    ...otherPlategaMethods.map((method) => ({
-      key: `other-${method.id}`,
-      method,
-      title: method.label,
-      icon: <Globe className="h-4 w-4 text-fog-300" />,
-    })),
-  ];
 
   return (
     <Modal
@@ -631,92 +547,21 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
               <Button variant="secondary" type="submit">Применить</Button>
             </form>
 
-            {/* способы оплаты — единая сетка рядов h-11 */}
+            {/* способы оплаты — единая сетка рядов h-11 (разметка в ui/payment-methods) */}
             <p className="mt-4 mb-2 text-xs font-semibold text-fog-500">Способ оплаты</p>
-            <div className="flex flex-col gap-2">
-              {user.balance > 0 && (
-                <PaymentRow
-                  loading={paying}
-                  disabled={user.balance < price}
-                  onClick={payBalance}
-                  icon={<Wallet className="h-4 w-4 text-mint-400" />}
-                  title="С баланса"
-                  trailing={<AnimatedNumber value={user.balance} format={(v) => `${v.toLocaleString("ru-RU")} ₽`} className="text-xs font-bold tabular-nums" />}
-                />
-              )}
-
-              {/* Platega — основной провайдер: акцентный плейт с сеткой методов */}
-              {plategaMethods.length > 0 && (
-                <div className="rounded-2xl border border-accent-400/40 bg-accent-500/8 p-3 shadow-neon-blue">
-                  <div className="mb-2 flex items-center gap-2.5">
-                    <IconTile size="sm">
-                      <CreditCard className="h-4 w-4" />
-                    </IconTile>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-bold leading-tight">Platega</p>
-                      <p className="text-[10px] leading-tight text-fog-500">Банковские платежи и крипта</p>
-                    </div>
-                    <span className="rounded-full bg-accent-500/20 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-accent-400">
-                      Рекомендуем
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {sbpMethod && (
-                      <PaymentRow
-                        size="sm"
-                        tone="accent"
-                        loading={paying}
-                        onClick={() => payPlatega(sbpMethod.id)}
-                        icon={<QrCode className="h-4 w-4 text-accent-400" />}
-                        title="СБП"
-                        sub="по QR-коду"
-                      />
-                    )}
-                    {cardMethod && (
-                      <PaymentRow
-                        size="sm"
-                        tone="accent"
-                        loading={paying}
-                        onClick={() => payPlatega(cardMethod.id)}
-                        icon={<CreditCard className="h-4 w-4 text-accent-400" />}
-                        title="Карта"
-                        sub="RUB · любой банк"
-                      />
-                    )}
-                    {plategaSecondary.map((cell, index) => (
-                      <PaymentRow
-                        key={cell.key}
-                        size="sm"
-                        loading={paying}
-                        className={index === plategaSecondary.length - 1 && plategaSecondary.length % 2 === 1 ? "col-span-2" : undefined}
-                        onClick={() => payPlatega(cell.method.id)}
-                        icon={cell.icon}
-                        title={cell.title}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {config?.cryptopayEnabled && (
-                <PaymentRow
-                  loading={paying}
-                  onClick={payCryptoBot}
-                  icon={<Zap className="h-4 w-4 text-amber-glow" />}
-                  title="Crypto Bot"
-                  sub="USDT · TON · BTC"
-                />
-              )}
-              {config?.rollypayEnabled && plan.currency.toUpperCase() === "RUB" && (
-                <PaymentRow
-                  loading={paying}
-                  onClick={payRollyPay}
-                  icon={<CreditCard className="h-4 w-4 text-emerald-300" />}
-                  title="RollyPay"
-                  sub="Оплата в рублях"
-                />
-              )}
-            </div>
+            <PaymentMethodsBlock
+              amount={price}
+              currency={plan.currency}
+              balance={user.balance}
+              onBalancePay={payBalance}
+              platega={{ sbp: sbpMethod, card: cardMethod, crypto: cryptoMethod, other: otherPlategaMethods }}
+              loading={paying}
+              onPlatega={payPlatega}
+              onCryptoBot={payCryptoBot}
+              onRollyPay={payRollyPay}
+              cryptoEnabled={config?.cryptopayEnabled}
+              rollyEnabled={config?.rollypayEnabled}
+            />
           </motion.div>
         )}
       </AnimatePresence>
