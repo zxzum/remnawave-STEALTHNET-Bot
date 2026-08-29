@@ -341,10 +341,12 @@ body.cabinet-ui-active .bank-card:hover .card-shine {
     animation-duration: 1ms;
   }
   /* vaul-шторка выше исключена — схлопываем её отдельно (Radix ждёт animationend,
-     поэтому unmount всё равно происходит после «анимации», просто мгновенно) */
+     поэтому unmount всё равно происходит после «анимации», просто мгновенно).
+     vaul анимирует инлайн-transition'ом, а не CSS-анимацией — режем обе длительности */
   body.cabinet-ui-active [data-vaul-drawer][data-state="closed"],
   body.cabinet-ui-active [data-vaul-overlay][data-state="closed"] {
     animation-duration: 1ms;
+    transition-duration: 1ms !important; /* vaul ставит transition инлайном — перебиваем */
   }
 }
 
