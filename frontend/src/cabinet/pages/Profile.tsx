@@ -90,7 +90,8 @@ function BankCard() {
           className="relative aspect-[1.586/1] w-full cursor-pointer select-none [transform-style:preserve-3d]"
         >
           {/* front */}
-          <div className="absolute inset-0 overflow-hidden rounded-[2rem] border border-white/12 bg-gradient-to-br from-ink-700 via-[#131c3d] to-[#1b2660] shadow-[0_32px_80px_-24px_rgba(10,20,60,0.9)] backface-hidden">
+          {/* bank-card — хук для hover-блика .card-shine (cabinet.css) */}
+          <div className="bank-card absolute inset-0 overflow-hidden rounded-[2rem] border border-white/12 bg-gradient-to-br from-ink-700 via-[#131c3d] to-[#1b2660] shadow-[0_32px_80px_-24px_rgba(10,20,60,0.9)] backface-hidden">
             <div className="absolute inset-0 bg-[radial-gradient(90%_70%_at_85%_100%,rgba(109,155,255,0.22),transparent_60%),radial-gradient(60%_50%_at_10%_0%,rgba(255,255,255,0.08),transparent_60%)]" />
             {/* декоративные круги */}
             <div className="absolute -right-16 -bottom-20 h-56 w-56 rounded-full bg-accent-500/20 blur-2xl" />

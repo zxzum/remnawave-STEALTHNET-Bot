@@ -96,17 +96,22 @@ body.cabinet-ui-active *::-webkit-scrollbar-thumb:hover {
   body.cabinet-ui-active .btn-primary:active {
     transform: scale(0.965);
   }
-  /* liquid light sweep */
+  /* liquid light sweep — блик только под курсором. В покое полоса заперта
+     за левым краем (overflow: hidden) и не анимируется: бесконечный цикл
+     жёг CPU в простое. Позиция — через transform (compositor-only),
+     а не через left (layout на каждый кадр) */
   body.cabinet-ui-active .btn-primary::after {
     content: "";
     position: absolute;
     top: 0;
-    left: -80%;
+    left: 0;
     width: 55%;
     height: 100%;
     background: linear-gradient(100deg, transparent, rgb(255 255 255 / 0.28), transparent);
-    transform: skewX(-18deg);
-    animation: sweep 4.5s ease-in-out infinite;
+    transform: translateX(-146%) skewX(-18deg);
+  }
+  body.cabinet-ui-active .btn-primary:hover::after {
+    animation: sweep 1.4s ease-in-out;
   }
 
   body.cabinet-ui-active .btn-ghost {
@@ -221,9 +226,10 @@ body.cabinet-ui-active *::-webkit-scrollbar-thumb:hover {
   }
 }
 
+/* Одно пересечение блика за hover (раньше — бесконечный цикл с простоями) */
 @keyframes sweep {
-  0%, 55% { left: -80%; }
-  85%, 100% { left: 130%; }
+  from { transform: translateX(-146%) skewX(-18deg); }
+  to { transform: translateX(236%) skewX(-18deg); }
 }
 
 @keyframes float-slow {
@@ -254,17 +260,17 @@ body.cabinet-ui-active [data-state="closed"][class*="backdrop-blur"] {
   animation: cabinet-dialog-close 180ms ease-in both;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  body.cabinet-ui-active [role="dialog"][data-state="closed"],
-  body.cabinet-ui-active [data-state="closed"][class*="backdrop-blur"] {
-    animation-duration: 1ms;
-  }
-}
-
+/* Фоновые орбы: один медленный «вдох» при появлении — и стоп.
+   Бесконечный дрейф трёх огромных blur-слоёв жёг CPU в простое
+   (основная жалоба пользователя); сами орбы остаются на месте,
+   100% кадр совпадает с исходной позицией, поэтому стоп незаметен. */
 body.cabinet-ui-active .animate-float-slow {
-  animation: float-slow 14s ease-in-out infinite;
+  animation: float-slow 14s ease-in-out;
 }
 
+/* Единственная бесконечная анимация на десктопе: крошечный индикатор
+   (0.5rem), repaint — лишь его пульсирующая тень. На тач-устройствах
+   глушится блоком ниже. */
 body.cabinet-ui-active .status-dot {
   width: 0.5rem;
   height: 0.5rem;
@@ -273,8 +279,9 @@ body.cabinet-ui-active .status-dot {
   animation: pulse-dot 2.4s ease-in-out infinite;
 }
 
-/* Card shine sweep (bank card glint) — редкий, приглушённый,
-   полностью уходит за границы карты */
+/* Card shine sweep (bank card glint) — только по hover: в покое полоса
+   заперта за левым краем карты (overflow: hidden) и не анимируется.
+   Скорость пересечения та же, что в старом 10s-цикле (22% от 10s = 2.2s). */
 body.cabinet-ui-active .card-shine {
   position: absolute;
   top: -30%;
@@ -283,14 +290,34 @@ body.cabinet-ui-active .card-shine {
   width: 45%;
   background: linear-gradient(100deg, transparent, rgb(255 255 255 / 0.1), transparent);
   filter: blur(10px);
-  animation: card-sweep 10s ease-in-out infinite;
+  transform: translateX(-170%) skewX(-18deg);
   pointer-events: none;
+}
+body.cabinet-ui-active .bank-card:hover .card-shine {
+  animation: card-sweep 2.2s ease-in-out;
 }
 
 @keyframes card-sweep {
-  0% { transform: translateX(-170%) skewX(-18deg); }
-  22% { transform: translateX(330%) skewX(-18deg); }
-  100% { transform: translateX(330%) skewX(-18deg); }
+  from { transform: translateX(-170%) skewX(-18deg); }
+  to { transform: translateX(330%) skewX(-18deg); }
+}
+
+/* Полный prefers-reduced-motion: никакой декоративной анимации, включая
+   hover-блики и индикатор. Закрытие диалога не отменяем, а схлопываем
+   мгновенно — Radix ждёт завершения exit-анимации перед unmount. */
+@media (prefers-reduced-motion: reduce) {
+  body.cabinet-ui-active .btn-primary::after,
+  body.cabinet-ui-active .btn-primary:hover::after,
+  body.cabinet-ui-active .animate-float-slow,
+  body.cabinet-ui-active .card-shine,
+  body.cabinet-ui-active .bank-card:hover .card-shine,
+  body.cabinet-ui-active .status-dot {
+    animation: none;
+  }
+  body.cabinet-ui-active [role="dialog"][data-state="closed"],
+  body.cabinet-ui-active [data-state="closed"][class*="backdrop-blur"] {
+    animation-duration: 1ms;
+  }
 }
 
 /* Hide scrollbars for horizontal tab strips */
@@ -319,10 +346,13 @@ body.cabinet-ui-active .bottom-nav-glass {
   body.cabinet-ui-active .bottom-nav-glass {
     background: rgb(7 5 18 / 0.76);
   }
+}
 
+/* Мобильный покой: ни одной анимации без курсора. На тач-устройствах
+   hover-блики (.btn-primary::after, .card-shine) недостижимы сами по себе;
+   (max-width: 640px) добавлен, чтобы покой был и у узкого окна */
+@media (hover: none) and (pointer: coarse), (max-width: 640px) {
   body.cabinet-ui-active .animate-float-slow,
-  body.cabinet-ui-active .btn-primary::after,
-  body.cabinet-ui-active .card-shine,
   body.cabinet-ui-active .status-dot {
     animation: none;
   }
