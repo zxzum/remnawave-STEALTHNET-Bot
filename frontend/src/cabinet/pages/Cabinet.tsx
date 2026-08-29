@@ -138,8 +138,11 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
               {d.os === "macOS" || d.os === "Windows" ? <Monitor className="h-4 w-4" /> : <Smartphone className="h-4 w-4" />}
             </IconTile>
             <div className="min-w-0 flex-1">
+              {/* Акцент на имени устройства; строкой ниже — приложение и ОС
+                  (appName от remnawave; если приложения нет, app = platform — не дублируем) */}
               <p className="truncate font-bold">{d.name}</p>
-              <p className={cn("text-sm", d.connectedNow ? "text-mint-400" : "text-fog-600")}>
+              <p className="truncate text-xs text-fog-500">{d.app && d.app !== d.os ? `${d.app} · ${d.os}` : d.os}</p>
+              <p className={cn("text-xs", d.connectedNow ? "text-mint-400" : "text-fog-600")}>
                 {d.connectedNow ? "Подключено сейчас" : "Не в сети"}
               </p>
             </div>
@@ -402,13 +405,14 @@ export default function Cabinet() {
                 <KeyRound />
                 Открыть ключи доступа
               </Link>
-              {/* link вместо ghost: token ghost рисует подложку, а по референсу 4-я ступень — прозрачный текст */}
-              <Link to="/cabinet/tariffs" className={cn(buttonVariants({ variant: "link", size: "md" }), "h-[46px] w-full")}>
+              {/* link вместо ghost: token ghost рисует постоянную подложку, а по референсу 4-я ступень —
+                  прозрачный текст; hover-подложку добавляем сами, чтобы все кнопки лестницы реагировали на наведение */}
+              <Link to="/cabinet/tariffs" className={cn(buttonVariants({ variant: "link", size: "md" }), "h-[46px] w-full hover:bg-white/6")}>
                 <Layers />
                 Все тарифы
               </Link>
               {availableTrials.length > 0 && (
-                <Link to="/cabinet/dashboard?trial=1" className={cn(buttonVariants({ variant: "link", size: "md" }), "h-[46px] w-full")}>
+                <Link to="/cabinet/dashboard?trial=1" className={cn(buttonVariants({ variant: "link", size: "md" }), "h-[46px] w-full hover:bg-white/6")}>
                   <Gift />
                   Активировать пробный период
                 </Link>

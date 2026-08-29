@@ -198,8 +198,37 @@ test("tariff cards show the admin checklist and the min-term price", async () =>
   assert.match(tariffs, /option\.days < best\.days \? option : best/);
   assert.match(tariffs, /\/\{minTermOption\.days\} дн\.<\/span>/);
   assert.doesNotMatch(tariffs, /от \{formatMoney\(perDay/);
-  // Свечение popular-карточки не срезается overflow-hidden аккордеона
-  assert.match(tariffs, /px-4 pt-8 pb-5/);
+  // Свечение popular-карточки не срезается overflow-hidden аккордеона (бейдж -top-3 помещается в pt-6)
+  assert.match(tariffs, /px-4 pt-6 pb-5/);
+});
+
+test("tariff cards carry spec badges, whitelist accent and 46px pay buttons", async () => {
+  const tariffs = await readFile(new URL("./pages/Tariffs.tsx", import.meta.url), "utf8");
+  // Бейджи-характеристики рядом с переносами: срок/устройства/трафик/белые списки
+  assert.match(tariffs, /flex flex-wrap gap-1\.5/);
+  assert.match(tariffs, /Срок: от \{minTermOption\.days\} дн\./);
+  assert.match(tariffs, /Устройства: \{plan\.maxExtraDevices > 0/);
+  assert.match(tariffs, /Трафик: \{plan\.traffic\}/);
+  assert.match(tariffs, /Белые списки: \{plan\.whitelistGB!\.toFixed\(0\)\} ГБ/);
+  // Whitelist-карточки — сдержанный amber-акцент поверх стекла
+  assert.match(tariffs, /glass-inset border-amber-glow\/25/);
+  // Кнопки «Оплатить» 46px в обоих вариантах (primary и белая)
+  assert.match(tariffs, /buttonVariants\(\{ variant: "primary", size: "lg" \}\), "h-\[46px\]"/);
+  assert.match(tariffs, /"h-\[46px\] bg-white\/90 px-5/);
+  // Мобильная шторка диалога тарифа выше (94dvh) — оплата без скролла; десктоп остаётся 85dvh
+  assert.match(tariffs, /max-h-\[94dvh\] max-w-lg sm:max-h-\[85dvh\]/);
+});
+
+test("all cabinet modals close animated through the shared Modal", async () => {
+  const modal = await readFile(new URL("./components/ui/modal.tsx", import.meta.url), "utf8");
+  const css = await readFile(new URL("../cabinet.css", import.meta.url), "utf8");
+  // Мобайл: крестик — штатный vaul-dismiss (шторка уезжает вниз пружиной), десктоп — Radix+framer exit
+  assert.match(modal, /<Drawer\.Close asChild>/);
+  assert.match(modal, /<RadixDialog\.Close asChild>/);
+  assert.match(modal, /exit=\{\{ opacity: 0, scale: 0\.97/);
+  // CSS-правило 180ms не должно перехватывать vaul-шторку/оверлей — иначе закрытие рывком
+  assert.match(css, /\[data-state="closed"\]:not\(\[data-vaul-drawer\]\)/);
+  assert.match(css, /:not\(\[data-vaul-overlay\]\)/);
 });
 
 test("eligible standalone trials use UUID-preserving extension checkout", async () => {
@@ -469,4 +498,28 @@ test("top-up form pairs the amount input and submit button at one height", async
   assert.match(topup, /className="h-\[46px\] px-6"/);
   // Пресеты — ровный ряд фиксированной высоты
   assert.match(topup, /"h-10 flex-1 rounded-xl border text-sm font-bold transition-all"/);
+});
+
+test("device rows show app and OS under the accented device name", async () => {
+  const cabinet = await readFile(new URL("./pages/Cabinet.tsx", import.meta.url), "utf8");
+  // Имя устройства — акцент (font-bold), под ним «Приложение · ОС» без дубля, когда appName не пришёл
+  assert.match(cabinet, /\{d\.app && d\.app !== d\.os \? `\$\{d\.app\} · \$\{d\.os\}` : d\.os\}/);
+});
+
+test("quick actions ladder has hover on every step including link steps", async () => {
+  const cabinet = await readFile(new URL("./pages/Cabinet.tsx", import.meta.url), "utf8");
+  // Прозрачные link-ступени получают hover-подложку, как у остальных кнопок лестницы
+  const linkSteps = cabinet.match(/variant: "link", size: "md" \}\), "h-\[46px\] w-full hover:bg-white\/6"/g) ?? [];
+  assert.ok(linkSteps.length >= 2, "обе link-ступени (Все тарифы / Пробный период) с hover:bg-white/6");
+});
+
+test("traffic package card is compact, icon-left, without the muddy gradient", async () => {
+  const services = await readFile(new URL("./pages/Services.tsx", import.meta.url), "utf8");
+  // Иконка слева, текст справа — один ряд
+  assert.match(services, /icon-tile h-9 w-9 shrink-0 rounded-lg/);
+  // Грязный залитый amber-градиент не возвращается — стекло + сдержанный amber-бордер
+  assert.doesNotMatch(services, /#2b1f0d/);
+  assert.match(services, /glass-inset border-amber-glow\/30/);
+  // Кнопка покупки пакета — те же 46px, что и кнопки тарифов
+  assert.match(services, /className="h-\[46px\] shrink-0"/);
 });

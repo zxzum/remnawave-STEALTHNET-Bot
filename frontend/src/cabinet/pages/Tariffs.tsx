@@ -294,7 +294,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
         onOpenChange(v);
         if (!v) reset();
       }}
-      className="max-w-lg"
+      className="max-h-[94dvh] max-w-lg sm:max-h-[85dvh]"
     >
       <AnimatePresence mode="wait" initial={false}>
         {step === "config" ? (
@@ -361,33 +361,34 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                 }
               />
 
-              {/* summary */}
-              <div className="glass-inset mt-6 rounded-2xl p-4">
+              {/* summary — компактный плейт: плотные отступы, итог text-xl (было text-2xl),
+                  чтобы на мобиле вместе с шторкой 94dvh оплата помещалась без скролла */}
+              <div className="glass-inset mt-4 rounded-2xl p-3.5">
                 <div className="flex justify-between text-sm">
                   <span className="text-fog-500">Длительность</span>
                   <span className="font-bold">{days} дней</span>
                 </div>
-                <div className="mt-1.5 flex justify-between text-sm">
+                <div className="mt-1 flex justify-between text-sm">
                   <span className="text-fog-500">Тариф ({totalDevices} устр)</span>
                   <span className="font-bold">{formatMoney(priceBeforePromo, plan.currency)}</span>
                 </div>
                 {conversion?.willConvert && conversion.convertedDays !== undefined && (
-                  <div className="mt-1.5 flex justify-between text-sm">
+                  <div className="mt-1 flex justify-between text-sm">
                     <span className="text-fog-500">Добавится конвертацией</span>
                     <span className="font-bold text-amber-glow">+{conversion.convertedDays} дн.</span>
                   </div>
                 )}
-                <div className="my-3 h-px bg-white/8" />
+                <div className="my-2 h-px bg-white/8" />
                 <div className="flex items-baseline justify-between">
                   <span className="font-bold">К оплате</span>
-                  <span className="bg-gradient-to-r from-violet-glow to-accent-400 bg-clip-text text-2xl font-extrabold text-transparent">
+                  <span className="bg-gradient-to-r from-violet-glow to-accent-400 bg-clip-text text-xl font-extrabold text-transparent">
                     {formatMoney(price, plan.currency)}
                   </span>
                 </div>
               </div>
 
               {/* agreement */}
-              <label className="mt-4 flex cursor-pointer items-start gap-3 text-xs leading-relaxed text-fog-500">
+              <label className="mt-3 flex cursor-pointer items-start gap-3 text-xs leading-relaxed text-fog-500">
                 <Checkbox checked={agreed} onCheckedChange={(v) => setAgreed(v === true)} className="mt-0.5" />
                 <span>
                   Нажимая кнопку «К оплате», я подтверждаю, что ознакомился и согласен с условиями
@@ -398,7 +399,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                 </span>
               </label>
 
-              <Button size="lg" disabled={!agreed} className="mt-4 w-full" onClick={() => setStep("checkout")}>
+              <Button size="lg" disabled={!agreed} className="mt-3 w-full" onClick={() => setStep("checkout")}>
                 Перейти к оплате · {formatMoney(priceBeforePromo, plan.currency)}
               </Button>
             </div>
@@ -569,6 +570,9 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
   );
 }
 
+/* Общий плейт бейджей-характеристик карточки тарифа (срок/устройства/трафик/белые списки) */
+const planBadgeClass = "rounded-full border border-white/10 bg-white/4 px-2.5 py-1 text-[11px] font-semibold text-fog-300";
+
 function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; index: number }) {
   // Цена на карточке — от опции МИНИМАЛЬНОГО срока (не от самой дешёвой):
   // формат «4 ₽/день» над «120 ₽/30 дн.». Пустых durationOptions не бывает у валидного тарифа,
@@ -578,6 +582,9 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
     : null;
   // Чек-лист вместо описания: каждая строка админского emojiLine — отдельный пункт (refs/29)
   const checklist = plan.emojiLine.split("\n").map((line) => line.trim()).filter(Boolean);
+  // Потолок устройств = включённые + максимум докупки
+  const maxDevices = plan.baseDevices + plan.maxExtraDevices;
+  const hasWhitelist = plan.whitelistGB != null && plan.whitelistGB > 0;
   return (
     <motion.div
       initial={{ opacity: 0, y: 14 }}
@@ -587,7 +594,10 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
         "relative flex flex-col rounded-3xl border p-5 transition-all duration-300",
         plan.popular
           ? "border-accent-400/40 bg-accent-500/8 shadow-neon-blue"
-          : "glass-inset hover:border-white/16",
+          : hasWhitelist
+            ? /* Тарифы с белыми списками — мягкий amber-бордер/свечение поверх стекла: отличие читается, но не кричит */
+              "glass-inset border-amber-glow/25 shadow-[0_0_28px_-16px_rgba(255,181,69,0.45)] hover:border-amber-glow/40"
+            : "glass-inset hover:border-white/16",
       )}
     >
       {plan.popular && (
@@ -597,6 +607,23 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
       )}
 
       <h3 className="text-lg font-extrabold">{plan.name}</h3>
+
+      {/* Бейджи-характеристики из данных тарифа (не из описания): срок от минимальной опции,
+          устройства «от базовых до потолка докупки», трафик — remnawave-лимит (0 = Безлимит),
+          белые списки — локальная квота, выделена amber-тоном. Ряд с переносами. */}
+      <div className="mt-2.5 flex flex-wrap gap-1.5">
+        {minTermOption && <span className={planBadgeClass}>Срок: от {minTermOption.days} дн.</span>}
+        <span className={planBadgeClass}>
+          Устройства: {plan.maxExtraDevices > 0 ? `от ${plan.baseDevices} до ${maxDevices}` : plan.baseDevices}
+        </span>
+        <span className={planBadgeClass}>Трафик: {plan.traffic}</span>
+        {hasWhitelist && (
+          <span className={cn(planBadgeClass, "border-amber-glow/40 bg-amber-glow/12 text-amber-glow")}>
+            Белые списки: {plan.whitelistGB!.toFixed(0)} ГБ
+          </span>
+        )}
+      </div>
+
       {checklist.length > 0 && (
         <ul className="mt-3 space-y-2">
           {checklist.map((line, lineIndex) => (
@@ -620,14 +647,15 @@ function PlanRow({ plan, onPay, index }: { plan: TariffPlan; onPay: () => void; 
             </p>
           </>
         )}
+        {/* Кнопки оплаты везде 46px: h-[46px] перекрывает h-13 у primary и py-3.5 у белой через twMerge */}
         <motion.button
           whileTap={{ scale: 0.96 }}
           onClick={onPay}
           className={cn(
             "mt-3 flex w-full items-center justify-center gap-2 rounded-2xl text-sm font-bold transition-all",
             plan.popular
-              ? buttonVariants({ variant: "primary", size: "lg" })
-              : "bg-white/90 px-5 py-3.5 text-ink-950 shadow-[0_8px_24px_-8px_rgba(255,255,255,0.4)] hover:bg-white",
+              ? cn(buttonVariants({ variant: "primary", size: "lg" }), "h-[46px]")
+              : "h-[46px] bg-white/90 px-5 text-ink-950 shadow-[0_8px_24px_-8px_rgba(255,255,255,0.4)] hover:bg-white",
           )}
         >
           <CreditCard className="h-4 w-4" /> Оплатить
@@ -696,9 +724,9 @@ export default function Tariffs() {
               </Accordion.Trigger>
             </Accordion.Header>
             <Accordion.Content className="overflow-hidden data-[state=closed]:animate-[accordion-up_0.25s_ease-out] data-[state=open]:animate-[accordion-down_0.25s_ease-out]">
-              {/* pt-8, а не pt-3: бейдж «Лучший выбор» на -top-3 + spread shadow-neon-blue
-                  не должен срезаться overflow-hidden у Accordion.Content */}
-              <div className="grid grid-cols-1 gap-3 px-4 pt-8 pb-5 sm:grid-cols-2 sm:px-5 xl:grid-cols-3">
+              {/* pt-6: бейдж «Лучший выбор» на -top-3 (12px) всё ещё помещается в overflow-hidden
+                  Accordion.Content, а лишняя пустота между шапкой группы и карточками убрана */}
+              <div className="grid grid-cols-1 gap-3 px-4 pt-6 pb-5 sm:grid-cols-2 sm:px-5 xl:grid-cols-3">
                 {group.plans.map((plan, i) => (
                   <PlanRow key={plan.id} plan={plan} index={i} onPay={() => setSelected(plan)} />
                 ))}

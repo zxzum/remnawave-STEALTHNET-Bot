@@ -359,7 +359,9 @@ export function mapTariffGroups(groups: PublicTariffGroupShape[]): TariffGroup[]
         name: tariff.name,
         emojiLine: tariff.description ?? "",
         monthlyPrice: options[0]?.price ?? tariff.price,
-        traffic: tariff.trafficLimitMode !== "LOCAL_SQUAD" && trafficGB ? `${Number(trafficGB.toFixed(1))} ГБ` : "Безлимит",
+        // Бейдж «Трафик» показывает лимит remnawave как есть: 0/нет — безлимит, иначе N ГБ
+        // (у whitelist-тарифов remnawave-лимит тоже бывает задан — показываем его, а не прячем)
+        traffic: trafficGB ? `${Number(trafficGB.toFixed(1))} ГБ` : "Безлимит",
         whitelistGB,
         popular: Boolean(tariff.isBestChoice),
         baseDevices: tariff.includedDevices || tariff.deviceLimit || 0,

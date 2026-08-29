@@ -120,8 +120,9 @@ function TrafficCard({ option, onBuy }: { option: TrafficSellOption; onBuy: () =
       className={cn(
         "relative mt-2 flex flex-col rounded-3xl border p-5 transition-all duration-300",
         whitelist
-          ? /* Плотная залитая подложка в amber-тоне, а не стеклянный полупрозрачный слой */
-            "border-amber-glow/40 bg-[linear-gradient(150deg,#2b1f0d,#1b1207_58%,#130d05)] shadow-[inset_0_2px_12px_rgb(2_4_12/0.55),0_0_36px_-12px_rgba(255,181,69,0.55)]"
+          ? /* Стеклянная база как у обычных карточек + сдержанный amber-акцент
+               (бордер/свечение): отличие «белых списков» читается, но без грязного залитого градиента */
+            "glass-inset border-amber-glow/30 shadow-[0_0_32px_-14px_rgba(255,181,69,0.5)] hover:border-amber-glow/45"
           : "glass-inset hover:border-white/16",
       )}
     >
@@ -130,21 +131,24 @@ function TrafficCard({ option, onBuy }: { option: TrafficSellOption; onBuy: () =
           <Signal className="h-3 w-3" /> Белые списки
         </span>
       )}
-      <div className="flex items-center justify-between">
-        <div className={cn("icon-tile h-11 w-11 rounded-xl", whitelist && "border border-amber-glow/30 bg-amber-glow/12 text-amber-glow")}>
-          {whitelist ? <Signal className="h-5 w-5" /> : <Wifi className="h-5 w-5" />}
+      {/* Иконка слева, название справа — один ряд; сама иконка компактнее обычного тайла */}
+      <div className="flex items-center gap-3">
+        <div className={cn("icon-tile h-9 w-9 shrink-0 rounded-lg", whitelist && "border border-amber-glow/30 bg-amber-glow/12 text-amber-glow")}>
+          {whitelist ? <Signal className="h-4 w-4" /> : <Wifi className="h-4 w-4" />}
         </div>
-        {!whitelist && <span className="chip chip-fluid max-w-[60%]">{trafficOptionLabel(option.trafficMode)}</span>}
+        <div className="min-w-0">
+          <p className="text-xl font-extrabold tracking-tight">+{option.trafficGb} ГБ</p>
+          <p className="truncate text-xs font-semibold text-fog-400">{option.name}</p>
+        </div>
+        {!whitelist && <span className="chip chip-fluid ml-auto max-w-[40%]">{trafficOptionLabel(option.trafficMode)}</span>}
       </div>
-      <p className="mt-4 text-2xl font-extrabold tracking-tight">+{option.trafficGb} ГБ</p>
-      <p className="mt-1 truncate text-sm font-semibold text-fog-400">{option.name}</p>
       <div className="my-4 h-px bg-white/8" />
       <div className="mt-auto flex items-end justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xl font-extrabold tracking-tight">{money(option.price, option.currency)}</p>
           {perGb > 0 && <p className="text-[11px] text-fog-600">{money(perGb, option.currency)}/ГБ</p>}
         </div>
-        <Button variant={whitelist ? "success" : "secondary"} size="md" className="shrink-0" onClick={onBuy}>
+        <Button variant={whitelist ? "success" : "secondary"} size="md" className="h-[46px] shrink-0" onClick={onBuy}>
           <CreditCard /> Оплатить
         </Button>
       </div>
