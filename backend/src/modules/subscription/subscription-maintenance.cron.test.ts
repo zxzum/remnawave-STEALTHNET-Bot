@@ -8,6 +8,7 @@ process.env.JWT_SECRET ??= "test-secret-that-is-long-enough-for-validation";
 const {
   expiryReminderOffset,
   expiringSubscriptionKind,
+  expiryNotificationOwnerWhere,
   parseReminderHours,
   reminderKeyClaimWhere,
 } = await import("./subscription-maintenance.cron.js");
@@ -37,6 +38,16 @@ test("a NULL reminder key is eligible for the first Telegram and email claim", (
     OR: [
       { expiryEmailReminderKey: null },
       { NOT: { expiryEmailReminderKey: key } },
+    ],
+  });
+});
+
+test("expiry sweep skips blocked or unreachable Telegram clients but keeps email-only delivery eligible", () => {
+  assert.deepEqual(expiryNotificationOwnerWhere(), {
+    isBlocked: false,
+    OR: [
+      { email: { not: null } },
+      { telegramId: { not: null }, telegramUnreachable: false },
     ],
   });
 });
