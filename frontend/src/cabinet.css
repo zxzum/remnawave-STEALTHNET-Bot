@@ -255,8 +255,14 @@ body.cabinet-ui-active *::-webkit-scrollbar-thumb:hover {
   to { opacity: 0; }
 }
 
-body.cabinet-ui-active [role="dialog"][data-state="closed"],
-body.cabinet-ui-active [data-state="closed"][class*="backdrop-blur"] {
+/* Radix-карточка (десктоп) — свой лёгкий fade на выходе. vaul-шторку исключаем
+   (data-vaul-drawer / data-vaul-overlay): иначе эта перезаписывает длительность
+   родной exit-анимации vaul до 180ms ease-in, и шторка на мобиле схлопывается
+   рывком — «закрылось без анимации». Родная пружина vaul (slideToBottom,
+   500ms cubic-bezier(.32,.72,0,1)) доигрывается до конца: Radix Presence ждёт
+   animationend перед unmount. */
+body.cabinet-ui-active [role="dialog"][data-state="closed"]:not([data-vaul-drawer]),
+body.cabinet-ui-active [data-state="closed"][class*="backdrop-blur"]:not([data-vaul-overlay]) {
   animation: cabinet-dialog-close 180ms ease-in both;
 }
 
@@ -316,6 +322,12 @@ body.cabinet-ui-active .bank-card:hover .card-shine {
   }
   body.cabinet-ui-active [role="dialog"][data-state="closed"],
   body.cabinet-ui-active [data-state="closed"][class*="backdrop-blur"] {
+    animation-duration: 1ms;
+  }
+  /* vaul-шторка выше исключена — схлопываем её отдельно (Radix ждёт animationend,
+     поэтому unmount всё равно происходит после «анимации», просто мгновенно) */
+  body.cabinet-ui-active [data-vaul-drawer][data-state="closed"],
+  body.cabinet-ui-active [data-vaul-overlay][data-state="closed"] {
     animation-duration: 1ms;
   }
 }
