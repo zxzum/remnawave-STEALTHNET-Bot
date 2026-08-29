@@ -419,7 +419,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                       onClick={() => setDays(d.days)}
                     >
                       {/* две строки вместо трёх: срок + «цена · цена/день» — плотнее на мобиле */}
-                      <p className={cn("text-sm font-bold", days === d.days && "text-accent-200")}>{d.days} дней</p>
+                      <p className={cn("text-sm font-bold", days === d.days && "text-accent-400")}>{d.days} дней</p>
                       <p className="mt-0.5 text-[11px] text-fog-400">
                         {formatMoney(p, plan.currency)} · {formatMoney(p / d.days, plan.currency)}/день
                       </p>
