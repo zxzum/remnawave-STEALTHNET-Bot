@@ -448,3 +448,25 @@ test("refreshes the client profile on cabinet load and tab return", async () => 
   assert.match(store, /window\.removeEventListener\("focus", refreshOnReturn\)/);
   assert.match(store, /document\.removeEventListener\("visibilitychange", refreshOnReturn\)/);
 });
+
+test("floating chat CTA sits under modals and fades out while a dialog is open", async () => {
+  const chat = await readFile(new URL("../components/floating-chat.tsx", import.meta.url), "utf8");
+  const css = await readFile(new URL("../cabinet.css", import.meta.url), "utf8");
+  // CTA ниже модального слоя (Radix/vaul = z-50) и помечен классом для CSS-скрытия
+  assert.match(chat, /floating-chat-cta fixed bottom-32 right-4 z-40/);
+  assert.doesNotMatch(chat, /z-\[100\]/);
+  // JS-состояние скрытия (observer по атрибуту, которого Radix не рендерит) не возвращается
+  assert.doesNotMatch(chat, /hasOpenDialog/);
+  // Скрытие при открытом диалоге — fade (opacity + pointer-events), без display
+  assert.match(css, /\.floating-chat-cta \{[\s\S]*?transition: opacity 180ms ease/);
+  assert.match(css, /:has\(\[role="dialog"\]\[data-state="open"\]\) \.floating-chat-cta \{\n  opacity: 0;\n  pointer-events: none;\n\}/);
+});
+
+test("top-up form pairs the amount input and submit button at one height", async () => {
+  const profile = await readFile(new URL("./pages/Profile.tsx", import.meta.url), "utf8");
+  const topup = profile.slice(profile.indexOf('id="topup"'), profile.indexOf("Данные аккаунта"));
+  assert.match(topup, /className="h-\[46px\] rounded-2xl pr-10"/);
+  assert.match(topup, /className="h-\[46px\] px-6"/);
+  // Пресеты — ровный ряд фиксированной высоты
+  assert.match(topup, /"h-10 flex-1 rounded-xl border text-sm font-bold transition-all"/);
+});

@@ -266,6 +266,22 @@ body.cabinet-ui-active [data-state="closed"][class*="backdrop-blur"]:not([data-v
   animation: cabinet-dialog-close 180ms ease-in both;
 }
 
+/* Floating chat CTA. Кнопка чата не должна всплывать поверх модалок — страховка
+   двуступенчатая:
+   1) z-index самой кнопки ниже модального слоя (Radix-карточка и vaul-шторка = z-50);
+   2) пока открыт ЛЮБОЙ диалог ([role="dialog"][data-state="open"] — рендерят оба
+      механизма), плавно прячем CTA. Прячем через opacity + pointer-events, а не
+      display: без прыжков layout, с fade 180мс в обе стороны.
+   Раньше скрытие пытался ловить MutationObserver по [data-radix-dialog-overlay] —
+   атрибуту, которого Radix не создаёт, поэтому кнопка оставалась поверх модалки. */
+body.cabinet-ui-active .floating-chat-cta {
+  transition: opacity 180ms ease;
+}
+body.cabinet-ui-active:has([role="dialog"][data-state="open"]) .floating-chat-cta {
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* Фоновые орбы: один медленный «вдох» при появлении — и стоп.
    Бесконечный дрейф трёх огромных blur-слоёв жёг CPU в простое
    (основная жалоба пользователя); сами орбы остаются на месте,

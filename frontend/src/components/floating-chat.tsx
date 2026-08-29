@@ -673,7 +673,6 @@ export function FloatingChat() {
   const [isOpen, setIsOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [activeChat, setActiveChat] = useState<ChatType>(() => (config?.aiChatEnabled !== false ? "ai" : "support"));
-  const [hasOpenDialog, setHasOpenDialog] = useState(false);
   useEffect(() => {
     if (!aiChatEnabled && activeChat === "ai") setActiveChat("support");
   }, [aiChatEnabled, activeChat]);
@@ -724,17 +723,11 @@ export function FloatingChat() {
     return () => window.clearInterval(intervalId);
   }, [token, config?.ticketsEnabled]);
 
-  // Скрываем кнопку чата когда открыт любой Dialog (Radix)
-  useEffect(() => {
-    function checkDialogs() {
-      const overlay = document.querySelector("[data-radix-dialog-overlay]");
-      setHasOpenDialog(!!overlay);
-    }
-    const observer = new MutationObserver(checkDialogs);
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-state"] });
-    checkDialogs();
-    return () => observer.disconnect();
-  }, []);
+  // Скрытие при открытом диалоге делается на CSS (cabinet.css): селектор
+  // body:has([role="dialog"][data-state="open"]) гасит .floating-chat-cta.
+  // Раньше здесь был MutationObserver на [data-radix-dialog-overlay], но Radix
+  // такой атрибут не рендерит вовсе — observer молчал и кнопка оставалась
+  // поверх модалок.
 
   // Блокировка скролла body при открытом чате только на мобилках
   useEffect(() => {
@@ -820,7 +813,10 @@ export function FloatingChat() {
 
   return (
     <>
-      <div className={cn("fixed bottom-32 right-4 z-[100] lg:bottom-6 lg:right-6", hasOpenDialog && !isOpen && "pointer-events-none opacity-0")}>
+      {/* CTA живёт НИЖЕ модального слоя (Radix/vaul = z-50): z-40 оставляет кнопку
+          над контентом и нижней навигацией (они раньше по DOM), но под модалками.
+          Полное скрытие при открытом диалоге — CSS-правилом в cabinet.css. */}
+      <div className="floating-chat-cta fixed bottom-32 right-4 z-40 lg:bottom-6 lg:right-6">
         <AnimatePresence>
           {isOpen && (
             <motion.div

@@ -231,6 +231,7 @@ function TopUp() {
         </div>
       </div>
 
+      {/* Пресеты — ровный ряд одной высоты (h-10), у выбранной суммы accent-тонировка */}
       <div className="mb-3 flex gap-2">
         {quickAmounts.map((a) => (
           <button
@@ -238,7 +239,7 @@ function TopUp() {
             type="button"
             onClick={() => setAmount(a)}
             className={cn(
-              "flex-1 rounded-xl border py-2 text-sm font-bold transition-all",
+              "h-10 flex-1 rounded-xl border text-sm font-bold transition-all",
               amount === a
                 ? "border-accent-400/60 bg-accent-500/15 text-accent-400 shadow-neon-blue"
                 : "border-white/8 bg-white/3 text-fog-400 hover:border-white/20",
@@ -257,6 +258,10 @@ function TopUp() {
           if (!paying && method) void pay();
         }}
       >
+        {/* Пара «инпут + кнопка» одной высоты (46px) и одного радиуса (rounded-2xl):
+            раньше кнопка была h-13 (52px) при инпуте 44px — ряд «гулял» по вертикали,
+            а её неоновый glow вылезал за строку и читался как отдельный прямоугольник.
+            Glow остаётся честным box-shadow самой кнопки (.btn-primary). */}
         <div className="relative flex-1">
           <Input
             type="number"
@@ -264,11 +269,11 @@ function TopUp() {
             value={amount || ""}
             onChange={(e) => setAmount(parseInt(e.target.value) || 0)}
             placeholder="Сумма"
-            className="pr-10"
+            className="h-[46px] rounded-2xl pr-10"
           />
           <span className="absolute top-1/2 right-4 -translate-y-1/2 text-fog-500">{currency.toUpperCase()}</span>
         </div>
-        <Button type="submit" size="lg" className="px-6" disabled={!method} loading={paying} loadingText="Открываем…">
+        <Button type="submit" size="lg" className="h-[46px] px-6" disabled={!method} loading={paying} loadingText="Открываем…">
           Пополнить
         </Button>
       </form>
