@@ -390,20 +390,17 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
             transition={{ duration: 0.22 }}
             className="flex min-h-0 flex-col"
           >
-            {/* header — крестик встроен в Modal */}
-            <div className="flex items-start gap-4 p-6 pb-4">
-              <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl border border-violet-glow/30 bg-violet-glow/12 text-violet-glow">
-                <Box className="h-6 w-6" />
-              </div>
-              <div className="min-w-0 flex-1 pr-10">
-                <ModalTitle className="text-2xl font-extrabold tracking-tight">{plan.name}</ModalTitle>
-                <ModalDescription className="mt-0.5 whitespace-pre-wrap text-xs leading-relaxed text-fog-500">
-                  {plan.emojiLine}
+            {/* header — компактный на мобиле: без тайла и описания тарифа, крестик встроен в Modal */}
+            <div className="p-5 pb-3">
+              <div className="pr-10">
+                <ModalTitle className="text-lg font-extrabold tracking-tight">Тариф «{plan.name}»</ModalTitle>
+                <ModalDescription className="mt-0.5 text-xs text-fog-500">
+                  Выберите длительность и доп. устройства
                 </ModalDescription>
               </div>
             </div>
 
-            <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+            <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-5 pb-6">
               {/* duration */}
               <p className="mb-2 text-xs font-semibold text-fog-500">Длительность</p>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -416,13 +413,16 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
                   return (
                     <OptionCard
                       key={d.days}
+                      compact
                       selected={days === d.days}
                       badge={discount >= 5 ? `−${discount}%` : undefined}
                       onClick={() => setDays(d.days)}
                     >
-                      <p className="text-sm font-extrabold">{d.days} дней</p>
-                      <p className="mt-0.5 text-xs font-bold text-fog-300">{formatMoney(p, plan.currency)}</p>
-                      <p className="text-[10px] text-fog-600">{formatMoney(p / d.days, plan.currency)}/день</p>
+                      {/* две строки вместо трёх: срок + «цена · цена/день» — плотнее на мобиле */}
+                      <p className={cn("text-sm font-bold", days === d.days && "text-accent-200")}>{d.days} дней</p>
+                      <p className="mt-0.5 text-[11px] text-fog-400">
+                        {formatMoney(p, plan.currency)} · {formatMoney(p / d.days, plan.currency)}/день
+                      </p>
                     </OptionCard>
                   );
                 })}

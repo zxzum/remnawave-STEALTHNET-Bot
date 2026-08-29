@@ -6,18 +6,21 @@ export interface OptionCardProps extends ButtonHTMLAttributes<HTMLButtonElement>
   /** Бейдж в правом верхнем углу, напр. «−33%» */
   badge?: ReactNode;
   glow?: "blue" | "violet";
+  /** Плотный режим: меньше паддинги, меньше радиус, текст по левому краю (сетка длительностей на мобиле) */
+  compact?: boolean;
 }
 
 /** Компактная карточка выбора (длительность, устройство, метод) */
 export const OptionCard = forwardRef<HTMLButtonElement, OptionCardProps>(
-  ({ selected, badge, glow = "blue", className, children, type = "button", ...props }, ref) => (
+  ({ selected, badge, glow = "blue", compact, className, children, type = "button", ...props }, ref) => (
     <button
       ref={ref}
       type={type}
       aria-pressed={selected}
       className={cn(
         // живость: лёгкий подъём на hover (2px) и возврат в прижатое состояние на press
-        "relative cursor-pointer rounded-2xl border p-3 text-center transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98]",
+        "relative cursor-pointer border transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98]",
+        compact ? "rounded-xl px-3 py-2 text-left" : "rounded-2xl p-3 text-center",
         selected
           ? glow === "blue"
             ? "border-accent-400/60 bg-accent-500/15 shadow-neon-blue hover:border-accent-400 hover:bg-accent-500/20"
