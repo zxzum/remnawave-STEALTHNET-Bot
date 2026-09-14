@@ -77,6 +77,27 @@ export function isPlategaConfigured(config: PlategaConfig | null): boolean {
   return Boolean(config?.merchantId?.trim() && config?.secret?.trim());
 }
 
+export async function forwardPlategaCallback(
+  url: string,
+  rawBody: Buffer,
+  config: PlategaConfig,
+  fetchFn: typeof fetch = fetch,
+): Promise<Response> {
+  const target = new URL(url);
+  if (target.protocol !== "https:") throw new Error("Platega fallback webhook must use HTTPS");
+  return fetchFn(target, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-MerchantId": config.merchantId.trim(),
+      "X-Secret": config.secret.trim(),
+    },
+    body: rawBody,
+    redirect: "error",
+    signal: AbortSignal.timeout(15_000),
+  });
+}
+
 /**
  * Создать транзакцию в Platega, получить ссылку на оплату
  * paymentMethod: 2=СБП, 11=Карты РФ (Card acquiring), 12=Международный, 13=Криптовалюта

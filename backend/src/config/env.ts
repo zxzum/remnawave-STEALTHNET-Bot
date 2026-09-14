@@ -17,6 +17,10 @@ const envSchema = z.object({
   /** Секрет для отдельного SupportBot; не используется основным Telegram-ботом. */
   SUPPORT_API_KEY: z.string().optional(),
   CORS_ORIGIN: z.string().default("*"),
+  PLATEGA_FALLBACK_WEBHOOK_URL: z.preprocess(
+    (s) => (typeof s === "string" && s.trim() === "" ? undefined : s),
+    z.string().url().startsWith("https://").optional(),
+  ),
   /** Cron для авто-рассылки (например "0 9 * * *" = 9:00 каждый день). Пусто = по умолчанию 9:00. */
   AUTO_BROADCAST_CRON: z.string().optional(),
   /** Cron для ежедневного напоминания об активном конкурсе (по умолчанию "0 10 * * *" = 10:00). */

@@ -11,10 +11,12 @@
  */
 
 import { Router } from "express";
+import { env } from "../../config/env.js";
 import { prisma } from "../../db.js";
 import { getSystemConfig } from "../client/client.service.js";
 import {
   getPlategaTransactionStatus,
+  forwardPlategaCallback,
   validatePlategaTransaction,
   verifyPlategaCallbackCredentials,
   type PlategaTransaction,
@@ -413,6 +415,16 @@ plategaWebhooksRouter.post("/platega", async (req, res) => {
 
     const match = await findPlategaPayment([transactionId, callbackExternalId, callbackOrderId, payload]);
     if (!match) {
+      if (env.PLATEGA_FALLBACK_WEBHOOK_URL) {
+        const forwarded = await forwardPlategaCallback(env.PLATEGA_FALLBACK_WEBHOOK_URL, rawBody, credentials);
+        if (forwarded.ok) {
+          ack(200, "accepted", `forwarded transaction=${transactionId}`);
+          return res.status(200).json({ received: true, forwarded: true });
+        }
+        const details = (await forwarded.text()).slice(0, 200);
+        ack(502, "error", `fallback=${forwarded.status} ${details}`);
+        return res.status(502).json({ message: "Fallback webhook rejected callback" });
+      }
       // externalId is written immediately after transaction creation; a callback can still win this race.
       // Non-2xx is required for Platega to retry the callback instead of dropping the payment.
       ack(503, "payment_not_found", `transaction=${transactionId}`);
