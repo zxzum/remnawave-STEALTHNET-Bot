@@ -15,6 +15,7 @@ import { Separator } from "../components/ui/separator";
 import { cn } from "../lib/cn";
 import { isExpiredTrial, type CabinetSubscription as Subscription } from "../model";
 import { PlanDialog } from "./Tariffs";
+import { InvoxyMigrationBanner } from "../components/InvoxyMigrationBanner";
 
 function pluralDays(n: number) {
   const m10 = n % 10;
@@ -318,6 +319,7 @@ export default function Cabinet() {
     return (
       <div className="flex flex-col gap-4">
         <div><h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Кабинет</h1><p className="mt-1 text-fog-500">Ваша подписка и подключённые устройства</p></div>
+        <InvoxyMigrationBanner />
         <section className="glass-strong liquid mx-auto w-full max-w-xl rounded-4xl p-6 text-center sm:p-8">
           <EmptyState
             icon={Package}
@@ -351,6 +353,8 @@ export default function Cabinet() {
         <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Кабинет</h1>
         <p className="mt-1 text-fog-500">Ваша подписка и подключённые устройства</p>
       </div>
+
+      <InvoxyMigrationBanner />
 
       {/* Правая колонка фиксированной ширины (300–320px), чтобы «Быстрые действия» не растягивались */}
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_320px]">

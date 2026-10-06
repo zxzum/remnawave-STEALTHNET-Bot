@@ -57,6 +57,7 @@ test("главное меню плоское и ведёт прямо в mini-ap
     ["👤 ВОЙТИ В КАБИНЕТ"],
     ["💳 Тарифы", "🔑 Мои ключи"],
     ["🤝 Рефералка", "🛠 Поддержка"],
+    ["🚀 ПЕРЕЕЗД В INVOXY (+5 ДНЕЙ)"],
     ["🔄 Продлить", "ℹ️ Инфо"],
   ]);
   assert.deepEqual(
@@ -67,6 +68,7 @@ test("главное меню плоское и ведёт прямо в mini-ap
       ["https://bot.lazeika.xyz/cabinet"],
       ["https://bot.lazeika.xyz/cabinet/tariffs", "https://bot.lazeika.xyz/cabinet/subscribe"],
       ["https://bot.lazeika.xyz/cabinet/referral", "https://t.me/lazeyka_support_bot"],
+      ["https://t.me/invoxy_bot?start=migrate"],
       ["pay_tariff:tariff-standard:r", "menu:info"],
     ],
   );
@@ -75,12 +77,12 @@ test("главное меню плоское и ведёт прямо в mini-ap
 test("главное меню использует согласованные цвета", () => {
   assert.deepEqual(
     buildMain({ isAdmin: true }).inline_keyboard.map((row) => row.map((button) => ("style" in button ? button.style : undefined))),
-    [["success"], ["primary", "primary"], ["primary", "primary"], ["primary", "primary"], ["primary"]],
+    [["success"], ["primary", "primary"], ["primary", "primary"], ["primary"], ["primary", "primary"], ["primary"]],
   );
 });
 
 test("главное меню явно обрабатывает отсутствие тарифа, support и права админа", () => {
-  assert.equal(callbacks(buildMain({ renewTariffId: null }))[3]![0], "menu:renew");
+  assert.equal(callbacks(buildMain({ renewTariffId: null }))[4]![0], "menu:renew");
   assert.equal(labels(buildMain({ supportUrl: null }))[2]!.includes("🛠 Поддержка"), false);
   assert.deepEqual(labels(buildMain({ isAdmin: true })).at(-1), ["⚙️ Админ-панель"]);
 });

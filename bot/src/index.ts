@@ -2670,6 +2670,53 @@ composer.command("support", async (ctx) => {
   }
 });
 
+composer.command(["migrate", "invoxy"], async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  const cfg = await api.getPublicConfig().catch(() => null);
+  const rawText = [
+    "🚀 **Переезд сервиса в Invoxy VPN**",
+    "",
+    "Мы обновляем платформу и переезжаем в **Invoxy VPN**!",
+    "",
+    "🎁 **Что дает переезд:**",
+    "• Все ваши оплаченные дни подписки переносятся в полном объёме",
+    "• **+5 бонусных дней** добавляются к вашей подписке бесплатно",
+    "• Увеличенный лимит трафика и устройств",
+    "• Новые быстрые серверы и современные протоколы",
+    "• Удобные приложения для iOS, Android, macOS и Windows",
+    "",
+    "Перенесите подписку прямо сейчас в пару кликов:",
+  ].join("\n");
+  const { text, entities } = applyMarkdownAndEmoji(rawText, cfg?.botEmojis ?? null);
+
+  const markup = {
+    inline_keyboard: [
+      [
+        {
+          text: "🚀 Перенести в @invoxy_bot (+5 дней)",
+          url: "https://t.me/invoxy_bot?start=migrate",
+        },
+      ],
+      [
+        {
+          text: "🌐 Официальный сайт invoxy.my",
+          url: "https://invoxy.my",
+        },
+      ],
+      [
+        {
+          text: "🏠 Главное меню",
+          callback_data: "menu:main",
+        },
+      ],
+    ],
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await renderCommandScreen(ctx, userId, text, markup as any, cfg, "welcome", entities);
+});
+
 /**
  * Показать экран «способы оплаты» для тарифа с уже выбранными опцией и числом ДОП. устройств.
  * effectivePrice = priceOption.price + (extras × pricePerExtraDevice × (100 − discount) / 100).
@@ -8909,6 +8956,7 @@ for (const b of botInstances) {
           { command: "subscriptions", description: "Моя подписка / инструкции" },
           { command: "referral", description: "Реферальная программа" },
           { command: "support", description: "Поддержка" },
+          { command: "migrate", description: "Переезд в Invoxy (+5 дней)" },
         ]);
       } catch (e) {
         console.error(`[Bot @${info.username}] setMyCommands failed:`, e);

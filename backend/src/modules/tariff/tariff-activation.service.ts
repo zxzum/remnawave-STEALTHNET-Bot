@@ -98,7 +98,9 @@ export async function withClientSubscriptionLock<T>(
   operation: (tx: Prisma.TransactionClient) => Promise<T>,
   dependencies: SubscriptionLockDependencies = {},
 ): Promise<T> {
-  const transaction = dependencies.transaction ?? (<R>(callback: (tx: Prisma.TransactionClient) => Promise<R>) => prisma.$transaction(callback));
+  const transaction = dependencies.transaction ?? (<R>(callback: (tx: Prisma.TransactionClient) => Promise<R>) =>
+    prisma.$transaction(callback, { maxWait: 10000, timeout: 60000 })
+  );
   return transaction(async (tx) => {
     // Transaction-scoped advisory lock: activation callbacks currently use the
     // shared Prisma client, so a row lock on this transaction would self-block
@@ -1355,10 +1357,18 @@ async function activateTariffByPaymentIdUnlocked(paymentId: string, tx: Prisma.T
       subscriptionActivated: true,
       subscriptionId,
     };
-    await tx.payment.update({
-      where: { id: payment.id },
-      data: { subscriptionId, metadata: JSON.stringify(metadata) },
-    });
+    try {
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: { subscriptionId, metadata: JSON.stringify(metadata) },
+      });
+    } catch (error) {
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: { subscriptionId, metadata: JSON.stringify(metadata) },
+      }).catch(() => {});
+      throw error;
+    }
   };
   let firstPaidTrialBonusDays = 0;
   if (isPaidVpnPurchase(payment) && !isGiftPurchase) {

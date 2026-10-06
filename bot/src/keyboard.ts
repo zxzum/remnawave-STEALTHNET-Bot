@@ -207,6 +207,8 @@ export type MenuOptions = {
   supportUrl?: string | null;
   renewTariffId?: string | null;
   isAdmin?: boolean;
+  showMigration?: boolean;
+  migrationUrl?: string | null;
 };
 
 function resolveMenuButtons(opts: MenuOptions): BotButtonConfig[] {
@@ -307,6 +309,15 @@ export function mainMenu(opts: MenuOptions): InlineMarkup {
     rows.push([
       web("🤝 Рефералка", "/cabinet/referral"),
       ...(opts.supportUrl ? [{ text: "🛠 Поддержка", url: opts.supportUrl, style: "primary" as const }] : []),
+    ]);
+  }
+  if (opts.showMigration ?? true) {
+    rows.push([
+      {
+        text: "🚀 ПЕРЕЕЗД В INVOXY (+5 ДНЕЙ)",
+        url: opts.migrationUrl?.trim() || "https://t.me/invoxy_bot?start=migrate",
+        style: "primary",
+      },
     ]);
   }
   rows.push([

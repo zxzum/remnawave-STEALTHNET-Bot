@@ -99,6 +99,9 @@ export function buildMainMenuSummary(input: {
     : "";
   lines.push(`📦 Ваш тариф: ${tariffName}${tariffPrice}`);
   if (quotaLimit != null && quotaLimit > 0) lines.push(`🌐 Включено: ${formatGb(quotaLimit)} белого интернета`);
+  lines.push("");
+  lines.push("🚀 Доступен переезд в Invoxy VPN (+5 дней бонуса!)");
+  lines.push("Бот: @invoxy_bot · Сайт: https://invoxy.my");
   lines.push("", "Выберите действие 👇");
   return lines.join("\n");
 }
