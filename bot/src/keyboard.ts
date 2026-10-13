@@ -538,7 +538,7 @@ export function tariffCategoryButtons(
   const back = (backLabel && backLabel.trim()) || DEFAULT_BACK_LABEL;
   const backSty = resolveStyle(toStyle(innerStyles?.back), "danger");
   const tariffId = emojiIds?.tariff;
-  const rows: InlineButton[][] = categories.map((cat) => {
+  const rows: InlineMarkup["inline_keyboard"] = categories.map((cat) => {
     const label = ((cat.emoji && cat.emoji.trim()) ? `${cat.emoji} ` : "") + (cat.name || "").trim();
     return [btn(label.slice(0, 64), `cat_tariffs:${cat.id}`, tariffPay, tariffId)];
   });
@@ -565,7 +565,7 @@ export function tariffsOfCategoryButtons(
   // undefined → показываем (back-compat для старых вызовов).
   visibility?: { showExtraDevices?: boolean; showBalance?: boolean }
 ): InlineMarkup {
-  const rows: InlineButton[][] = [];
+  const rows: InlineMarkup["inline_keyboard"] = [];
   rows.push([
     {
       text: "🚀 В Invoxy цены дешевле (+5 дней)",
