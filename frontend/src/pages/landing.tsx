@@ -157,17 +157,60 @@ export function LandingPage({ config }: LandingPageProps) {
           <Logo logo={config.logo} serviceName={config.serviceName}/>
           <nav className="nav" aria-label="Основная навигация">{NAV.map(([label, href]) => <a key={href} href={href}>{label}</a>)}</nav>
           <div className="header__actions">
+            <a className="login" href="https://t.me/invoxy_bot?start=migrate" target="_blank" rel="noreferrer" style={{ color: "var(--cyan)", fontWeight: 700 }}>Invoxy VPN 🚀</a>
             <a className="login" href={loginUrl}>Войти</a>
             <a className="button button--primary button--small" href={registerUrl}>{txt(hero, "ctaText", "Создать аккаунт")}</a>
             <button className={`menu ${menuOpen ? "is-open" : ""}`} onClick={() => setMenuOpen((open) => !open)} aria-label={menuOpen ? "Закрыть меню" : "Открыть меню"} aria-expanded={menuOpen}><span/><span/><span/></button>
           </div>
         </div>
-        <nav className={`mobile-nav shell ${menuOpen ? "is-open" : ""}`} aria-hidden={!menuOpen}><div>{NAV.map(([label, href]) => <a key={href} href={href} tabIndex={menuOpen ? undefined : -1} onClick={() => setMenuOpen(false)}>{label}</a>)}<a href={loginUrl} tabIndex={menuOpen ? undefined : -1}>Войти в кабинет</a><a className="button button--primary" href={registerUrl} tabIndex={menuOpen ? undefined : -1}>{txt(hero, "ctaText", "Создать аккаунт")}</a></div></nav>
+        <nav className={`mobile-nav shell ${menuOpen ? "is-open" : ""}`} aria-hidden={!menuOpen}><div>{NAV.map(([label, href]) => <a key={href} href={href} tabIndex={menuOpen ? undefined : -1} onClick={() => setMenuOpen(false)}>{label}</a>)}<a href="https://t.me/invoxy_bot?start=migrate" target="_blank" rel="noreferrer" tabIndex={menuOpen ? undefined : -1} style={{ color: "var(--cyan)", fontWeight: 700 }}>🚀 Переезд в Invoxy VPN (+5 дней)</a><a href={loginUrl} tabIndex={menuOpen ? undefined : -1}>Войти в кабинет</a><a className="button button--primary" href={registerUrl} tabIndex={menuOpen ? undefined : -1}>{txt(hero, "ctaText", "Создать аккаунт")}</a></div></nav>
       </header>
 
       <main>
         <section className="hero shell">
           <div className="hero__copy">
+            <div style={{
+              display: "inline-flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: "8px 12px",
+              padding: "8px 14px",
+              marginBottom: "20px",
+              borderRadius: "16px",
+              background: "linear-gradient(135deg, rgba(50, 214, 255, 0.12), rgba(139, 92, 246, 0.18))",
+              border: "1px solid rgba(50, 214, 255, 0.3)",
+              fontSize: "13px",
+              color: "#eef2ff",
+              boxShadow: "0 8px 24px -8px rgba(50, 214, 255, 0.2)"
+            }}>
+              <span style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "5px",
+                fontWeight: 800,
+                color: "var(--cyan)",
+                fontSize: "11px",
+                textTransform: "uppercase",
+                background: "rgba(50, 214, 255, 0.15)",
+                padding: "2px 8px",
+                borderRadius: "10px"
+              }}>
+                🚀 Мы переходим в Invoxy
+              </span>
+              <span>Дешевле тарифы, приятнее интерфейс и своё приложение!</span>
+              <a
+                href="https://t.me/invoxy_bot?start=migrate"
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  fontWeight: 700,
+                  color: "var(--cyan)",
+                  textDecoration: "underline"
+                }}
+              >
+                В @invoxy_bot (+5 дней) →
+              </a>
+            </div>
             <h1>{txt(hero, "headline1", "VPN, который")}<br/><span>{txt(hero, "headline2", "находит лазейку.")}</span></h1>
             <p>{txt(hero, "subtitle", "Стабильный защищённый доступ к нужным сайтам и сервисам без ручной настройки. Подключайся один раз — дальше Лазейка разберётся сама.")}</p>
             <div className="actions"><a className="button button--primary" href={registerUrl}>{txt(hero, "ctaText", "Подключиться")} <Icon name="arrow"/></a><a className="button button--ghost" href={botUrl} target="_blank" rel="noreferrer"><Icon name="send"/> Открыть Telegram-бот</a></div>

@@ -542,6 +542,13 @@ export function tariffCategoryButtons(
     const label = ((cat.emoji && cat.emoji.trim()) ? `${cat.emoji} ` : "") + (cat.name || "").trim();
     return [btn(label.slice(0, 64), `cat_tariffs:${cat.id}`, tariffPay, tariffId)];
   });
+  rows.unshift([
+    {
+      text: "🚀 В Invoxy цены дешевле (+5 дней)",
+      url: "https://t.me/invoxy_bot?start=migrate",
+      style: "primary",
+    },
+  ]);
   rows.push([btn(back, "menu:main", backSty, emojiIds?.back)]);
   return { inline_keyboard: rows };
 }
@@ -559,6 +566,13 @@ export function tariffsOfCategoryButtons(
   visibility?: { showExtraDevices?: boolean; showBalance?: boolean }
 ): InlineMarkup {
   const rows: InlineButton[][] = [];
+  rows.push([
+    {
+      text: "🚀 В Invoxy цены дешевле (+5 дней)",
+      url: "https://t.me/invoxy_bot?start=migrate",
+      style: "primary",
+    },
+  ]);
   const tariffPay = resolveStyle(toStyle(innerStyles?.tariffPay), "primary");
   const back = (backLabel && backLabel.trim()) || DEFAULT_BACK_LABEL;
   const backSty = resolveStyle(toStyle(innerStyles?.back), "danger");

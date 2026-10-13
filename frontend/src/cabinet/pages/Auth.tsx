@@ -16,6 +16,9 @@ import {
   Mail,
   Eye,
   EyeOff,
+  Sparkles,
+  ExternalLink,
+  Gift,
 } from "lucide-react";
 import { Background } from "../components/Layout";
 import { Toasts } from "../components/ui/Toasts";
@@ -74,12 +77,62 @@ function StepDots({ current, total }: { current: number; total: number }) {
   );
 }
 
-function Divider() {
+function Divider({ label = "или" }: { label?: string }) {
   return (
     <div className="my-5 flex items-center gap-4 text-xs font-semibold text-fog-600">
       <span className="h-px flex-1 bg-white/8" />
-      или
+      {label}
       <span className="h-px flex-1 bg-white/8" />
+    </div>
+  );
+}
+
+function MigrationPromptCard({ mode = "register" }: { mode?: "register" | "login" }) {
+  return (
+    <div className="mt-5 overflow-hidden rounded-2xl border border-cyan-500/30 bg-gradient-to-br from-cyan-950/60 via-indigo-950/40 to-purple-950/60 p-4 text-left shadow-lg backdrop-blur-md">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/20 px-2.5 py-0.5 text-[11px] font-bold text-cyan-300">
+          <Sparkles className="h-3 w-3 text-cyan-400" />
+          МЫ ПЕРЕХОДИМ НА INVOXY
+        </span>
+        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/20 px-2.5 py-0.5 text-[11px] font-extrabold text-emerald-400">
+          <Gift className="h-3 w-3 text-emerald-400" />
+          +5 ДНЕЙ
+        </span>
+      </div>
+
+      <p className="mt-2.5 text-xs sm:text-sm leading-relaxed text-fog-200">
+        {mode === "register" ? (
+          <>
+            Вы, конечно, можете продолжить регистрацию здесь, но сервис переезжает на <b>Invoxy</b>! Рекомендуем перейти сразу туда: там <b>дешевле цены</b>, <b>приятнее интерфейс</b> и разрабатывается <b>собственное приложение</b>.
+          </>
+        ) : (
+          <>
+            Лазейка ВПН переезжает на новую платформу <b>Invoxy</b>! Перенесите свой доступ в <b>@invoxy_bot</b> или оформите на сайте: сохраняются ключи и баланс, а подписка продлевается на <b>+5 дней бонуса</b>.
+          </>
+        )}
+      </p>
+
+      <div className="mt-3.5 flex flex-wrap items-center gap-2">
+        <a
+          href="https://t.me/invoxy_bot?start=migrate"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-3.5 py-2 text-xs font-bold text-white shadow-neon-blue transition-transform hover:brightness-110 active:scale-95"
+        >
+          <Send className="h-3.5 w-3.5" />
+          В бот @invoxy_bot
+        </a>
+        <a
+          href="https://invoxy.my"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-white/20 bg-white/5 px-3 py-2 text-xs font-semibold text-fog-200 transition-colors hover:bg-white/10"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          Сайт invoxy.my
+        </a>
+      </div>
     </div>
   );
 }
@@ -264,6 +317,8 @@ export function Login() {
       </div>
       <h1 className="mt-5 text-center text-2xl font-extrabold tracking-tight sm:text-3xl">Вход в кабинет</h1>
       <p className="mt-1.5 text-center text-sm text-fog-500">Введите email и пароль от аккаунта</p>
+
+      <MigrationPromptCard mode="login" />
 
       {state.pending2FAToken ? (
         <form onSubmit={(event) => { event.preventDefault(); void handle2FA(); }}>
@@ -469,7 +524,11 @@ export function Register() {
               <h1 className="mt-5 text-center text-2xl font-extrabold tracking-tight sm:text-3xl">Регистрация</h1>
               <p className="mt-1.5 text-center text-sm text-fog-500">Создайте аккаунт в кабинете</p>
 
-              <label className="mt-7 block text-sm font-semibold">Email</label>
+              <MigrationPromptCard mode="register" />
+
+              <Divider label="или продолжите регистрацию в Лазейке" />
+
+              <label className="mt-2 block text-sm font-semibold">Email</label>
               <Input
                 type="email"
                 value={email}

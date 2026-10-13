@@ -29,6 +29,7 @@ import { useApp } from "../store/AppContext";
 import { groupPlategaMethods, quoteTariff, resolvePaymentUrl, type TariffPlan } from "../model";
 import { preparePaymentRedirect } from "@/lib/open-payment-url";
 import { ExtraOptions } from "./Services";
+import { InvoxyMigrationBanner } from "../components/InvoxyMigrationBanner";
 
 function durationPrice(plan: TariffPlan, days: number, extraDevices: number) {
   return quoteTariff(plan, days, extraDevices).total;
@@ -716,6 +717,8 @@ export default function Tariffs() {
         <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Тарифы</h1>
         <p className="mt-1 text-fog-500">Выберите подходящий тариф и оплатите.</p>
       </div>
+
+      <InvoxyMigrationBanner />
 
       <Accordion.Root
         type="multiple"

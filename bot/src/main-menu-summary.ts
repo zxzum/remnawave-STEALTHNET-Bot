@@ -54,7 +54,17 @@ export function buildMainMenuSummary(input: {
   const { subscription, tariff } = input;
   const lines = ["👋 Добро пожаловать в Лазейка ВПН!", ""];
   if (!subscription) {
-    return [...lines, "🛡 Ваша подписка: 🔴 Не активна", "📦 Ваш тариф: не выбран", "", "Выберите действие 👇"].join("\n");
+    return [
+      ...lines,
+      "🛡 Ваша подписка: 🔴 Не активна",
+      "📦 Ваш тариф: не выбран",
+      "",
+      "🚀 Мы переходим в Invoxy VPN!",
+      "💡 Там дешевле цены, приятнее интерфейс и разрабатывается собственное приложение.",
+      "Бот: @invoxy_bot · Сайт: https://invoxy.my",
+      "",
+      "Выберите действие 👇",
+    ].join("\n");
   }
 
   const user = subscriptionUser(subscription.subscription);
@@ -101,6 +111,7 @@ export function buildMainMenuSummary(input: {
   if (quotaLimit != null && quotaLimit > 0) lines.push(`🌐 Включено: ${formatGb(quotaLimit)} белого интернета`);
   lines.push("");
   lines.push("🚀 Доступен переезд в Invoxy VPN (+5 дней бонуса!)");
+  lines.push("💡 Там дешевле цены, приятнее интерфейс и разрабатывается собственное приложение.");
   lines.push("Бот: @invoxy_bot · Сайт: https://invoxy.my");
   lines.push("", "Выберите действие 👇");
   return lines.join("\n");

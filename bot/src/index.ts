@@ -721,10 +721,15 @@ async function handleTelegramLink(ctx: Context, code: string, lang: string): Pro
 const DEFAULT_BOT_WELCOME_TEXT = [
   "👋 Добро пожаловать в Лазейка ВПН!",
   "",
-  "Быстрый и безопасный VPN прямо в Telegram.",
-  "Подключение за 1 минуту, стабильная скорость и поддержка 24/7.",
+  "🚀 Мы постепенно переходим на новую платформу — Invoxy VPN!",
   "",
-  "Попробуйте бесплатно — без карты и обязательств.",
+  "Вы, конечно, можете продолжить использовать Лазейку, но мы рекомендуем сразу перейти в Invoxy и не тратить время здесь:",
+  "• 💰 Цены дешевле и выгоднее",
+  "• ✨ Удобный и приятный интерфейс",
+  "• 📱 Разрабатывается собственное официальное приложение",
+  "• 🎁 +5 дней бонуса при переходе!",
+  "",
+  "Переходите прямо сейчас в @invoxy_bot или оформите на сайте invoxy.my 👇",
 ].join("\n");
 
 async function renderCommandScreen(
@@ -829,11 +834,27 @@ async function showFirstWelcome(ctx: Context, userId: number, config: ConfigSnap
   const configuredText = (config?.botWelcomeText ?? "").trim();
   const legacyGenericWelcome = /^(?:что (?:умеет|делает) этот бот\b|лазейка vpn\s*\n\s*\n\s*ваш vpn, устройства и бонусы)/i.test(configuredText);
   const hasProjectName = /лазейка\s+впн/i.test(configuredText);
-  const text = !configuredText || legacyGenericWelcome || !hasProjectName ? DEFAULT_BOT_WELCOME_TEXT : configuredText;
+  const baseText = !configuredText || legacyGenericWelcome || !hasProjectName ? DEFAULT_BOT_WELCOME_TEXT : configuredText;
+  const migrationPrompt = !baseText.includes("invoxy_bot") && !baseText.includes("Invoxy")
+    ? "\n\n🚀 Мы переходим на Invoxy VPN! Там дешевле цены, приятнее интерфейс и разрабатывается собственное приложение. Переходите сразу: @invoxy_bot (+5 дней бонуса!)"
+    : "";
+  const text = baseText + migrationPrompt;
   const markup: InlineMarkup = {
     inline_keyboard: [
+      [
+        {
+          text: "🚀 ПЕРЕЙТИ В INVOXY (@invoxy_bot)",
+          url: "https://t.me/invoxy_bot?start=migrate",
+        },
+      ],
+      [
+        {
+          text: "🌐 Официальный сайт invoxy.my",
+          url: "https://invoxy.my",
+        },
+      ],
       [FIRST_WELCOME_TRIAL_BUTTON],
-      [{ text: "🏠 Главное меню", callback_data: "menu:main" }],
+      [{ text: "🏠 Остаться в Лазейке (Главное меню)", callback_data: "menu:main" }],
     ],
   };
   const caption = text.length > TELEGRAM_CAPTION_MAX ? `${text.slice(0, TELEGRAM_CAPTION_MAX - 3)}...` : text;
@@ -1019,7 +1040,7 @@ const DEFAULT_MENU_LINE_VISIBILITY: Record<string, boolean> = {
   chooseAction: false,
 };
 
-const DEFAULT_TARIFFS_TEXT = "Тарифы\n\n{{CATEGORY}}\n{{TARIFFS}}\n\nВыберите тариф для оплаты:";
+const DEFAULT_TARIFFS_TEXT = "Тарифы\n\n{{CATEGORY}}\n{{TARIFFS}}\n\nВыберите тариф для оплаты:\n💡 В Invoxy VPN (@invoxy_bot) цены выгоднее и перенос дает +5 дней в подарок!";
 const DEFAULT_PAYMENT_TEXT = "Оплата: {{NAME}} — {{PRICE}}\n\n{{ACTION}}";
 
 type BotTariffLineFields = {
