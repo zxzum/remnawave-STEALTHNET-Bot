@@ -599,17 +599,24 @@ export async function activateTariffForClient(
   // сохраняем итоговый expireAt чтобы синкнуть его в БД.
   let finalExpireAt: string | null = null;
 
+  let userRes: Awaited<ReturnType<typeof remnaGetUser>> | null = null;
   if (workingUuid) {
-    const userRes = await remnaGetUser(workingUuid);
-    if (userRes.error || !userRes.data) {
-      console.warn(`[tariff-activation] Remna user ${workingUuid} not found (status ${userRes.status}), will re-create`);
+    userRes = await remnaGetUser(workingUuid);
+    if (userRes.error && userRes.status !== 404) {
+      await new Promise((r) => setTimeout(r, 400));
+      userRes = await remnaGetUser(workingUuid);
+    }
+    if (userRes.status === 404) {
+      console.warn(`[tariff-activation] Remna user ${workingUuid} not found (status 404), will re-create`);
       workingUuid = null;
+      userRes = null;
       await prisma.client.update({ where: { id: client.id }, data: { remnawaveUuid: null } });
+    } else if (userRes.error || !userRes.data) {
+      return { ok: false, error: userRes.error || "Ошибка обращения к Remnawave", status: userRes.status >= 400 ? userRes.status : 500 };
     }
   }
 
-  if (workingUuid) {
-    const userRes = await remnaGetUser(workingUuid);
+  if (workingUuid && userRes?.data) {
     const currentExpireAt = extractCurrentExpireAt(userRes.data);
     const currentSquads = extractCurrentSquads(userRes.data);
 
@@ -957,9 +964,16 @@ export async function extendSecondarySubscription(
     return { ok: false, error: "Переход с пробного тарифа на этот тариф запрещён", status: 400 };
   }
 
-  const userRes = await (dependencies.getUser ?? remnaGetUser)(sec.remnawaveUuid);
-  if (userRes.error || !userRes.data) {
+  let userRes = await (dependencies.getUser ?? remnaGetUser)(sec.remnawaveUuid);
+  if (userRes.error && userRes.status !== 404) {
+    await new Promise((r) => setTimeout(r, 400));
+    userRes = await (dependencies.getUser ?? remnaGetUser)(sec.remnawaveUuid);
+  }
+  if (userRes.status === 404) {
     return { ok: false, error: "Пользователь VPN для этой подписки не найден", status: 404 };
+  }
+  if (userRes.error || !userRes.data) {
+    return { ok: false, error: userRes.error || "Ошибка обращения к Remnawave", status: userRes.status >= 400 ? userRes.status : 500 };
   }
 
   let entitlement: TrafficEntitlementInput;

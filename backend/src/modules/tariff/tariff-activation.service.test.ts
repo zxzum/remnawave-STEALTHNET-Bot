@@ -189,3 +189,110 @@ test("disallowed trial conversion stops before Remnawave access", async () => {
   assert.equal(result.status, 400);
   assert.equal(getUserCalls, 0);
 });
+
+test("extendSecondarySubscription retries on transient network error and succeeds", async () => {
+  let attempts = 0;
+  const result = await extendSecondarySubscription(
+    "sub-1",
+    "client-1",
+    {
+      id: "paid-1", durationDays: 30, trafficLimitBytes: 200n, deviceLimit: 1, includedDevices: 1,
+      internalSquadUuids: ["paid-squad"], trafficResetMode: "monthly", trafficLimitMode: "REMNAWAVE", price: 100,
+    },
+    undefined,
+    undefined,
+    false,
+    true,
+    false,
+    {
+      findSubscription: async () => ({
+        id: "sub-1", remnawaveUuid: "243", tariffId: "paid-1", ownerId: "client-1",
+        giftedToClientId: null, deletionRequestedAt: null, customPrice: 100, extraDevices: 0,
+        extraDevicesMonthlyPrice: 0, trialId: null, currentPricePerDay: 100 / 30, subscriptionIndex: 0, trial: null,
+      }),
+      findClient: async () => ({ currentTariffId: "paid-1", currentPricePerDay: 100 / 30 }),
+      getUser: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          return { error: "fetch failed", status: 500 };
+        }
+        return { data: { response: {
+          expireAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+          activeInternalSquads: [], trafficLimitBytes: 100, userTraffic: { usedTrafficBytes: 0 },
+        } }, status: 200 };
+      },
+      updateUser: async () => ({ data: {}, status: 200 }),
+      updateSubscription: async () => ({}),
+      applyEntitlement: async () => null,
+    } as any,
+  );
+
+  assert.equal(attempts, 2);
+  assert.equal(result.ok, true);
+});
+
+test("extendSecondarySubscription propagates real error and status on persistent 500 error", async () => {
+  let attempts = 0;
+  const result = await extendSecondarySubscription(
+    "sub-1",
+    "client-1",
+    {
+      id: "paid-1", durationDays: 30, trafficLimitBytes: 200n, deviceLimit: 1, includedDevices: 1,
+      internalSquadUuids: ["paid-squad"], trafficResetMode: "monthly", trafficLimitMode: "REMNAWAVE", price: 100,
+    },
+    undefined,
+    undefined,
+    false,
+    false,
+    false,
+    {
+      findSubscription: async () => ({
+        id: "sub-1", remnawaveUuid: "243", tariffId: "paid-1", ownerId: "client-1",
+        giftedToClientId: null, deletionRequestedAt: null, customPrice: 100, extraDevices: 0,
+        extraDevicesMonthlyPrice: 0, trialId: null, currentPricePerDay: 100 / 30, subscriptionIndex: 0, trial: null,
+      }),
+      getUser: async () => {
+        attempts += 1;
+        return { error: "fetch failed", status: 500 };
+      },
+    } as any,
+  );
+
+  assert.equal(attempts, 2);
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 500);
+  assert.equal(result.error, "fetch failed");
+});
+
+test("extendSecondarySubscription returns 404 only when user is genuinely 404", async () => {
+  let attempts = 0;
+  const result = await extendSecondarySubscription(
+    "sub-1",
+    "client-1",
+    {
+      id: "paid-1", durationDays: 30, trafficLimitBytes: 200n, deviceLimit: 1, includedDevices: 1,
+      internalSquadUuids: ["paid-squad"], trafficResetMode: "monthly", trafficLimitMode: "REMNAWAVE", price: 100,
+    },
+    undefined,
+    undefined,
+    false,
+    false,
+    false,
+    {
+      findSubscription: async () => ({
+        id: "sub-1", remnawaveUuid: "243", tariffId: "paid-1", ownerId: "client-1",
+        giftedToClientId: null, deletionRequestedAt: null, customPrice: 100, extraDevices: 0,
+        extraDevicesMonthlyPrice: 0, trialId: null, currentPricePerDay: 100 / 30, subscriptionIndex: 0, trial: null,
+      }),
+      getUser: async () => {
+        attempts += 1;
+        return { error: "Not Found", status: 404 };
+      },
+    } as any,
+  );
+
+  assert.equal(attempts, 1);
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 404);
+  assert.equal(result.error, "Пользователь VPN для этой подписки не найден");
+});

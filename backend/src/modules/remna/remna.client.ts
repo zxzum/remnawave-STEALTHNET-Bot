@@ -41,45 +41,54 @@ export async function remnaFetch<T>(
   }
 
   const url = `${REMNA_API_URL}${path.startsWith("/") ? path : `/${path}`}`;
-  // таймаут на запрос к Remna. Без него медленная/мёртвая нода
-  // (или ProxyCheck, рвущий сокет) подвешивала клиентские эндпоинты (/client/subscription,
-  // /client/devices синхронно ходят в Remna) до дефолтного undici-таймаута — фронт ловил
-  // «fetch failed», и API «как будто отваливался». Теперь — быстрый контролируемый отказ.
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      ...options,
-      headers: { ...getHeaders(), ...(options.headers as object) },
-      signal: ctrl.signal,
-    });
-    const text = await res.text();
-    let data: T | undefined;
-    if (text) {
-      try {
-        data = JSON.parse(text) as T;
-      } catch {
-        // non-JSON response
+  const isGet = !options.method || options.method.toUpperCase() === "GET";
+  const maxAttempts = isGet ? 2 : 1;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        ...options,
+        headers: { ...getHeaders(), ...(options.headers as object) },
+        signal: ctrl.signal,
+      });
+      const text = await res.text();
+      let data: T | undefined;
+      if (text) {
+        try {
+          data = JSON.parse(text) as T;
+        } catch {
+          // non-JSON response
+        }
       }
+      if (!res.ok) {
+        if (attempt < maxAttempts && (res.status === 502 || res.status === 503 || res.status === 504)) {
+          await new Promise((r) => setTimeout(r, 400));
+          continue;
+        }
+        return {
+          error: (data as { message?: string })?.message ?? res.statusText ?? text.slice(0, 200),
+          status: res.status,
+        };
+      }
+      return { data: data as T, status: res.status };
+    } catch (e) {
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 400));
+        continue;
+      }
+      if (e instanceof Error && e.name === "AbortError") {
+        return { error: "Remna API timeout", status: 504 };
+      }
+      const message = e instanceof Error ? e.message : String(e);
+      return { error: message, status: 500 };
+    } finally {
+      clearTimeout(timer);
     }
-    if (!res.ok) {
-      return {
-        error: (data as { message?: string })?.message ?? res.statusText ?? text.slice(0, 200),
-        status: res.status,
-      };
-    }
-    return { data: data as T, status: res.status };
-  } catch (e) {
-    // AbortError = таймаут: отдаём 504, чтобы вызывающий код отличал «Remna не ответила вовремя»
-    // от прочих сетевых ошибок (и не возвращал клиенту туманное «fetch failed»).
-    if (e instanceof Error && e.name === "AbortError") {
-      return { error: "Remna API timeout", status: 504 };
-    }
-    const message = e instanceof Error ? e.message : String(e);
-    return { error: message, status: 500 };
-  } finally {
-    clearTimeout(timer);
   }
+
+  return { error: "Unknown fetch error", status: 500 };
 }
 
 export type Result<T> = { data?: T; error?: string; status: number };
