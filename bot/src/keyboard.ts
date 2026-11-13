@@ -1501,10 +1501,10 @@ export function giftPaymentButtons(
 
 export const INVOXY_MIGRATED_TEXT = "🚀 Ваша подписка перенесена в Invoxy VPN.\n\nУправление ключами, продление и поддержка теперь в @invoxy_bot и на https://invoxy.my";
 
-/** Блокировка клиента из-за переноса в Invoxy: backend кладёт «Invoxy» в blockReason. */
+/** Блокировка клиента из-за переноса в Invoxy: backend отдаёт blockKind "INVOXY_MIGRATED". */
 export function isInvoxyMigrationBlock(err: unknown): boolean {
-  const e = err as { code?: string; blockReason?: string } | null;
-  return e?.code === "CLIENT_BLOCKED" && /invoxy/i.test(e.blockReason ?? "");
+  const e = err as { code?: string; blockKind?: string } | null;
+  return e?.code === "CLIENT_BLOCKED" && e.blockKind === "INVOXY_MIGRATED";
 }
 
 export function invoxyMigratedMarkup(): InlineMarkup {

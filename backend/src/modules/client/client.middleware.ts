@@ -5,6 +5,11 @@ import { prisma } from "../../db.js";
 
 const BEARER = "Bearer ";
 
+/** Фиксированный признак вместо сырого blockReason (тот не должен утекать клиенту). */
+export function blockKindOf(blockReason: string | null | undefined): "INVOXY_MIGRATED" | null {
+  return /invoxy/i.test(blockReason ?? "") ? "INVOXY_MIGRATED" : null;
+}
+
 export async function requireClientAuth(req: Request, res: Response, next: NextFunction) {
   const raw = req.headers.authorization;
   const token = typeof raw === "string" && raw.startsWith(BEARER) ? raw.slice(BEARER.length) : null;
@@ -23,7 +28,7 @@ export async function requireClientAuth(req: Request, res: Response, next: NextF
     return res.status(401).json({ message: "Unauthorized", code: "CLIENT_DELETED" });
   }
   if (client.isBlocked) {
-    return res.status(401).json({ message: "Unauthorized", code: "CLIENT_BLOCKED", blockReason: client.blockReason ?? null });
+    return res.status(401).json({ message: "Unauthorized", code: "CLIENT_BLOCKED", blockKind: blockKindOf(client.blockReason) });
   }
 
   (req as Request & { clientId: string; client: typeof client }).clientId = client.id;

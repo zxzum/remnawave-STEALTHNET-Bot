@@ -1,3 +1,4 @@
+import { blockKindOf } from "./client.middleware.js";
 import { randomBytes, createHmac } from "crypto";
 import { randomUUID } from "crypto";
 import { generateSecret, generateURI, verify } from "otplib";
@@ -473,7 +474,7 @@ clientAuthRouter.post("/register", async (req, res) => {
   if (hasTelegram) {
     const existing = await prisma.client.findFirst({
       where: asClientWhere({ telegramId: data.telegramId! }),
-      select: { id: true, email: true, telegramId: true, telegramUsername: true, preferredLang: true, preferredCurrency: true, balance: true, referralCode: true, referralPercent: true, remnawaveUuid: true, trialUsed: true, isBlocked: true, autoRenewEnabled: true, autoRenewTariffId: true, yoomoneyAccessToken: true, totpEnabled: true, createdAt: true, onboardingCompleted: true },
+      select: { id: true, email: true, telegramId: true, telegramUsername: true, preferredLang: true, preferredCurrency: true, balance: true, referralCode: true, referralPercent: true, remnawaveUuid: true, trialUsed: true, isBlocked: true, blockReason: true, autoRenewEnabled: true, autoRenewTariffId: true, yoomoneyAccessToken: true, totpEnabled: true, createdAt: true, onboardingCompleted: true },
     });
     if (existing) {
       if (!existing.isBlocked) {
@@ -484,7 +485,7 @@ clientAuthRouter.post("/register", async (req, res) => {
           if (blocked) return res.status(403).json({ message: "Аккаунт заблокирован" });
         }
       }
-      if (existing.isBlocked) return res.status(403).json({ message: "Аккаунт заблокирован" });
+      if (existing.isBlocked) return res.status(403).json({ message: "Аккаунт заблокирован", code: "CLIENT_BLOCKED", blockKind: blockKindOf(existing.blockReason) });
       // isNewClient=false — клиент уже был
       // (бот не будет fire after_registration broadcast).
       return res.json({ token: signClientToken(existing.id), client: toClientShape(existing), isNewClient: false });
