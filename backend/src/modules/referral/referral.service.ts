@@ -56,6 +56,9 @@ export async function distributeReferralRewards(paymentId: string): Promise<{ di
     if (payment.status !== "PAID") {
       return { distributed: false, message: "Payment is not PAID", notifications: [] as ReferralAccrualNotification[] };
     }
+    if (payment.metadata?.includes('"blockedClientHold":true')) {
+      return { distributed: false, message: "Payment held for a blocked client", notifications: [] as ReferralAccrualNotification[] };
+    }
     if (payment.referralDistributedAt != null) {
       return { distributed: false, message: "Referral rewards already distributed for this payment", notifications: [] as ReferralAccrualNotification[] };
     }

@@ -3,6 +3,7 @@
  * Вызывается из: webhook YooMoney/YooKassa/Platega, оплата балансом, admin mark-as-paid.
  */
 
+import { holdPaymentIfClientBlocked } from "../payment/blocked-client-guard.js";
 import { randomBytes } from "crypto";
 import { randomUUID } from "crypto";
 import { prisma } from "../../db.js";
@@ -21,6 +22,7 @@ function generatePassword(): string {
  * userIdentifier: UUID для VLESS/Trojan, иначе случайный логин; secret: пароль для SS/Hy2/Trojan.
  */
 export async function createSingboxSlotsByPaymentId(paymentId: string): Promise<CreateSingboxSlotsResult> {
+  if (await holdPaymentIfClientBlocked(paymentId)) return { ok: false, error: "Клиент заблокирован: платёж на ручной проверке", status: 403 };
   try {
     return await prisma.$transaction(async (tx) => {
       await tx.$queryRawUnsafe('SELECT "id" FROM "payments" WHERE "id" = $1 FOR UPDATE', paymentId);

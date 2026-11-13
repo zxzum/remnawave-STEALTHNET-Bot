@@ -3,6 +3,7 @@
  * Вызывается из: webhook YooMoney/YooKassa/Platega, admin mark-as-paid.
  */
 
+import { holdPaymentIfClientBlocked } from "../payment/blocked-client-guard.js";
 import { randomBytes } from "crypto";
 import { prisma } from "../../db.js";
 import { decideSlotActivation } from "../payment/payment-completion-policy.js";
@@ -24,6 +25,7 @@ function generatePassword(): string {
  * Выбирает ONLINE ноды, исключая DISABLED. Распределяет слоты round-robin.
  */
 export async function createProxySlotsByPaymentId(paymentId: string): Promise<CreateProxySlotsResult> {
+  if (await holdPaymentIfClientBlocked(paymentId)) return { ok: false, error: "Клиент заблокирован: платёж на ручной проверке", status: 403 };
   try {
     return await prisma.$transaction(async (tx) => {
       await tx.$queryRawUnsafe('SELECT "id" FROM "payments" WHERE "id" = $1 FOR UPDATE', paymentId);

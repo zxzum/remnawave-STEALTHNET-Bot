@@ -17,7 +17,7 @@ export async function recordPromoCodeUsageFromPayment(paymentId: string): Promis
     select: { id: true, clientId: true, metadata: true, status: true },
   });
   if (!payment || payment.status !== "PAID") return;
-  if (!payment.metadata) return;
+  if (!payment.metadata || payment.metadata.includes('"blockedClientHold":true')) return;
 
   let promoCodeId: string | null = null;
   try {
