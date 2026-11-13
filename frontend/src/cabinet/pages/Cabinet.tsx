@@ -15,6 +15,7 @@ import { Separator } from "../components/ui/separator";
 import { cn } from "../lib/cn";
 import { isExpiredTrial, type CabinetSubscription as Subscription } from "../model";
 import { PlanDialog } from "./Tariffs";
+import { ExtraOptions } from "./Services";
 import { InvoxyMigrationBanner } from "../components/InvoxyMigrationBanner";
 
 function pluralDays(n: number) {
@@ -30,7 +31,9 @@ function formatGb(value: number) {
 }
 
 function MainSubscriptionCard({ sub }: { sub: Subscription }) {
-  const { disconnectDevice } = useApp();
+  const { disconnectDevice, config } = useApp();
+  const [buyDevice, setBuyDevice] = useState(false);
+  const canBuyDevice = sub.status === "active" && Boolean(config?.sellOptions?.some((option) => option.kind === "devices"));
   const limit = sub.trafficLimitGB ?? 0;
   const expiredTrial = isExpiredTrial(sub);
 
@@ -110,6 +113,19 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
           {sub.devices.length} из {sub.deviceLimit}
         </span>
       </div>
+      {canBuyDevice && (
+        <>
+          <Button variant="secondary" size="md" className="mb-4 w-full" onClick={() => setBuyDevice(true)}>
+            <Smartphone /> Докупить устройство
+          </Button>
+          <Modal open={buyDevice} onOpenChange={setBuyDevice} className="max-w-lg">
+            <ModalBody className="p-5">
+              <ModalTitle className="sr-only">Докупить устройство</ModalTitle>
+              <ExtraOptions devicesOnly fixedTarget={sub.id} />
+            </ModalBody>
+          </Modal>
+        </>
+      )}
 
       <ul className="flex flex-col gap-3">
         {sub.devices.map((d, i) => (
