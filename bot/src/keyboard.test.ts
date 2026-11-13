@@ -167,3 +167,13 @@ function buildOptions(showTrial: boolean): Parameters<typeof mainMenu>[0] {
     buttonsPerRow: 1,
   };
 }
+
+test("Invoxy migration block is recognised only for CLIENT_BLOCKED with an Invoxy reason", async () => {
+  const { isInvoxyMigrationBlock, invoxyMigratedMarkup } = await import("./keyboard.js");
+  assert.equal(isInvoxyMigrationBlock({ code: "CLIENT_BLOCKED", blockReason: "Мигрирован в Invoxy VPN" }), true);
+  assert.equal(isInvoxyMigrationBlock({ code: "CLIENT_BLOCKED", blockReason: "Community Blacklist" }), false);
+  assert.equal(isInvoxyMigrationBlock({ code: "CLIENT_BLOCKED" }), false);
+  assert.equal(isInvoxyMigrationBlock(new Error("x")), false);
+  const urls = invoxyMigratedMarkup().inline_keyboard.flat().map((b) => (b as { url?: string }).url);
+  assert.deepEqual(urls, ["https://t.me/invoxy_bot", "https://invoxy.my"]);
+});

@@ -71,6 +71,9 @@ import {
   type InlineMarkup,
   type InnerEmojiIds,
   type BotMenuSection,
+  INVOXY_MIGRATED_TEXT,
+  invoxyMigratedMarkup,
+  isInvoxyMigrationBlock,
 } from "./keyboard.js";
 import { t as _t, formatDays as _formatDays, setTranslations } from "./i18n.js";
 import { isRetryingGetUpdatesError } from "./telegram-error-reporting.js";
@@ -171,6 +174,16 @@ composer.use((ctx, next) => {
     void syncTelegramUsername(ctx.from.id, ctx.from.username).catch(() => {});
   }
   return next();
+});
+
+// Мигрированный в Invoxy клиент (401 CLIENT_BLOCKED) видит понятное сообщение вместо ошибки.
+composer.use(async (ctx, next) => {
+  try {
+    await next();
+  } catch (err) {
+    if (!isInvoxyMigrationBlock(err)) throw err;
+    await ctx.reply(INVOXY_MIGRATED_TEXT, { reply_markup: invoxyMigratedMarkup() }).catch(() => {});
+  }
 });
 
 function telegramErrorContext(ctx: Context | undefined): api.BotErrorReportInput["telegram"] {
@@ -2473,6 +2486,10 @@ async function handleStart(ctx: Context, payload: string): Promise<void> {
     }
     if (!richMenuSent) await renderCommandScreen(ctx, from.id, text, markup, config, "welcome", entities, true);
   } catch (e: unknown) {
+    if (isInvoxyMigrationBlock(e)) {
+      await ctx.reply(INVOXY_MIGRATED_TEXT, { reply_markup: invoxyMigratedMarkup() });
+      return;
+    }
     const msg = e instanceof Error ? e.message : "Ошибка входа";
     await ctx.reply(`❌ ${msg}`);
   }

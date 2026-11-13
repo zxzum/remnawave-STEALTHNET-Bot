@@ -1498,3 +1498,20 @@ export function giftPaymentButtons(
   rows.push([btn(back, "gift:buy", backSty, emojiIds?.back)]);
   return { inline_keyboard: rows };
 }
+
+export const INVOXY_MIGRATED_TEXT = "🚀 Ваша подписка перенесена в Invoxy VPN.\n\nУправление ключами, продление и поддержка теперь в @invoxy_bot и на https://invoxy.my";
+
+/** Блокировка клиента из-за переноса в Invoxy: backend кладёт «Invoxy» в blockReason. */
+export function isInvoxyMigrationBlock(err: unknown): boolean {
+  const e = err as { code?: string; blockReason?: string } | null;
+  return e?.code === "CLIENT_BLOCKED" && /invoxy/i.test(e.blockReason ?? "");
+}
+
+export function invoxyMigratedMarkup(): InlineMarkup {
+  return {
+    inline_keyboard: [
+      [{ text: "🚀 Открыть Invoxy VPN (@invoxy_bot)", url: "https://t.me/invoxy_bot", style: "primary" }],
+      [{ text: "🌐 invoxy.my", url: "https://invoxy.my", style: "primary" }],
+    ],
+  };
+}

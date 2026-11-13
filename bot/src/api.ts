@@ -29,9 +29,11 @@ async function fetchJson<T>(path: string, opts?: { method?: string; body?: unkno
   if (!res.ok) {
     const msg = typeof (data as { message?: string }).message === "string" ? (data as { message: string }).message : `HTTP ${res.status}`;
     // T-tariff-restriction (портировано из WolfVPN): прокидываем code (напр. TARIFF_RESTRICTED) для бота.
-    const err = new Error(msg) as Error & { code?: string };
+    const err = new Error(msg) as Error & { code?: string; blockReason?: string };
     const code = (data as { code?: string }).code;
     if (typeof code === "string") err.code = code;
+    const blockReason = (data as { blockReason?: unknown }).blockReason;
+    if (typeof blockReason === "string") err.blockReason = blockReason;
     throw err;
   }
   return data as T;
