@@ -4036,22 +4036,10 @@ clientRouter.post("/payments/platega", async (req, res) => {
     } else if (extraOption.kind === "devices") {
       const product = cfg.sellOptionsDevicesEnabled && cfg.sellOptionsDevicesProducts?.find((p) => p.id === extraOption.productId);
       if (!product) return res.status(400).json({ message: "Опция не найдена" });
-      // для primary подписки (sub_index=0) — масштабируем цену по оставшимся дням
-      const clientForProrata = await prisma.client.findUnique({
-        where: { id: clientId },
-        select: { remnawaveUuid: true },
-      });
-      let prorataCoef = 1;
-      if (clientForProrata?.remnawaveUuid) {
-        const primarySub = await prisma.subscription.findFirst({
-          where: { ownerId: clientId, remnawaveUuid: clientForProrata.remnawaveUuid },
-          select: { expireAt: true },
-        });
-        if (primarySub?.expireAt) {
-          const daysLeft = (primarySub.expireAt.getTime() - Date.now()) / 86_400_000;
-          prorataCoef = Math.max(1, daysLeft / 30);
-        }
-      }
+      // pro-rata по оставшимся дням целевой подписки (без target — primary)
+      const prorataCoef = extraOption.targetSubscriptionId
+        ? await calculateDevicesProrataPriceCoefficient(extraOption.targetSubscriptionId)
+        : await calculateDevicesProrataPriceCoefficientForPrimary(clientId);
       finalAmount = Math.floor(product.price * prorataCoef);
       currencyToUse = product.currency.toUpperCase();
       metadataExtra = { extraOption: { kind: "devices", deviceCount: product.deviceCount, productPriceMonthly: product.price } };
