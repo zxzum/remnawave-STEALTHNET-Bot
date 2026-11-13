@@ -251,7 +251,10 @@ supportInternalRouter.post("/annul-subscription", contextLimiter, async (req, re
     }
 
     if (notify && targetTelegramId && /^\d+$/.test(targetTelegramId)) {
-      await notifyClientMigrated(targetTelegramId, zeroedBalance);
+      // Не ждём Telegram: если ответ Invoxy потеряется по сети, повтор вернёт уже zeroedBalance=0.
+      void notifyClientMigrated(targetTelegramId, zeroedBalance).catch((error) =>
+        console.warn("[support] annul: migration notice failed", error),
+      );
     }
 
     return res.json({
