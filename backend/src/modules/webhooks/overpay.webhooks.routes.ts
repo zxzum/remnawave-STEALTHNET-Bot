@@ -274,14 +274,22 @@ async function handle(req: Request, res: Response) {
 
     const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
     const isTopUp = !isVpnSubscriptionPurchase(payment) && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
-    const blocked = await isClientBlocked(payment.clientId); // INVOXY: без зачисления заблокированному
+    // INVOXY: заблокированному клиенту — только PAID + ручная проверка, без зачисления, активации, промо и рефералок.
+    if (await isClientBlocked(payment.clientId)) {
+      await prisma.payment.updateMany({
+        where: { id: payment.id, status: "PENDING" },
+        data: { status: "PAID", paidAt: new Date(), externalId: overpayId ?? payment.externalId },
+      });
+      await holdPaymentIfClientBlocked(payment.id);
+      return res.status(200).json({ received: true });
+    }
     if (isTopUp) {
       const changed = await prisma.$transaction(async (tx) => {
         const upd = await tx.payment.updateMany({
           where: { id: payment.id, status: "PENDING" },
           data: { status: "PAID", paidAt: new Date(), externalId: overpayId ?? payment.externalId },
         });
-        if (upd.count > 0 && !blocked) {
+        if (upd.count > 0) {
           await tx.client.update({
             where: { id: payment.clientId },
             data: { balance: { increment: payment.amount } },
@@ -289,9 +297,7 @@ async function handle(req: Request, res: Response) {
         }
         return upd.count > 0;
       });
-      if (blocked) {
-        await holdPaymentIfClientBlocked(payment.id);
-      } else if (changed) {
+      if (changed) {
         console.log("[Overpay Webhook] Payment PAID, balance credited (top-up)", {
           paymentId: payment.id,
           amount: payment.amount,
