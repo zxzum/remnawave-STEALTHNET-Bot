@@ -15,6 +15,7 @@ import {
   trafficOptionUnitPrice,
   quoteTariff,
   resolveOptionalNav,
+  devicePackPrice,
   resolvePaymentUrl,
   isExpiredTrial,
   shouldOfferTelegramLink,
@@ -287,4 +288,12 @@ test("prioritizes whitelist traffic packages for the accent card", () => {
   assert.equal(isWhitelistTrafficOption(options[0]), false);
   assert.equal(isWhitelistTrafficOption(options[2]), false);
   assert.equal(isWhitelistTrafficOption(options[3]), false);
+});
+
+test("scales device pack price by remaining days, never below the monthly price", () => {
+  assert.equal(devicePackPrice(50, 10), 50);
+  assert.equal(devicePackPrice(50, 30), 50);
+  assert.equal(devicePackPrice(50, 90), 150);
+  assert.equal(devicePackPrice(50, 45), 75);
+  assert.equal(devicePackPrice(50, 31), 51);
 });

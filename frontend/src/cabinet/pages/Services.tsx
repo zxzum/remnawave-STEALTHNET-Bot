@@ -15,7 +15,7 @@ import { Modal, ModalDescription, ModalTitle } from "../components/ui/modal";
 import { PaymentMethodsBlock } from "../components/ui/payment-methods";
 import { useSuccess } from "../components/ui/success-dialog";
 import { prefetchPublicConfig } from "../components/ui/prefetch";
-import { canBuyTrafficOption, groupPlategaMethods, isWhitelistTrafficOption, resolvePaymentUrl, sortTrafficOptions, trafficOptionLabel, trafficOptionUnitPrice } from "../model";
+import { canBuyTrafficOption, devicePackPrice, groupPlategaMethods, isWhitelistTrafficOption, resolvePaymentUrl, sortTrafficOptions, trafficOptionLabel, trafficOptionUnitPrice } from "../model";
 import { useApp } from "../store/AppContext";
 import { cn } from "../lib/cn";
 
@@ -265,29 +265,32 @@ function TrafficOptionDialog({
   );
 }
 
-export function ExtraOptions({ trafficOnly = false }: { trafficOnly?: boolean } = {}) {
+export function ExtraOptions({ trafficOnly = false, devicesOnly = false, fixedTarget }: { trafficOnly?: boolean; devicesOnly?: boolean; fixedTarget?: string } = {}) {
   const { state } = useClientAuth();
   const { config, subscriptions } = useApp();
   const activeSubscriptions = subscriptions.filter((item) => item.status === "active");
-  const selectableSubscriptions = trafficOnly ? activeSubscriptions : subscriptions;
-  const [target, setTarget] = useState(selectableSubscriptions[0]?.id ?? "");
+  const activeOnly = trafficOnly || devicesOnly;
+  const selectableSubscriptions = activeOnly ? activeSubscriptions : subscriptions;
+  const [target, setTarget] = useState(fixedTarget ?? selectableSubscriptions[0]?.id ?? "");
   const [dialogOption, setDialogOption] = useState<TrafficSellOption | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const targetSubscription = selectableSubscriptions.find((item) => item.id === target) ?? selectableSubscriptions[0];
   const allOptions = (config?.sellOptions ?? []).filter((option) => {
     if (trafficOnly && option.kind !== "traffic") return false;
-    if (trafficOnly && !targetSubscription) return false;
+    if (devicesOnly && option.kind !== "devices") return false;
+    if (activeOnly && !targetSubscription) return false;
     return option.kind !== "traffic" || canBuyTrafficOption(option, targetSubscription);
   });
   const options = allOptions;
+  const price = (option: PublicSellOption) => option.kind === "devices" && targetSubscription ? devicePackPrice(option.price, targetSubscription.daysLeft) : option.price;
   // Прогреваем кэш public-config заранее — диалог оплаты открывается без запроса
   useEffect(() => { void prefetchPublicConfig().catch(() => undefined); }, []);
   useEffect(() => {
-    const pool = trafficOnly ? subscriptions.filter((item) => item.status === "active") : subscriptions;
+    const pool = activeOnly ? subscriptions.filter((item) => item.status === "active") : subscriptions;
     if (!pool.some((item) => item.id === target)) setTarget(pool[0]?.id ?? "");
-  }, [subscriptions, target, trafficOnly]);
-  return <div className="flex flex-col gap-5"><PageTitle compact icon={PackagePlus} title={trafficOnly ? "Докупить трафик" : "Дополнительные опции"} subtitle={trafficOnly ? "Пакеты трафика для выбранной подписки." : "Трафик, устройства и серверы для выбранной подписки."} />
-    {selectableSubscriptions.length > 1 && <Select value={target} onChange={(event) => setTarget(event.target.value)}><option value="">Выберите подписку</option>{selectableSubscriptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select>}
+  }, [subscriptions, target, activeOnly]);
+  return <div className="flex flex-col gap-5"><PageTitle compact icon={PackagePlus} title={trafficOnly ? "Докупить трафик" : devicesOnly ? "Докупить устройство" : "Дополнительные опции"} subtitle={trafficOnly ? "Пакеты трафика для выбранной подписки." : devicesOnly ? "Цена считается по оставшимся дням подписки." : "Трафик, устройства и серверы для выбранной подписки."} />
+    {!fixedTarget && selectableSubscriptions.length > 1 && <Select value={target} onChange={(event) => setTarget(event.target.value)}><option value="">Выберите подписку</option>{selectableSubscriptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select>}
     {trafficOnly ? (
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {sortTrafficOptions(options.filter((option): option is TrafficSellOption => option.kind === "traffic")).map((option) => (
@@ -299,7 +302,7 @@ export function ExtraOptions({ trafficOnly = false }: { trafficOnly?: boolean } 
         ))}
       </div>
     ) : (
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{options.map((option) => <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} key={`${option.kind}:${option.id}`} className="glass rounded-4xl p-5"><div className="icon-tile h-11 w-11 rounded-xl">{option.kind === "traffic" ? <Wifi className="h-5 w-5" /> : option.kind === "devices" ? <Smartphone className="h-5 w-5" /> : <Server className="h-5 w-5" />}</div><h2 className="mt-4 text-lg font-extrabold">{option.name}</h2><p className="mt-1 text-sm text-fog-500">{optionDescription(option)}</p><p className="mt-4 text-xl font-extrabold">{money(option.price, option.currency)}</p><CheckoutActions amount={option.price} currency={option.currency} description={option.name} payload={{ extraOption: { kind: option.kind, productId: option.id, targetSubscriptionId: target || undefined } }} balancePay={() => api.clientPayOptionByBalance(state.token!, { extraOption: { kind: option.kind, productId: option.id }, targetSubscriptionId: target || undefined })} /></motion.section>)}</div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{options.map((option) => <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} key={`${option.kind}:${option.id}`} className="glass rounded-4xl p-5"><div className="icon-tile h-11 w-11 rounded-xl">{option.kind === "traffic" ? <Wifi className="h-5 w-5" /> : option.kind === "devices" ? <Smartphone className="h-5 w-5" /> : <Server className="h-5 w-5" />}</div><h2 className="mt-4 text-lg font-extrabold">{option.name}</h2><p className="mt-1 text-sm text-fog-500">{optionDescription(option)}</p><p className="mt-4 text-xl font-extrabold">{money(price(option), option.currency)}</p>{option.kind === "devices" && targetSubscription && targetSubscription.daysLeft > 30 && <p className="mt-1 text-xs text-fog-600">{money(option.price, option.currency)} за 30 дн × {Math.round(targetSubscription.daysLeft / 30 * 10) / 10} (осталось {targetSubscription.daysLeft} дн.)</p>}<CheckoutActions amount={price(option)} currency={option.currency} description={option.name} payload={{ extraOption: { kind: option.kind, productId: option.id, targetSubscriptionId: target || undefined } }} balancePay={() => api.clientPayOptionByBalance(state.token!, { extraOption: { kind: option.kind, productId: option.id }, targetSubscriptionId: target || undefined })} /></motion.section>)}</div>
     )}
     {trafficOnly && <TrafficOptionDialog option={dialogOption} open={dialogOpen} onOpenChange={setDialogOpen} targetSubscriptionId={target || undefined} />}
     {config && options.length === 0 && <div className="glass rounded-4xl p-7 text-center text-fog-500">{trafficOnly && !targetSubscription ? "Сначала подключите тариф — после этого здесь появятся пакеты трафика." : "Для выбранной подписки подходящих пакетов сейчас нет."}</div>}

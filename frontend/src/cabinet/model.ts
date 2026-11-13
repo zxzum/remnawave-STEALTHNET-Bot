@@ -452,6 +452,11 @@ export function shouldOfferTelegramLink(client: { id: string; telegramId?: strin
   return Boolean(client && !client.telegramId);
 }
 
+/** Цена пакета устройств: как на бэкенде — ×(дней/30), но не меньше базовой, вниз до целых. */
+export function devicePackPrice(monthlyPrice: number, daysLeft: number): number {
+  return Math.floor(monthlyPrice * Math.max(1, daysLeft / 30));
+}
+
 export function resolveOptionalNav(config: {
   customBuildConfig?: { enabled?: boolean } | null;
   sellOptionsEnabled?: boolean;
