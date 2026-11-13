@@ -22,6 +22,7 @@ import {
   type PlategaTransaction,
 } from "../platega/platega.service.js";
 import { recordWebhook, markOutcome } from "../webhook-inbox/webhook-inbox.service.js";
+import { holdPaymentIfClientBlocked, isClientBlocked } from "../payment/blocked-client-guard.js";
 import { activateTariffByPaymentId } from "../tariff/tariff-activation.service.js";
 import { createProxySlotsByPaymentId } from "../proxy/proxy-slots-activation.service.js";
 import { createSingboxSlotsByPaymentId } from "../singbox/singbox-slots-activation.service.js";
@@ -297,15 +298,20 @@ export async function completePlategaPayment(paymentId: string): Promise<{ ok: b
   const isMetadataProduct = isExtraOption || hasCustomBuildInMetadata(payment.metadata);
   const isTopUp = !payment.tariffId && !payment.proxyTariffId && !payment.singboxTariffId && !isMetadataProduct;
 
+  const blocked = await isClientBlocked(payment.clientId); // INVOXY: без зачисления заблокированному
   const changed = await prisma.$transaction(async (tx) => {
     await tx.$queryRawUnsafe('SELECT "id" FROM "payments" WHERE "id" = $1 FOR UPDATE', payment.id);
     const fresh = await tx.payment.findUnique({ where: { id: payment.id }, select: { status: true } });
     if (!fresh || fresh.status !== "PENDING") return false;
     await tx.payment.update({ where: { id: payment.id }, data: { status: "PAID", paidAt: new Date() } });
-    if (isTopUp) await tx.client.update({ where: { id: payment.clientId }, data: { balance: { increment: payment.amount } } });
+    if (isTopUp && !blocked) await tx.client.update({ where: { id: payment.clientId }, data: { balance: { increment: payment.amount } } });
     return true;
   });
 
+  if (blocked) {
+    await holdPaymentIfClientBlocked(payment.id);
+    return { ok: true, changed, activated: false };
+  }
   if (changed && isTopUp) {
     await notifyBalanceToppedUp(payment.clientId, payment.amount, payment.currency || "RUB", "Platega").catch(() => {});
   }

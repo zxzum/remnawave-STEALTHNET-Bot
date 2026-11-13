@@ -8,6 +8,7 @@ import { remnaGetUser, remnaUpdateUser, isRemnaConfigured } from "../remna/remna
 import { restoreMeteredSquad } from "../squad-traffic/traffic-enforcement.service.js";
 import { effectiveLimitBytes } from "../squad-traffic/traffic-period.js";
 import type { SellOptionTrafficProduct, TrafficOptionMode } from "../client/client.service.js";
+import { holdPaymentIfClientBlocked } from "../payment/blocked-client-guard.js";
 
 export type ApplyExtraOptionResult =
   | { ok: true; outcome: "APPLIED" | "ALREADY_APPLIED" | "QUEUED" }
@@ -248,6 +249,9 @@ export async function applyExtraOptionByPaymentId(paymentId: string): Promise<Ap
 
   let payment = await prisma.payment.findUnique({ where: { id: paymentId } });
   if (!payment) return pre("Платёж не найден", 404);
+  if (payment.extraOptionState !== "APPLIED" && await holdPaymentIfClientBlocked(paymentId)) {
+    return pendingFailure("Клиент заблокирован: платёж на ручной проверке", 403, false);
+  }
   if (payment.extraOptionState === "APPLIED") return { ok: true, outcome: "ALREADY_APPLIED" };
   if (payment.extraOptionState === "MANUAL_REVIEW") return pendingFailure("Платёж ожидает ручной проверки", 409, false);
   if (payment.extraOptionState === "APPLYING") {

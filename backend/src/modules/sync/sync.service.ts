@@ -118,6 +118,11 @@ export async function syncFromRemna(): Promise<{
 
           const existing = existingByUuid || existingByTg || existingByEmail;
 
+          if (existing?.isBlocked) {
+            // INVOXY: заблокированный/мигрированный клиент — панельный пользователь не наш, не перелинковываем.
+            result.skipped++;
+            continue;
+          }
           if (existing) {
             const data: { remnawaveUuid: string; telegramId?: string; email?: string | null; telegramUsername?: string; trialUsed?: boolean } = {
               remnawaveUuid: uuid,
@@ -245,7 +250,7 @@ export async function createRemnaUsersForClientsWithoutUuid(): Promise<{
   }
 
   const clients = await prisma.client.findMany({
-    where: { remnawaveUuid: null },
+    where: { remnawaveUuid: null, isBlocked: false },
     select: { id: true, email: true, telegramId: true, telegramUsername: true },
   });
 

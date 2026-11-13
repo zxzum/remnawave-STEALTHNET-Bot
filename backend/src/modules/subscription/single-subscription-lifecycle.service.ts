@@ -90,6 +90,11 @@ export function revokeSingleSubscription(
   return runSingleSubscriptionOperation(subscriptionId, request);
 }
 
+/** Без remnawaveUuid (в т.ч. отвязанные при миграции в Invoxy) панель трогать нельзя. */
+export function expiredAccessWhere(now: Date) {
+  return { expireAt: { lte: now }, deletionRequestedAt: null, remnawaveUuid: { not: null } };
+}
+
 export async function processExpiredSingleSubscriptionAccess(
   limit = 200,
   request: RemnaUpdateRequest = remnaUpdateUser,
@@ -98,7 +103,7 @@ export async function processExpiredSingleSubscriptionAccess(
 ) {
   const config = await configLoader();
   const subscriptions = await prisma.subscription.findMany({
-    where: { expireAt: { lte: now }, deletionRequestedAt: null },
+    where: expiredAccessWhere(now),
     orderBy: { expireAt: "desc" },
     take: Math.max(1, Math.min(1000, Math.trunc(limit))),
     select: {

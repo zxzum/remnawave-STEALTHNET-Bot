@@ -366,7 +366,7 @@ test("expired access activates grace for exactly one owning Remnawave UUID", asy
       hwidDeviceLimit: 5,
       activeInternalSquads: ["grace-squad"],
     }]);
-    assert.deepEqual(mock.queries[0]?.where, { expireAt: { lte: now }, deletionRequestedAt: null });
+    assert.deepEqual(mock.queries[0]?.where, { expireAt: { lte: now }, deletionRequestedAt: null, remnawaveUuid: { not: null } });
     assert.equal(((mock.queries[0]?.select as Record<string, unknown>).remnawaveUuid), true);
     assert.deepEqual(mock.updates[0], { where: { id: "sub-grace" }, data: { graceUntil } });
   } finally {

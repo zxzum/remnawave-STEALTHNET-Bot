@@ -94,3 +94,9 @@ test("Telegram and email expiry reminders use independent deduplication keys", (
   assert.match(expiryKey("email", "trial", 1440, expireAt), /^email:trial-expiry:1440:/);
   assert.equal(expiryReminderOffset(expireAt, new Date("2026-07-27T12:00:00.000Z"), parseReminderHours("24")), 1440);
 });
+
+test("expired-access sweep skips subscriptions detached from the panel", async () => {
+  const { expiredAccessWhere } = await import("./single-subscription-lifecycle.service.js");
+  const now = new Date("2026-11-13T00:00:00.000Z");
+  assert.deepEqual(expiredAccessWhere(now), { expireAt: { lte: now }, deletionRequestedAt: null, remnawaveUuid: { not: null } });
+});

@@ -18,6 +18,7 @@ import {
 } from "../remna/remna.client.js";
 import { createAdditionalSubscription, deleteSubscription } from "../gift/gift.service.js";
 import { getSystemConfig } from "../client/client.service.js";
+import { holdPaymentIfClientBlocked } from "../payment/blocked-client-guard.js";
 import { upsertSubscriptionByRemnaUuid } from "../subscription/subscription.helpers.js";
 import { deleteSingleSubscription } from "../subscription/single-subscription-lifecycle.service.js";
 import { minimumEligibleTrialBonus, quoteConvertedDays } from "../subscription/subscription-change.policy.js";
@@ -1658,6 +1659,7 @@ export async function activateTariffByPaymentId(paymentId: string): Promise<Acti
     select: { clientId: true },
   });
   if (!payment) return { ok: false, error: "Платёж не найден", status: 404 };
+  if (await holdPaymentIfClientBlocked(paymentId)) return { ok: false, error: "Клиент заблокирован: платёж на ручной проверке", status: 403 };
   return withClientSubscriptionLock(payment.clientId, (tx) => activateTariffByPaymentIdUnlocked(paymentId, tx));
 }
 

@@ -11,6 +11,7 @@
 import { Router, Request, Response } from "express";
 import { prisma } from "../../db.js";
 import { OVERPAY_SUCCESS_STATUSES, OVERPAY_FAILED_STATUSES } from "../overpay/overpay.service.js";
+import { holdPaymentIfClientBlocked, isClientBlocked } from "../payment/blocked-client-guard.js";
 import { activateTariffByPaymentId } from "../tariff/tariff-activation.service.js";
 import { createProxySlotsByPaymentId } from "../proxy/proxy-slots-activation.service.js";
 import { createSingboxSlotsByPaymentId } from "../singbox/singbox-slots-activation.service.js";
@@ -273,13 +274,14 @@ async function handle(req: Request, res: Response) {
 
     const isExtraOption = hasExtraOptionInMetadata(payment.metadata);
     const isTopUp = !isVpnSubscriptionPurchase(payment) && !payment.proxyTariffId && !payment.singboxTariffId && !isExtraOption;
+    const blocked = await isClientBlocked(payment.clientId); // INVOXY: без зачисления заблокированному
     if (isTopUp) {
       const changed = await prisma.$transaction(async (tx) => {
         const upd = await tx.payment.updateMany({
           where: { id: payment.id, status: "PENDING" },
           data: { status: "PAID", paidAt: new Date(), externalId: overpayId ?? payment.externalId },
         });
-        if (upd.count > 0) {
+        if (upd.count > 0 && !blocked) {
           await tx.client.update({
             where: { id: payment.clientId },
             data: { balance: { increment: payment.amount } },
@@ -287,7 +289,9 @@ async function handle(req: Request, res: Response) {
         }
         return upd.count > 0;
       });
-      if (changed) {
+      if (blocked) {
+        await holdPaymentIfClientBlocked(payment.id);
+      } else if (changed) {
         console.log("[Overpay Webhook] Payment PAID, balance credited (top-up)", {
           paymentId: payment.id,
           amount: payment.amount,

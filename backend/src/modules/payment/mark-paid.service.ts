@@ -15,6 +15,7 @@ import { auditPaymentClientBotAlignment } from "./payment-webhook-audit.util.js"
 import { extinguishOneTimeDiscount } from "../client/personal-discount.js";
 import { isPaidVpnPurchase, isVpnSubscriptionPurchase, markTrialUsedForPaidPurchase } from "../trial/trial-purchase-lock.service.js";
 import { canTransitionPaymentToPaid, isSharedTopUpPayment } from "./payment-completion-policy.js";
+import { holdPaymentIfClientBlocked } from "./blocked-client-guard.js";
 
 function hasExtraOptionInMetadata(metadata: string | null): boolean {
   if (!metadata?.trim()) return false;
@@ -95,6 +96,15 @@ export async function markPaymentPaid(
   const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
   if (!payment) {
     return { ok: false, payment: null, error: "Payment not found" };
+  }
+  // INVOXY: деньги получены, но заблокированному (мигрированному) клиенту ничего не зачисляем и не активируем.
+  const blockedClient = await prisma.client.findUnique({ where: { id: payment.clientId }, select: { isBlocked: true } });
+  if (blockedClient?.isBlocked) {
+    if (canTransitionPaymentToPaid(payment.status, options.allowFailedRecovery === true)) {
+      await prisma.payment.updateMany({ where: { id: paymentId, status: payment.status }, data: { status: "PAID", paidAt: new Date() } });
+    }
+    await holdPaymentIfClientBlocked(paymentId);
+    return { ok: true, payment: await prisma.payment.findUnique({ where: { id: paymentId } }), error: "Клиент заблокирован: платёж на ручной проверке" };
   }
   await auditPaymentClientBotAlignment({
     id: payment.id,
