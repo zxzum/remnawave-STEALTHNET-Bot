@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import rateLimit from "express-rate-limit";
 import { Router, type Request } from "express";
 import { prisma } from "../../db.js";
+import { annulClientForMigration } from "./annul.service.js";
 
 const BEARER = "Bearer ";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -156,6 +157,8 @@ supportInternalRouter.get("/client-context", contextLimiter, async (req, res) =>
         expireAt: true,
         remnawaveUuid: true,
         extraDevices: true,
+        trialId: true,
+        purchasedAsGift: true,
         tariff: {
           select: {
             id: true,
@@ -188,6 +191,9 @@ supportInternalRouter.get("/client-context", contextLimiter, async (req, res) =>
         status: subscriptionStatus(subscription.expireAt),
         expiresAt: subscription.expireAt?.toISOString() ?? "",
         remnawaveUuid: subscription.remnawaveUuid ?? "",
+        trialId: subscription.trialId ?? null,
+        isTrial: subscription.trialId != null,
+        purchasedAsGift: subscription.purchasedAsGift,
         deviceLimit: (subscription.tariff?.includedDevices ?? 1) + (subscription.extraDevices ?? 0),
         // BigInt нельзя отдавать через JSON напрямую; строка сохраняет точное значение.
         trafficLimitBytes: subscription.tariff?.trafficLimitBytes?.toString() ?? "",
@@ -214,65 +220,48 @@ supportInternalRouter.post("/annul-subscription", contextLimiter, async (req, re
 
   try {
     let targetTelegramId = bodyTelegramId ? String(bodyTelegramId).trim() : null;
+    let zeroedBalance = 0;
+    let detachedRemnawaveUuids: string[] = [];
+    let cancelledPayments = 0;
+    let notify = true;
 
-    let clientBalance = 0;
     if (clientId) {
-      const client = await prisma.client.findUnique({
-        where: { id: clientId },
-        select: { telegramId: true, balance: true },
-      });
-      if (client) {
-        if (typeof client.balance === "number") clientBalance = client.balance;
-        if (!targetTelegramId && client.telegramId) targetTelegramId = String(client.telegramId);
+      const result = await annulClientForMigration(String(clientId), reason);
+      if (result.status === "not_found") return res.status(404).json({ message: "Client not found" });
+      if (!targetTelegramId && result.telegramId) targetTelegramId = result.telegramId;
+      if (result.status === "already_blocked") {
+        notify = false;
+      } else {
+        ({ zeroedBalance, detachedRemnawaveUuids, cancelledPayments } = result);
       }
     }
 
-    if (!targetTelegramId && subscriptionId) {
+    if (subscriptionId) {
       const sub = await prisma.subscription.findUnique({
         where: { id: subscriptionId },
-        select: { owner: { select: { telegramId: true } } },
+        select: { remnawaveUuid: true, owner: { select: { telegramId: true } } },
       });
-      if (sub?.owner?.telegramId) {
-        targetTelegramId = String(sub.owner.telegramId);
-      }
-    }
-
-    const now = new Date();
-    if (subscriptionId) {
+      if (!targetTelegramId && sub?.owner?.telegramId) targetTelegramId = String(sub.owner.telegramId);
+      if (sub?.remnawaveUuid) detachedRemnawaveUuids.push(sub.remnawaveUuid);
+      else if (!clientId) notify = false; // уже аннулирована ранее
       await prisma.subscription.updateMany({
         where: { id: subscriptionId },
-        data: {
-          expireAt: now,
-          autoRenewEnabled: false,
-        },
+        data: { expireAt: new Date(), autoRenewEnabled: false, remnawaveUuid: null, remnawaveUsername: null, remnawaveShortUuid: null },
       });
     }
 
-    if (clientId) {
-      await prisma.client.update({
-        where: { id: clientId },
-        data: {
-          balance: 0,
-          isBlocked: true,
-          blockReason: reason || "Мигрирован в Invoxy VPN (@invoxy_bot / invoxy.my)",
-          autoRenewEnabled: false,
-        },
-      });
-      // Также аннулируем все активные подписки этого клиента
-      await prisma.subscription.updateMany({
-        where: { ownerId: clientId, expireAt: { gt: now } },
-        data: {
-          expireAt: now,
-          autoRenewEnabled: false,
-        },
-      });
+    if (notify && targetTelegramId && /^\d+$/.test(targetTelegramId)) {
+      await notifyClientMigrated(targetTelegramId, zeroedBalance);
     }
 
-    if (targetTelegramId && /^\d+$/.test(targetTelegramId)) {
-      await notifyClientMigrated(targetTelegramId, clientBalance);
-    }
-
-    return res.json({ success: true, notifiedTelegramId: targetTelegramId ?? null });
+    return res.json({
+      success: true,
+      notifiedTelegramId: notify ? targetTelegramId ?? null : null,
+      alreadyBlocked: !notify,
+      zeroedBalance,
+      detachedRemnawaveUuids: [...new Set(detachedRemnawaveUuids)],
+      cancelledPayments,
+    });
   } catch (error) {
     console.error("[support] annul-subscription failed:", error);
     return res.status(500).json({ message: "Failed to annul subscription" });
