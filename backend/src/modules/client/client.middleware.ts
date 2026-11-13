@@ -23,7 +23,7 @@ export async function requireClientAuth(req: Request, res: Response, next: NextF
     return res.status(401).json({ message: "Unauthorized", code: "CLIENT_DELETED" });
   }
   if (client.isBlocked) {
-    return res.status(401).json({ message: "Unauthorized", code: "CLIENT_BLOCKED" });
+    return res.status(401).json({ message: "Unauthorized", code: "CLIENT_BLOCKED", blockReason: client.blockReason ?? null });
   }
 
   (req as Request & { clientId: string; client: typeof client }).clientId = client.id;
