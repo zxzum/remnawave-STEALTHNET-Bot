@@ -16,7 +16,7 @@ const EXPRESSION = "0 12 */2 * *";
 const EMAIL_CAP = 50;
 const BOT_URL = "https://t.me/invoxy_bot";
 const ARTICLE_URL = "https://telegra.ph/Bolshoe-obnovlenie-Invoxy-VPN-11-16";
-const LAZEIKA_PROFILE = "https://bot.lazeika.xyz/cabinet/profile";
+const SITE_LOGIN = "https://invoxy.my/login";
 
 export function daysLeft(expireAt: Date, now = new Date()): number {
   return Math.max(0, Math.ceil((expireAt.getTime() - now.getTime()) / 86_400_000));
@@ -47,13 +47,12 @@ export function nudgeEmailHtml(days: number): string {
   return `<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-size:15px;line-height:1.55;color:#111;max-width:560px">
 <p><b>Ваша подписка всё ещё в Лазейке — осталось ${days} ${dayWord(days)}.</b></p>
 <p>Лазейка больше не развивается: новые серверы, оплата и поддержка теперь в Invoxy VPN. Перенесите подписку — оставшиеся дни сохранятся, и мы добавим <b>5 дней в подарок</b>.</p>
-<p><b>Как перенести, если вы входили по почте:</b></p>
+<p><b>Как перенести:</b></p>
 <ol>
-<li>Войдите в <a href="${LAZEIKA_PROFILE}">кабинет Лазейки</a> по этой почте, откройте «Профиль» и нажмите «Привязать Telegram».</li>
-<li>Откройте <a href="${BOT_URL}">@invoxy_bot</a> с этого же Telegram и нажмите «Старт».</li>
-<li>Примите условия и подпишитесь на канал @invoxyvpn — подписка перенесётся сама.</li>
+<li>Откройте <a href="${SITE_LOGIN}">invoxy.my/login</a> и выберите «Войти по почте».</li>
+<li>Введите эту же почту и код из письма — создастся новый аккаунт Invoxy. Входить в старый аккаунт Лазейки не нужно.</li>
+<li>Подписка перенесётся сама: оставшиеся дни, баланс и 5 дней в подарок появятся в кабинете.</li>
 </ol>
-<p>Регистрация на сайте Invoxy по почте подписку не перенесёт — нужен привязанный Telegram.</p>
 <p>Все изменения — <a href="${ARTICLE_URL}">в статье</a>. Если не получается — напишите в <a href="${BOT_URL}">@invoxy_bot</a>, поможем вручную.</p>
 </div>`;
 }

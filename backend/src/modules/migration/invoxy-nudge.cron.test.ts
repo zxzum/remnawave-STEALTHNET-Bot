@@ -20,5 +20,5 @@ test("nudge texts use the right Russian plural and the +5 days bonus", () => {
   assert.match(nudgeTelegramText(22), /Осталось 22 дня\./);
   assert.match(nudgeTelegramText(5), /5 дней в подарок/);
   assert.match(nudgeEmailHtml(7), /осталось 7 дней/);
-  assert.match(nudgeEmailHtml(7), /Привязать Telegram/);
+  assert.match(nudgeEmailHtml(7), /Войти по почте/);
 });
