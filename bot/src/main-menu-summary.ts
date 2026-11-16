@@ -1,3 +1,5 @@
+import { INVOXY_BANNER_TEXT } from "./keyboard.js";
+
 export type MainMenuSubscription = {
   type: "root" | "secondary";
   id: string;
@@ -50,6 +52,7 @@ export function buildMainMenuSummary(input: {
   subscription: MainMenuSubscription | null;
   tariff: MainMenuTariff | null;
   now?: Date;
+  invoxyOnly?: boolean;
 }): string {
   const { subscription, tariff } = input;
   const lines = ["👋 Добро пожаловать в Лазейка ВПН!", ""];
@@ -59,9 +62,11 @@ export function buildMainMenuSummary(input: {
       "🛡 Ваша подписка: 🔴 Не активна",
       "📦 Ваш тариф: не выбран",
       "",
-      "🚀 Мы переходим в Invoxy VPN!",
-      "💡 Там дешевле цены, приятнее интерфейс и разрабатывается собственное приложение.",
-      "Бот: @invoxy_bot · Сайт: https://invoxy.my",
+      ...(input.invoxyOnly ? [INVOXY_BANNER_TEXT] : [
+        "🚀 Мы переходим в Invoxy VPN!",
+        "💡 Там дешевле цены, приятнее интерфейс и разрабатывается собственное приложение.",
+        "Бот: @invoxy_bot · Сайт: https://invoxy.my",
+      ]),
       "",
       "Выберите действие 👇",
     ].join("\n");
@@ -110,9 +115,13 @@ export function buildMainMenuSummary(input: {
   lines.push(`📦 Ваш тариф: ${tariffName}${tariffPrice}`);
   if (quotaLimit != null && quotaLimit > 0) lines.push(`🌐 Включено: ${formatGb(quotaLimit)} белого интернета`);
   lines.push("");
-  lines.push("🚀 Доступен переезд в Invoxy VPN (+5 дней бонуса!)");
-  lines.push("💡 Там дешевле цены, приятнее интерфейс и разрабатывается собственное приложение.");
-  lines.push("Бот: @invoxy_bot · Сайт: https://invoxy.my");
+  if (input.invoxyOnly) {
+    lines.push(INVOXY_BANNER_TEXT);
+  } else {
+    lines.push("🚀 Доступен переезд в Invoxy VPN (+5 дней бонуса!)");
+    lines.push("💡 Там дешевле цены, приятнее интерфейс и разрабатывается собственное приложение.");
+    lines.push("Бот: @invoxy_bot · Сайт: https://invoxy.my");
+  }
   lines.push("", "Выберите действие 👇");
   return lines.join("\n");
 }

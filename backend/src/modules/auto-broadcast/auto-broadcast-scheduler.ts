@@ -11,6 +11,7 @@
  * Загрузка БД минимизирована: каждое правило знает когда срабатывать → нет одной большой пачки.
  */
 
+import { env } from "../../config/index.js";
 import cron, { type ScheduledTask } from "node-cron";
 import { prisma } from "../../db.js";
 import { runRule } from "./auto-broadcast.service.js";
@@ -60,7 +61,7 @@ function scheduleRule(rule: { id: string; name: string; enabled: boolean; cronEx
     existing.stop();
     ruleTasks.delete(rule.id);
   }
-  if (!rule.enabled) return;
+  if (!rule.enabled || env.INVOXY_ONLY) return; // INVOXY_ONLY: рассылки по расписанию стоят
   // per-rule флаг — если правило event-driven,
   // крон-задачу не создаём (оно вызывается по событию из бота/бэка).
   if (rule.eventDriven) {

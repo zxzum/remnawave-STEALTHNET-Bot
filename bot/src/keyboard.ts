@@ -208,6 +208,8 @@ export type MenuOptions = {
   renewTariffId?: string | null;
   isAdmin?: boolean;
   showMigration?: boolean;
+  /** INVOXY_ONLY: кнопка переезда первой строкой, старая кнопка переезда не нужна. */
+  invoxyOnly?: boolean;
   migrationUrl?: string | null;
 };
 
@@ -311,7 +313,7 @@ export function mainMenu(opts: MenuOptions): InlineMarkup {
       ...(opts.supportUrl ? [{ text: "🛠 Поддержка", url: opts.supportUrl, style: "primary" as const }] : []),
     ]);
   }
-  if (opts.showMigration ?? true) {
+  if ((opts.showMigration ?? true) && !opts.invoxyOnly) {
     rows.push([
       {
         text: "🚀 ПЕРЕЕЗД В INVOXY (+5 ДНЕЙ)",
@@ -325,7 +327,7 @@ export function mainMenu(opts: MenuOptions): InlineMarkup {
     btn("ℹ️ Инфо", "menu:info", "primary"),
   ]);
   if (opts.isAdmin) rows.push([btn("⚙️ Админ-панель", "admin:menu", "primary")]);
-  return { inline_keyboard: rows };
+  return opts.invoxyOnly ? withInvoxyMove({ inline_keyboard: rows }) : { inline_keyboard: rows };
 }
 
 export type BotMenuSection = "account" | "payment" | "connection" | "bonuses";
@@ -1497,6 +1499,18 @@ export function giftPaymentButtons(
   }
   rows.push([btn(back, "gift:buy", backSty, emojiIds?.back)]);
   return { inline_keyboard: rows };
+}
+
+export const INVOXY_BANNER_TEXT = "📢 Мы закрываем этого бота. Лазейка переезжает в Invoxy VPN — это наш новый проект, та же Лазейка.\nНажмите кнопку ниже и «Старт» — подписка перенесётся автоматически, +5 дней в подарок.";
+export const INVOXY_PAY_TEXT = "Оплата теперь только в Invoxy VPN — это та же Лазейка. Нажмите кнопку и «Старт»: подписка перенесётся автоматически, +5 дней в подарок.";
+
+export function invoxyMoveButton(): UrlButton {
+  return { text: "🚀 Перейти в Invoxy VPN", url: "https://t.me/invoxy_bot?start=migrate" };
+}
+
+/** INVOXY_ONLY: кнопка переезда — первой строкой клавиатуры. */
+export function withInvoxyMove(markup: InlineMarkup): InlineMarkup {
+  return { inline_keyboard: [[invoxyMoveButton()], ...markup.inline_keyboard] };
 }
 
 export const INVOXY_MIGRATED_TEXT = "🚀 Ваша подписка перенесена в Invoxy VPN.\n\nУправление ключами, продление и поддержка теперь в @invoxy_bot и на https://invoxy.my";

@@ -5715,6 +5715,8 @@ export type PublicSellOption =
   | { kind: "servers"; id: string; name: string; squadUuid: string; trafficGb?: number; price: number; currency: string };
 
 export interface PublicConfig {
+  /** Лазейка закрывается: оплата только в Invoxy VPN. */
+  invoxyOnly?: boolean;
   activeLanguages: string[];
   activeCurrencies: string[];
   defaultLanguage?: string;

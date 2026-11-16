@@ -177,3 +177,15 @@ test("Invoxy migration block is recognised only for CLIENT_BLOCKED with an Invox
   const urls = invoxyMigratedMarkup().inline_keyboard.flat().map((b) => (b as { url?: string }).url);
   assert.deepEqual(urls, ["https://t.me/invoxy_bot", "https://invoxy.my"]);
 });
+
+test("INVOXY_ONLY: кнопка переезда и баннер", async () => {
+  const { invoxyMoveButton, INVOXY_BANNER_TEXT, withInvoxyMove } = await import("./keyboard.js");
+  const { buildMainMenuSummary } = await import("./main-menu-summary.js");
+  assert.equal(invoxyMoveButton().url, "https://t.me/invoxy_bot?start=migrate");
+  assert.match(buildMainMenuSummary({ subscription: null, tariff: null, invoxyOnly: true }), new RegExp(INVOXY_BANNER_TEXT.slice(0, 30)));
+  assert.ok(buildMainMenuSummary({ subscription: null, tariff: null, invoxyOnly: true }).includes(INVOXY_BANNER_TEXT));
+  assert.ok(!buildMainMenuSummary({ subscription: null, tariff: null }).includes(INVOXY_BANNER_TEXT));
+  const first = withInvoxyMove({ inline_keyboard: [[{ text: "x", callback_data: "x" }]] }).inline_keyboard[0]![0] as { url?: string };
+  assert.equal(first.url, "https://t.me/invoxy_bot?start=migrate");
+  assert.equal(buildMain({ invoxyOnly: true } as never).inline_keyboard[0]![0]!.text, "🚀 Перейти в Invoxy VPN");
+});

@@ -72,6 +72,8 @@ import {
   type InnerEmojiIds,
   type BotMenuSection,
   INVOXY_MIGRATED_TEXT,
+  INVOXY_BANNER_TEXT,
+  withInvoxyMove,
   invoxyMigratedMarkup,
   isInvoxyMigrationBlock,
 } from "./keyboard.js";
@@ -848,6 +850,18 @@ async function showFirstWelcome(ctx: Context, userId: number, config: ConfigSnap
   const legacyGenericWelcome = /^(?:что (?:умеет|делает) этот бот\b|лазейка vpn\s*\n\s*\n\s*ваш vpn, устройства и бонусы)/i.test(configuredText);
   const hasProjectName = /лазейка\s+впн/i.test(configuredText);
   const baseText = !configuredText || legacyGenericWelcome || !hasProjectName ? DEFAULT_BOT_WELCOME_TEXT : configuredText;
+  if (config?.invoxyOnly) {
+    // Лазейка закрывается: без триала и «остаться», только переезд и просмотр подписки.
+    const text = `${baseText}\n\n${INVOXY_BANNER_TEXT}`;
+    const markup = withInvoxyMove({ inline_keyboard: [[{ text: "🏠 Главное меню", callback_data: "menu:main" }]] });
+    const caption = text.length > TELEGRAM_CAPTION_MAX ? `${text.slice(0, TELEGRAM_CAPTION_MAX - 3)}...` : text;
+    const image = await api.getOnboardingAsset("welcome.png").catch(() => null);
+    const sent = image
+      ? await ctx.replyWithPhoto(new InputFile(image, "welcome.png"), { caption, reply_markup: markup })
+      : await ctx.reply(caption, { reply_markup: markup });
+    if (sent?.message_id) lastBotScreens.set(userId, { chatId: sent.chat.id, messageId: sent.message_id });
+    return;
+  }
   const migrationPrompt = !baseText.includes("invoxy_bot") && !baseText.includes("Invoxy")
     ? "\n\n🚀 Мы переходим на Invoxy VPN! Там дешевле цены, приятнее интерфейс и разрабатывается собственное приложение. Переходите сразу: @invoxy_bot (+5 дней бонуса!)"
     : "";
@@ -2454,7 +2468,7 @@ async function handleStart(ctx: Context, payload: string): Promise<void> {
     const primarySubscription = selectPrimarySubscription(allSubsRes.items ?? []);
     const currentTariff = tariffRes.items.flatMap((category) => category.tariffs)
       .find((tariff) => tariff.id === primarySubscription?.tariffId) ?? null;
-    const text = buildMainMenuSummary({ subscription: primarySubscription, tariff: currentTariff });
+    const text = buildMainMenuSummary({ subscription: primarySubscription, tariff: currentTariff, invoxyOnly: config?.invoxyOnly });
     const entities: CustomEmojiEntity[] = [];
     const markup = mainMenu({
       showTrial: false,
@@ -2463,6 +2477,7 @@ async function handleStart(ctx: Context, payload: string): Promise<void> {
       supportUrl: supportBotLink(),
       renewTariffId: primarySubscription?.tariffId ?? null,
       isAdmin: config?.botAdminTelegramIds?.includes(String(from.id)) ?? false,
+      invoxyOnly: config?.invoxyOnly,
     });
 
     // 🎨 Rich-меню (Bot API 10.1) — ВЫКЛЮЧЕНО до следующей обновы (флаг env BOT_RICH_MENU=on).
@@ -2764,6 +2779,9 @@ type ConfigSnapshot = Awaited<ReturnType<typeof api.getPublicConfig>>;
 // T-tariff-restriction (портировано из WolfVPN): при отказе-ограничении (code TARIFF_RESTRICTED)
 // показываем ЯВНУЮ кнопку «🏠 Главное меню» (чтобы юзер не застрял), иначе обычный backToMenu.
 function tariffErrMarkup(e: unknown, config: ConfigSnapshot | null, backStyle: Parameters<typeof backToMenu>[1], emojiIds: Parameters<typeof backToMenu>[2]): ReturnType<typeof backToMenu> {
+  if ((e as { code?: string } | null)?.code === "INVOXY_ONLY") {
+    return withInvoxyMove({ inline_keyboard: [[{ text: "🏠 Главное меню", callback_data: "menu:main" }]] });
+  }
   if ((e as { code?: string } | null)?.code === "TARIFF_RESTRICTED") {
     return { inline_keyboard: [[{ text: "🏠 Главное меню", callback_data: "menu:main" }]] };
   }
@@ -3726,7 +3744,7 @@ composer.on("callback_query:data", async (ctx) => {
       const primarySubscription = selectPrimarySubscription(allSubsRes.items ?? []);
       const currentTariff = tariffRes.items.flatMap((category) => category.tariffs)
         .find((tariff) => tariff.id === primarySubscription?.tariffId) ?? null;
-      const text = buildMainMenuSummary({ subscription: primarySubscription, tariff: currentTariff });
+      const text = buildMainMenuSummary({ subscription: primarySubscription, tariff: currentTariff, invoxyOnly: config?.invoxyOnly });
       const entities: CustomEmojiEntity[] = [];
       const backMarkup = mainMenu({
         showTrial: false,
@@ -3735,6 +3753,7 @@ composer.on("callback_query:data", async (ctx) => {
         supportUrl: supportBotLink(),
         renewTariffId: primarySubscription?.tariffId ?? null,
         isAdmin: config?.botAdminTelegramIds?.includes(String(userId)) ?? false,
+        invoxyOnly: config?.invoxyOnly,
       });
 
       await editMessageContent(ctx, text, backMarkup, entities, screenBannerUrl(config, "welcome") ?? undefined);
@@ -7571,11 +7590,13 @@ composer.on("callback_query:data", async (ctx) => {
           return { type: it.type, id: it.id, label };
         });
         bodyLines.pop();
+        if (config?.invoxyOnly) bodyLines.push("", INVOXY_BANNER_TEXT);
         const { text, entities } = applyMarkdownAndEmoji(bodyLines.join("\n"), config?.botEmojis ?? null);
+        const listMarkup = mySubsListButtons(buttonItems, config?.botBackLabel ?? null, innerStyles, innerEmojiIds);
         await editMessageContent(
           ctx,
           text,
-          mySubsListButtons(buttonItems, config?.botBackLabel ?? null, innerStyles, innerEmojiIds),
+          config?.invoxyOnly ? withInvoxyMove(listMarkup) : listMarkup,
           entities,
           screenBannerUrl(config, "subscription") ?? undefined,
         );

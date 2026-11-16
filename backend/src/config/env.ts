@@ -31,6 +31,8 @@ const envSchema = z.object({
   MAXMIND_LICENSE_KEY: z.string().optional(),
   /** TTL (seconds) for the geo-map aggregated data cache. Default 60. */
   GEO_CACHE_TTL: z.coerce.number().default(60),
+  /** Лазейка закрывается: всё работает, кроме оплаты (она только в Invoxy VPN). */
+  INVOXY_ONLY: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
 });
 
 export type Env = z.infer<typeof envSchema>;

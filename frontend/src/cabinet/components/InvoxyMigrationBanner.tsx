@@ -1,9 +1,38 @@
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
+import { api } from "@/lib/api";
 import { Send, ExternalLink, Sparkles, Gift } from "lucide-react";
 import { buttonVariants } from "./ui/button";
 import { cn } from "../lib/cn";
 
+function InvoxyOnlyBanner() {
+  return (
+    <div className="flex flex-col gap-3 rounded-3xl border border-cyan-500/30 bg-cyan-950/40 p-5 md:flex-row md:items-center md:justify-between">
+      <p className="text-sm text-fog-200 leading-relaxed whitespace-pre-line">
+        Мы закрываем Лазейку. Она переезжает в Invoxy VPN — это наш новый проект, та же Лазейка.{"\n"}
+        Нажмите кнопку и «Старт» — подписка перенесётся автоматически, +5 дней в подарок. Оплата теперь только в Invoxy VPN.
+      </p>
+      <a
+        href="https://t.me/invoxy_bot?start=migrate"
+        target="_blank"
+        rel="noopener noreferrer"
+        className={cn(buttonVariants({ variant: "primary", size: "sm" }), "gap-2 h-10 px-4 shrink-0")}
+      >
+        <Send className="h-4 w-4" />
+        Перейти в Invoxy VPN
+      </a>
+    </div>
+  );
+}
+
 export function InvoxyMigrationBanner() {
+  const [invoxyOnly, setInvoxyOnly] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    api.getPublicConfig().then((c) => { if (!cancelled) setInvoxyOnly(c.invoxyOnly === true); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+  if (invoxyOnly) return <InvoxyOnlyBanner />;
   return (
     <motion.div
       initial={{ opacity: 0, y: -12 }}

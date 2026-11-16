@@ -1,4 +1,5 @@
 import cron from "node-cron";
+import { env } from "../../config/index.js";
 import { prisma } from "../../db.js";
 import { randomUUID } from "crypto";
 import { activateTariffByPaymentId, applyExtraDevicesPrice, parseDeviceDiscountTiers } from "../tariff/tariff-activation.service.js";
@@ -117,6 +118,7 @@ export function startAutoRenewScheduler() {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export async function processAutoRenewals() {
+  if (env.INVOXY_ONLY) return; // Лазейка закрывается: автосписаний нет
   if (!isRemnaConfigured()) {
     console.warn("[auto-renew] Remna is not configured. Skipping.");
     return;

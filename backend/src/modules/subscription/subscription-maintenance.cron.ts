@@ -1,4 +1,5 @@
 import cron from "node-cron";
+import { env } from "../../config/index.js";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../../db.js";
 import { registerCron, wrapCronTick } from "../diagnostics/cron-registry.js";
@@ -148,6 +149,7 @@ export async function notifyIncompleteOnboarding(now = new Date()): Promise<numb
 }
 
 export async function notifyExpiringSubscriptions(now = new Date()): Promise<number> {
+  if (env.INVOXY_ONLY) return 0; // напоминания «продлите» не шлём
   const config = await getSystemConfig();
   const trialOffsets = config.trialExpiryReminderEnabled
     ? parseReminderHours(config.trialExpiryReminderHours)

@@ -801,6 +801,7 @@ async function loadSystemConfigFromDb() {
     botReferralShareText: (map.bot_referral_share_text ?? "").trim() || null,
     botTrialText: (map.bot_trial_text ?? "").trim() || null,
     botTrialUsedText: (map.bot_trial_used_text ?? "").trim() || null,
+    invoxyOnly: env.INVOXY_ONLY,
     botGiftBuyText: (map.bot_gift_buy_text ?? "").trim() || null,
     botPromocodeText: (map.bot_promocode_text ?? "").trim() || null,
     trialExpiryReminderEnabled: (map.trial_expiry_reminder_enabled ?? "true") !== "false",
