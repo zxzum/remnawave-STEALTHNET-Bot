@@ -16,7 +16,8 @@ import { PaymentMethodsBlock } from "../components/ui/payment-methods";
 import { useSuccess } from "../components/ui/success-dialog";
 import { prefetchPublicConfig } from "../components/ui/prefetch";
 import { canBuyTrafficOption, devicePackPrice, groupPlategaMethods, isWhitelistTrafficOption, resolvePaymentUrl, sortTrafficOptions, trafficOptionLabel, trafficOptionUnitPrice } from "../model";
-import { useApp } from "../store/AppContext";
+import { useApp, useInvoxyOnly } from "../store/AppContext";
+import { InvoxyMoveContent } from "../components/InvoxyMigrationBanner";
 import { cn } from "../lib/cn";
 
 function money(value: number, currency: string) {
@@ -39,7 +40,12 @@ type PurchasePayload = {
   customBuild?: { days: number; devices: number; trafficGb?: number };
 };
 
-function CheckoutActions({
+/** INVOXY_ONLY: вместо кнопок оплаты — переход в Invoxy. */
+function CheckoutActions(props: Parameters<typeof CheckoutActionsInner>[0]) {
+  return useInvoxyOnly() ? <div className="glass rounded-3xl p-5"><InvoxyMoveContent /></div> : <CheckoutActionsInner {...props} />;
+}
+
+function CheckoutActionsInner({
   amount,
   currency,
   payload,
@@ -226,7 +232,7 @@ function TrafficOptionDialog({
   const payRollyPay = () => state.token && openPayment("RollyPay", () => api.rollypayCreatePayment(state.token!, { ...payload, currency: option.currency }));
 
   return (
-    <Modal open={open} onOpenChange={onOpenChange} className="max-w-lg">
+    <Modal purchase open={open} onOpenChange={onOpenChange} className="max-w-lg">
       <div className="no-scrollbar min-h-0 overflow-y-auto p-5">
         {/* header — компактный, как в PlanDialog: без тайла, крестик встроен в Modal */}
         <div className="pr-10">

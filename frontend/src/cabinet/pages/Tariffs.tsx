@@ -290,6 +290,7 @@ export function PlanDialog({ plan, open, onOpenChange }: { plan: TariffPlan | nu
 
   return (
     <Modal
+      purchase
       open={open}
       onOpenChange={(v) => {
         onOpenChange(v);

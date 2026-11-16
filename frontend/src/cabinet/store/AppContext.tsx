@@ -349,6 +349,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
+/** Оплата закрыта в пользу Invoxy (INVOXY_ONLY): вместо оплаты показываем переход. Вне AppProvider — false. */
+export function useInvoxyOnly() {
+  return useContext(AppContext)?.config?.invoxyOnly === true;
+}
+
 export function useApp() {
   const context = useContext(AppContext);
   if (!context) throw new Error("useApp must be used within AppProvider");

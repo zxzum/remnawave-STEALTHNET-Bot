@@ -5,6 +5,31 @@ import { Send, ExternalLink, Sparkles, Gift } from "lucide-react";
 import { buttonVariants } from "./ui/button";
 import { cn } from "../lib/cn";
 
+/** Вместо оплаты (INVOXY_ONLY): окно и карточка «Оплата теперь в Invoxy VPN». */
+export function InvoxyMoveContent() {
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-3">
+        <div className="icon-tile h-11 w-11 shrink-0 rounded-xl"><Gift className="h-5 w-5" /></div>
+        <h3 className="text-lg font-extrabold tracking-tight text-white">Оплата теперь в Invoxy VPN</h3>
+      </div>
+      <p className="text-sm leading-relaxed text-fog-300">
+        Лазейка переезжает в Invoxy VPN — это та же Лазейка, только новее. Нажмите кнопку и «Старт» в боте:
+        подписка перенесётся автоматически, а сверху — +5 дней в подарок. Продлить, докупить устройства и пополнить баланс теперь можно там.
+      </p>
+      <a
+        href="https://t.me/invoxy_bot?start=migrate"
+        target="_blank"
+        rel="noopener noreferrer"
+        className={cn(buttonVariants({ variant: "primary" }), "h-12 w-full gap-2")}
+      >
+        <Send className="h-4 w-4" />
+        Перейти в Invoxy VPN
+      </a>
+    </div>
+  );
+}
+
 function InvoxyOnlyBanner() {
   return (
     <div className="flex flex-col gap-3 rounded-3xl border border-cyan-500/30 bg-cyan-950/40 p-5 md:flex-row md:items-center md:justify-between">

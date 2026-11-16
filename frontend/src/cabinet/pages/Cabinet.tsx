@@ -118,7 +118,7 @@ function MainSubscriptionCard({ sub }: { sub: Subscription }) {
           <Button variant="secondary" size="md" className="mb-4 w-full" onClick={() => setBuyDevice(true)}>
             <Smartphone /> Докупить устройство
           </Button>
-          <Modal open={buyDevice} onOpenChange={setBuyDevice} className="max-w-lg">
+          <Modal purchase open={buyDevice} onOpenChange={setBuyDevice} className="max-w-lg">
             <ModalBody className="p-5">
               <ModalTitle className="sr-only">Докупить устройство</ModalTitle>
               <ExtraOptions devicesOnly fixedTarget={sub.id} />

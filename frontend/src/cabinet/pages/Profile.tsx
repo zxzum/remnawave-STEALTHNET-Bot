@@ -31,7 +31,8 @@ import {
   Unlink,
 } from "lucide-react";
 import { cn } from "../lib/cn";
-import { useApp } from "../store/AppContext";
+import { useApp, useInvoxyOnly } from "../store/AppContext";
+import { InvoxyMoveContent } from "../components/InvoxyMigrationBanner";
 import { formatCurrency, resolvePaymentUrl, type CabinetTransaction as Transaction } from "../model";
 import { Button } from "../components/ui/button";
 import { Input, Select } from "../components/ui/input";
@@ -159,7 +160,12 @@ function BankCard() {
 
 const quickAmounts = [200, 500, 1000];
 
+/** INVOXY_ONLY: пополнение баланса — только в Invoxy. */
 function TopUp() {
+  return useInvoxyOnly() ? <div className="glass rounded-3xl p-5"><InvoxyMoveContent /></div> : <TopUpInner />;
+}
+
+function TopUpInner() {
   const { config, toast } = useApp();
   const { state } = useClientAuth();
   const navigate = useNavigate();

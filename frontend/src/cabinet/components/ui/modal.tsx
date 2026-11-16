@@ -5,6 +5,8 @@ import { Drawer } from "vaul";
 import { ArrowLeft, X } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { useIsDesktop } from "../../lib/use-media-query";
+import { useInvoxyOnly } from "../../store/AppContext";
+import { InvoxyMoveContent } from "../InvoxyMigrationBanner";
 
 const ModalKindContext = createContext<"radix" | "drawer">("radix");
 
@@ -22,11 +24,15 @@ export interface ModalProps {
   /** Ширина/доп. классы карточки (напр. «max-w-sm») */
   className?: string;
   hideClose?: boolean;
+  /** Окно покупки: при INVOXY_ONLY вместо оплаты показывает переход в Invoxy */
+  purchase?: boolean;
 }
 
 /** Единая модалка: десктоп — glass-карточка по центру, мобайл — vaul bottom-sheet со свайпом */
-export function Modal({ open, onOpenChange, children, className, hideClose }: ModalProps) {
+export function Modal({ open, onOpenChange, children: content, className, hideClose, purchase }: ModalProps) {
   const isDesktop = useIsDesktop();
+  const invoxyOnly = useInvoxyOnly();
+  const children = purchase && invoxyOnly ? <ModalBody className="p-5 pr-14"><InvoxyMoveContent /></ModalBody> : content;
 
   if (!isDesktop) {
     return (
