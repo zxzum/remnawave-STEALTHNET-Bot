@@ -1293,6 +1293,8 @@ export async function getPublicConfig(_forCloneBot?: { markupPercent?: number | 
   }
 
   return {
+    // Оплата только в Invoxy: бот и кабинет показывают баннер переезда.
+    invoxyOnly: full.invoxyOnly,
     activeLanguages: full.activeLanguages,
     activeCurrencies: full.activeCurrencies,
     defaultLanguage: full.defaultLanguage,
