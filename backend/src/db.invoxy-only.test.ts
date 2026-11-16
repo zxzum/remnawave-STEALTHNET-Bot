@@ -40,3 +40,11 @@ test("createPayment works as before when the flag is off", async () => {
     payment.create = original;
   }
 });
+
+test("payment route guard: case-insensitive, webhooks untouched", async () => {
+  const { INVOXY_PAY_PATH } = await import("./db.js");
+  for (const p of ["/api/client/payments/balance", "/api/client/Payments/balance", "/API/CLIENT/rollypay/create-payment", "/api/client/custom-build/pay-balance"])
+    assert.ok(INVOXY_PAY_PATH.test(p), p);
+  for (const p of ["/api/webhooks/rollypay", "/api/client/subscription", "/api/webhooks/platega"])
+    assert.ok(!INVOXY_PAY_PATH.test(p), p);
+});

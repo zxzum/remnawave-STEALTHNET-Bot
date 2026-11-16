@@ -1,5 +1,7 @@
 import { PrismaClient, Prisma } from "@prisma/client";
 
+// Оплата и списания баланса под INVOXY_ONLY. Без учёта регистра: маршруты Express к нему не чувствительны.
+export const INVOXY_PAY_PATH = /^\/api\/client\/(payments\/|custom-build\/pay-balance|yoomoney\/(request-topup|process-payment|create-form-payment)|(yookassa|cryptopay|heleket|rollypay|lava|lavatop|overpay)\/create-payment|gift\/buy)/i;
 export const INVOXY_PAY_TEXT = "Оплата теперь только в Invoxy VPN — это та же Лазейка. Нажмите кнопку и «Старт»: подписка перенесётся автоматически, +5 дней в подарок.";
 
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined };

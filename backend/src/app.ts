@@ -4,7 +4,7 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { env } from "./config/index.js";
-import { INVOXY_PAY_TEXT } from "./db.js";
+import { INVOXY_PAY_PATH, INVOXY_PAY_TEXT } from "./db.js";
 import { authRouter } from "./modules/auth/index.js";
 import { adminRouter } from "./modules/admin/admin.routes.js";
 import { proxyAdminRouter } from "./modules/proxy/proxy.admin.routes.js";
@@ -351,7 +351,6 @@ app.use("/api/admin/singbox", singboxAdminRouter);
 app.use("/api/proxy-nodes", proxyAgentRouter);
 app.use("/api/singbox-nodes", singboxAgentRouter);
 // Лазейка закрывается: оплата отказывает до любых списаний (баланс списывается раньше createPayment).
-const INVOXY_PAY_PATH = /^\/api\/client\/(payments\/|custom-build\/pay-balance|yoomoney\/(request-topup|process-payment|create-form-payment)|(yookassa|cryptopay|heleket|rollypay|lava|lavatop|overpay)\/create-payment|gift\/buy)/;
 app.use((req, res, next) => {
   if (env.INVOXY_ONLY && req.method === "POST" && INVOXY_PAY_PATH.test(req.path)) {
     return res.status(403).json({ message: INVOXY_PAY_TEXT, code: "INVOXY_ONLY" });
