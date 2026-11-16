@@ -87,12 +87,12 @@ export async function runInvoxyNudge(now = new Date()) {
     telegram++;
     await new Promise((r) => setTimeout(r, 100));
   }
-  // Почта — только тем, до кого не достучаться в Telegram, и раз в неделю (12:00 МСК понедельника).
+  // Почта — только клиентам без Telegram (Invoxy переносит по почте лишь их), раз в неделю (12:00 МСК понедельника).
   const isMonday = new Date(now.getTime() + 3 * 3_600_000).getUTCDay() === 1;
   if (isMonday) {
     const mail = mailConfigFromSystem(await getSystemConfig());
     if (isMailConfigured(mail)) {
-      for (const c of clients.filter((x) => x.email && (!x.telegramId || x.telegramUnreachable)).slice(0, EMAIL_CAP)) {
+      for (const c of clients.filter((x) => x.email && !x.telegramId).slice(0, EMAIL_CAP)) {
         const r = await sendEmail(mail, c.email!, "Перенесите подписку Лазейки в Invoxy VPN — 5 дней в подарок", nudgeEmailHtml(c.days));
         if (r.ok) email++;
         else console.warn(`[${NAME}] email failed`, r.error);
