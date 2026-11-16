@@ -29,7 +29,15 @@ function subscriptionStatus(expireAt: Date | null): "ACTIVE" | "EXPIRED" | "UNKN
   return expireAt.getTime() > Date.now() ? "ACTIVE" : "EXPIRED";
 }
 
-async function notifyClientMigrated(telegramId: string | bigint, transferredBalance?: number): Promise<void> {
+/**
+ * Сообщение клиенту в бот Лазейки после переноса. Повторяем при сбое сети/DNS и 5xx/429:
+ * 16.11.2026 разовый EAI_AGAIN на api.telegram.org съел уведомление владельцу. 4xx (бот заблокирован) — не повторяем.
+ */
+export async function notifyClientMigrated(
+  telegramId: string | bigint,
+  transferredBalance?: number,
+  delaysMs: number[] = [2_000, 5_000, 15_000, 60_000],
+): Promise<void> {
   const token = process.env.BOT_TOKEN;
   if (!token) {
     console.warn("[support] notifyClientMigrated: BOT_TOKEN is not configured");
@@ -46,34 +54,40 @@ async function notifyClientMigrated(telegramId: string | bigint, transferredBala
     `Вы можете заблокировать и удалить этого бота.`,
   ].join("\n");
 
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "🚀 Открыть Invoxy VPN (@invoxy_bot)",
-                url: "https://t.me/invoxy_bot",
-              },
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text,
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: "🚀 Открыть Invoxy VPN (@invoxy_bot)",
+                  url: "https://t.me/invoxy_bot",
+                },
+              ],
             ],
-          ],
-        },
-      }),
-    });
-    if (!res.ok) {
+          },
+        }),
+      });
+      if (res.ok) {
+        console.log(`[support] Successfully sent Telegram migration notice to ${chatId}`);
+        return;
+      }
       const errText = await res.text().catch(() => "");
       console.warn(`[support] Failed to send Telegram migration notice to ${chatId}: ${res.status} ${errText}`);
-    } else {
-      console.log(`[support] Successfully sent Telegram migration notice to ${chatId}`);
+      if (res.status < 500 && res.status !== 429) return;
+    } catch (err) {
+      console.error("[support] Error sending Telegram migration notice:", err);
     }
-  } catch (err) {
-    console.error("[support] Error sending Telegram migration notice:", err);
+    const delay = delaysMs[attempt];
+    if (delay === undefined) return;
+    await new Promise((resolve) => setTimeout(resolve, delay));
   }
 }
 
