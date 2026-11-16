@@ -61,6 +61,8 @@ services:
       REMNA_ADMIN_TOKEN: "${REMNA_ADMIN_TOKEN:-}"
       REMNA_SECRET_KEY: "${REMNA_SECRET_KEY:-}"
       SUPPORT_API_KEY: "${SUPPORT_API_KEY:-}"
+      # Оплата только в Invoxy: Лазейка работает, покупки закрыты (2026-11-16).
+      INVOXY_ONLY: "${INVOXY_ONLY:-false}"
       INIT_ADMIN_EMAIL: "${INIT_ADMIN_EMAIL:-admin@stealthnet.local}"
       INIT_ADMIN_PASSWORD: "${INIT_ADMIN_PASSWORD:-}"
       BOT_TOKEN: "${BOT_TOKEN:-}"
