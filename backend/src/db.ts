@@ -1,5 +1,4 @@
 import { PrismaClient, Prisma } from "@prisma/client";
-import { env } from "./config/env.js";
 
 export const INVOXY_PAY_TEXT = "Оплата теперь только в Invoxy VPN — это та же Лазейка. Нажмите кнопку и «Старт»: подписка перенесётся автоматически, +5 дней в подарок.";
 
@@ -22,7 +21,8 @@ if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = basePrisma;
 export async function createPayment(args: Prisma.PaymentCreateArgs) {
   const data = args.data as Prisma.PaymentUncheckedCreateInput;
   // Закрытие Лазейки: платежи не создаём (кроме выдач админом — это не оплата).
-  if (env.INVOXY_ONLY && data.provider !== "admin_grant") {
+  // process.env напрямую: db.ts грузится раньше валидации env (тесты)
+  if (process.env.INVOXY_ONLY === "true" && data.provider !== "admin_grant") {
     throw Object.assign(new Error(INVOXY_PAY_TEXT), { code: "INVOXY_ONLY" });
   }
   if (data.tariffId && typeof data.clientId === "string") {
